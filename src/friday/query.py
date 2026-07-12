@@ -266,13 +266,15 @@ def shared_entry_points(conn) -> dict[str, list[str]]:
     """entry-point kind -> repos that expose it (only those with >=2 repos)."""
     from .db import all_entry_points
 
-    out: dict[str, list[str]] = {}
+    out: dict[str, set[str]] = {}
     name_by_id = architecture_name_map(conn)
     for e in all_entry_points(conn):
         rn = name_by_id.get(e.repo_id)
         if rn:
-            out.setdefault(e.kind, []).append(rn)
-    return {k: v for k, v in out.items() if len(k) >= 2}
+            # Dedup per repo so multiple rows (e.g. several main() files) don't
+            # inflate the count.
+            out.setdefault(e.kind, set()).add(rn)
+    return {k: sorted(v) for k, v in out.items() if len(v) >= 2}
 
 
 def similar_layouts(conn) -> list[tuple[str, str]]:

@@ -212,10 +212,10 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
                 lines.append(f"- {e.kind}: {e.detail} ({e.evidence})")
         if arch.data_flow:
             lines.append("Data flow:")
-            lines.append("- " + "\n- ".join(arch.data_flow))
+            lines.append("- " + "\n- ".join(arch.data_flow.split("\n")))
         if arch.known_patterns:
             lines.append("Known patterns:")
-            lines.append("- " + "\n- ".join(arch.known_patterns))
+            lines.append("- " + "\n- ".join(arch.known_patterns.split("\n")))
         if arch.complexity:
             lines.append(f"Potential complexity: {arch.complexity}")
         ev.blocks = lines

@@ -175,3 +175,28 @@ def test_ask_similarity_finds_shared_components(conn, tmp_path):
     assert not ans.used_llm
     assert "Configuration" in ans.text
     assert "A" in ans.text and "B" in ans.text
+
+
+def test_ask_architecture_data_flow_not_character_split(conn, tmp_path):
+    # data_flow / known_patterns are stored newline-joined; rendering must not
+    # split the string character-by-character (regression from .join(string)).
+    rid = _seed_repo(conn, "Vivaha", "/v", "CLI tool", ["Testing"], [("CLI", "x")])
+    conn.execute(
+        "UPDATE architecture SET data_flow=?, known_patterns=? WHERE repo_id=?",
+        ("step one\nstep two", "p1\np2", rid),
+    )
+    conn.commit()
+    ans = ask("Explain Vivaha's architecture.", conn, verbose=False)
+    assert not ans.used_llm
+    # Each line must appear as a whole, not broken into single characters.
+    assert "step one" in ans.text
+    assert "step two" in ans.text
+    assert "\n- s\n- t" not in ans.text  # per-character split guard
+
+
+def test_similarity_no_self_duplication(conn, tmp_path):
+    # One repo with multiple main() entry-point rows must NOT list itself N times.
+    _seed_repo(conn, "Solo", "/s", "CLI tool", [], [("main()", "a.py"), ("main()", "b.py")])
+    ans = ask("Which projects could realistically share code?", conn, verbose=False)
+    assert not ans.used_llm
+    assert "No evidence-backed" in ans.text
