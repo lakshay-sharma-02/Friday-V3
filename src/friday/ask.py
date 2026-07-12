@@ -67,6 +67,20 @@ def classify(question: str, conn) -> str:
         return "chitchat"
     if "compare" in qlow or " vs " in qlow or " versus " in qlow or "difference" in qlow:
         return "compare"
+    # Architecture explanation / how-it-works.
+    if any(w in qlow for w in (
+        "how is", "how does", "how do", "architecture", "architect", "explain",
+        "built", "structure", "entry point", "entry points", "startup",
+        "how it works", "how it's built", "components", "implement",
+    )):
+        return "architecture"
+    # Cross-repo similarity / reuse / shared code.
+    if any(w in qlow for w in (
+        "similar", "similarities", "duplicate", "duplicated", "share code",
+        "sharing code", "shared code", "reuse", "reusable", "overlap",
+        "same layout", "alike", "compare the architectures",
+    )):
+        return "similarity"
     if "related" in qlow or "how are" in qlow or "connection" in qlow:
         return "related"
     if "why" in qlow or "purpose" in qlow or "what is" in qlow or "what does" in qlow or "tell me about" in qlow:
@@ -169,6 +183,66 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         else:
             ev.blocks = [f"No evidence-backed relationships found for {r.name}."]
         ev.raw["repo"] = r.name
+        return ev
+
+    if intent == "architecture":
+        r = _detect_repo(question, conn)
+        if not r or r.id is None:
+            ev.raw["note"] = "could not identify repository"
+            return ev
+        arch = q.architecture_of(conn, r.id)
+        comps = q.components_of(conn, r.id)
+        eps = q.entry_points_of(conn, r.id)
+        if arch is None:
+            ev.blocks = [
+                f"No architecture knowledge stored for {r.name}. Run `friday analyze {r.path}`."
+            ]
+            ev.raw["repo"] = r.name
+            return ev
+        lines = [f"{r.name} — {arch.architecture}"]
+        lines.append("Evidence:")
+        lines.append("- " + arch.evidence.replace("\n", "\n- "))
+        if comps:
+            lines.append("Major components:")
+            for c in comps:
+                lines.append(f"- {c.name} ({c.evidence})")
+        if eps:
+            lines.append("Primary entry points:")
+            for e in eps:
+                lines.append(f"- {e.kind}: {e.detail} ({e.evidence})")
+        if arch.data_flow:
+            lines.append("Data flow:")
+            lines.append("- " + "\n- ".join(arch.data_flow))
+        if arch.known_patterns:
+            lines.append("Known patterns:")
+            lines.append("- " + "\n- ".join(arch.known_patterns))
+        if arch.complexity:
+            lines.append(f"Potential complexity: {arch.complexity}")
+        ev.blocks = lines
+        ev.raw["repo"] = r.name
+        ev.raw["architecture"] = arch.architecture
+        return ev
+
+    if intent == "similarity":
+        shared_comp = q.shared_components(conn)
+        shared_ep = q.shared_entry_points(conn)
+        pairs = q.similar_layouts(conn)
+        reuse = q.reuse_opportunities(conn)
+        blocks: list[str] = []
+        if reuse:
+            blocks.append("Realistic shared-code opportunities (evidence-backed):")
+            for line in reuse:
+                blocks.append(f"- {line}")
+        if pairs:
+            blocks.append("Repositories with similar layouts/architecture:")
+            for a, b in pairs:
+                blocks.append(f"- {a} and {b}")
+        if not blocks:
+            blocks = ["No evidence-backed cross-repository similarities found."]
+        ev.blocks = blocks
+        ev.raw["shared_components"] = shared_comp
+        ev.raw["shared_entry_points"] = shared_ep
+        ev.raw["similar_layouts"] = [list(p) for p in pairs]
         return ev
 
     if intent == "describe":

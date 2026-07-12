@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Optional
 
 from .db import (
+    ArchitectureRow,
+    ComponentRow,
+    EntryPointRow,
     LangRow,
     RelationshipRow,
     Repository,
@@ -217,3 +220,96 @@ def projects_sharing_config(conn) -> list[tuple[str, str]]:
             if an and bn:
                 pairs.append((an, bn))
     return pairs
+
+
+# ---------------------------------------------------------------------------
+# Architecture (Milestone 3)
+# ---------------------------------------------------------------------------
+
+
+def architecture_of(conn, repo_id: int) -> Optional[ArchitectureRow]:
+    from .db import get_architecture
+
+    return get_architecture(conn, repo_id)
+
+
+def components_of(conn, repo_id: int) -> list[ComponentRow]:
+    from .db import get_components
+
+    return get_components(conn, repo_id)
+
+
+def entry_points_of(conn, repo_id: int) -> list[EntryPointRow]:
+    from .db import get_entry_points
+
+    return get_entry_points(conn, repo_id)
+
+
+def architecture_name_map(conn) -> dict[int, str]:
+    return {r.id: r.name for r in get_repositories(conn) if r.id is not None}
+
+
+def shared_components(conn) -> dict[str, list[str]]:
+    """component name -> repos that implement it (only those with >=2 repos)."""
+    from .db import all_components
+
+    out: dict[str, list[str]] = {}
+    name_by_id = architecture_name_map(conn)
+    for c in all_components(conn):
+        rn = name_by_id.get(c.repo_id)
+        if rn:
+            out.setdefault(c.name, []).append(rn)
+    return {k: v for k, v in out.items() if len(v) >= 2}
+
+
+def shared_entry_points(conn) -> dict[str, list[str]]:
+    """entry-point kind -> repos that expose it (only those with >=2 repos)."""
+    from .db import all_entry_points
+
+    out: dict[str, list[str]] = {}
+    name_by_id = architecture_name_map(conn)
+    for e in all_entry_points(conn):
+        rn = name_by_id.get(e.repo_id)
+        if rn:
+            out.setdefault(e.kind, []).append(rn)
+    return {k: v for k, v in out.items() if len(k) >= 2}
+
+
+def similar_layouts(conn) -> list[tuple[str, str]]:
+    """Repo pairs that declare the same architecture pattern (>=2 shared)."""
+    from .db import get_architecture
+
+    arch_by_repo: dict[str, list[str]] = {}
+    for r in get_repositories(conn):
+        if r.id is None:
+            continue
+        a = get_architecture(conn, r.id)
+        if a:
+            arch_by_repo.setdefault(r.name, [a.architecture])
+    # Group by primary architecture label.
+    groups: dict[str, list[str]] = {}
+    for name, archs in arch_by_repo.items():
+        groups.setdefault(archs[0], []).append(name)
+    pairs: list[tuple[str, str]] = []
+    for label, repos in groups.items():
+        repos = sorted(set(repos))
+        for i in range(len(repos)):
+            for j in range(i + 1, len(repos)):
+                pairs.append((repos[i], repos[j]))
+    return pairs
+
+
+def reuse_opportunities(conn) -> list[str]:
+    """Evidence-backed suggestions of realistic shared code across repos."""
+    lines: list[str] = []
+    shared_comp = shared_components(conn)
+    for comp, repos in sorted(shared_comp.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        lines.append(
+            f"{len(repos)} repositories implement {comp}: " + ", ".join(repos)
+        )
+    shared_ep = shared_entry_points(conn)
+    for ep, repos in sorted(shared_ep.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        lines.append(
+            f"{len(repos)} repositories expose a {ep} entry point: " + ", ".join(repos)
+        )
+    return lines

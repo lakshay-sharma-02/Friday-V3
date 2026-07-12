@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .ask import ask
+from .architecture import analyze_and_store
 from .db import connect
 from .knowledge import ingest_paths
 from .summary import generate_summary
@@ -53,6 +54,27 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Extract and persist architectural knowledge for one repository."""
+    from .discovery import Repo
+
+    path = Path(args.repository).expanduser().resolve()
+    git = path / ".git"
+    if not (git.is_dir() or git.is_file()):
+        print(f"error: not a git repository: {path}", file=sys.stderr)
+        return 2
+    conn = connect()
+    profile = analyze_and_store(conn, Repo(path=path))
+    conn.close()
+    print(f"Analyzed {profile.path}")
+    print(f"  Architecture: {profile.architecture}")
+    print(f"  Components:   {', '.join(c.name for c in profile.components) or '(none detected)'}")
+    print(f"  Entry points: {', '.join(f'{e.kind} ({e.detail})' for e in profile.entry_points) or '(none detected)'}")
+    if profile.circular:
+        print(f"  Circular deps: {len(profile.circular)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="friday",
@@ -75,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Show the retrieved evidence block behind the answer.",
     )
     p_ask.set_defaults(func=cmd_ask)
+
+    p_analyze = sub.add_parser(
+        "analyze", help="Extract and persist repository architecture knowledge."
+    )
+    p_analyze.add_argument("repository", help="Path to a git repository.")
+    p_analyze.set_defaults(func=cmd_analyze)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -16,6 +16,7 @@ from .db import (
     set_repo_quality,
     upsert_repository,
 )
+from .architecture import analyze_and_store
 from .gitmeta import collect
 from .readme import maturity_from_summary, process, readme_completeness, readme_quality
 from .summary import RepoView, build_views, infer_relationship_rows
@@ -79,6 +80,10 @@ def ingest_paths(paths: list[Path], conn: sqlite3.Connection) -> IngestReport:
             readme_quality=readme_quality(readme_text),
             readme_completeness=readme_completeness(readme_text),
         )
+
+        # Milestone 3: persistent architectural knowledge.
+        analyze_and_store(conn, repo)
+
         report.repos_stored += 1
 
     # Relationships are computed across all repos at once (pairwise).

@@ -60,6 +60,30 @@ CREATE TABLE IF NOT EXISTS relationships (
     evidence TEXT NOT NULL,
     priority INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS architecture (
+    repo_id         INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+    architecture    TEXT NOT NULL,
+    evidence        TEXT NOT NULL,
+    data_flow       TEXT,
+    known_patterns  TEXT,
+    complexity      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS components (
+    repo_id   INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    name      TEXT NOT NULL,
+    evidence  TEXT NOT NULL,
+    PRIMARY KEY (repo_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS entry_points (
+    repo_id   INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    kind      TEXT NOT NULL,
+    detail    TEXT NOT NULL,
+    evidence  TEXT NOT NULL,
+    PRIMARY KEY (repo_id, kind, detail)
+);
 """
 
 
@@ -102,6 +126,31 @@ class RelationshipRow:
     kind: str
     evidence: str
     priority: int = 0
+
+
+@dataclass
+class ArchitectureRow:
+    repo_id: int
+    architecture: str
+    evidence: str
+    data_flow: Optional[str]
+    known_patterns: Optional[str]
+    complexity: Optional[str]
+
+
+@dataclass
+class ComponentRow:
+    repo_id: int
+    name: str
+    evidence: str
+
+
+@dataclass
+class EntryPointRow:
+    repo_id: int
+    kind: str
+    detail: str
+    evidence: str
 
 
 def connect(path: Optional[Path] = None) -> sqlite3.Connection:
@@ -318,6 +367,133 @@ def get_all_relationships(conn: sqlite3.Connection) -> list[RelationshipRow]:
             kind=r["kind"],
             evidence=r["evidence"],
             priority=r["priority"],
+        )
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Architecture (Milestone 3)
+# ---------------------------------------------------------------------------
+
+
+def upsert_architecture(
+    conn: sqlite3.Connection,
+    *,
+    repo_id: int,
+    architecture: str,
+    evidence: str,
+    data_flow: Optional[str] = None,
+    known_patterns: Optional[str] = None,
+    complexity: Optional[str] = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO architecture
+            (repo_id, architecture, evidence, data_flow, known_patterns, complexity)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(repo_id) DO UPDATE SET
+            architecture=excluded.architecture,
+            evidence=excluded.evidence,
+            data_flow=excluded.data_flow,
+            known_patterns=excluded.known_patterns,
+            complexity=excluded.complexity
+        """,
+        (repo_id, architecture, evidence, data_flow, known_patterns, complexity),
+    )
+    conn.commit()
+
+
+def get_architecture(conn: sqlite3.Connection, repo_id: int) -> Optional[ArchitectureRow]:
+    row = conn.execute(
+        "SELECT * FROM architecture WHERE repo_id = ?", (repo_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return ArchitectureRow(
+        repo_id=row["repo_id"],
+        architecture=row["architecture"],
+        evidence=row["evidence"],
+        data_flow=row["data_flow"],
+        known_patterns=row["known_patterns"],
+        complexity=row["complexity"],
+    )
+
+
+def replace_components(
+    conn: sqlite3.Connection, repo_id: int, components: list[ComponentRow]
+) -> None:
+    conn.execute("DELETE FROM components WHERE repo_id = ?", (repo_id,))
+    conn.executemany(
+        "INSERT OR REPLACE INTO components (repo_id, name, evidence) VALUES (?, ?, ?)",
+        [(repo_id, c.name, c.evidence) for c in components],
+    )
+    conn.commit()
+
+
+def get_components(conn: sqlite3.Connection, repo_id: int) -> list[ComponentRow]:
+    rows = conn.execute(
+        "SELECT repo_id, name, evidence FROM components WHERE repo_id = ? ORDER BY name",
+        (repo_id,),
+    ).fetchall()
+    return [ComponentRow(repo_id=r["repo_id"], name=r["name"], evidence=r["evidence"]) for r in rows]
+
+
+def replace_entry_points(
+    conn: sqlite3.Connection, repo_id: int, entries: list[EntryPointRow]
+) -> None:
+    conn.execute("DELETE FROM entry_points WHERE repo_id = ?", (repo_id,))
+    conn.executemany(
+        "INSERT OR REPLACE INTO entry_points (repo_id, kind, detail, evidence) VALUES (?, ?, ?, ?)",
+        [(repo_id, e.kind, e.detail, e.evidence) for e in entries],
+    )
+    conn.commit()
+
+
+def get_entry_points(conn: sqlite3.Connection, repo_id: int) -> list[EntryPointRow]:
+    rows = conn.execute(
+        "SELECT repo_id, kind, detail, evidence FROM entry_points WHERE repo_id = ? "
+        "ORDER BY kind, detail",
+        (repo_id,),
+    ).fetchall()
+    return [
+        EntryPointRow(
+            repo_id=r["repo_id"], kind=r["kind"], detail=r["detail"], evidence=r["evidence"]
+        )
+        for r in rows
+    ]
+
+
+def all_entry_points(conn: sqlite3.Connection) -> list[EntryPointRow]:
+    """Every entry point across all repositories (for cross-repo similarity)."""
+    rows = conn.execute(
+        "SELECT repo_id, kind, detail, evidence FROM entry_points ORDER BY repo_id, kind"
+    ).fetchall()
+    return [
+        EntryPointRow(
+            repo_id=r["repo_id"], kind=r["kind"], detail=r["detail"], evidence=r["evidence"]
+        )
+        for r in rows
+    ]
+
+
+def all_components(conn: sqlite3.Connection) -> list[ComponentRow]:
+    """Every component across all repositories (for cross-repo similarity)."""
+    rows = conn.execute(
+        "SELECT repo_id, name, evidence FROM components ORDER BY repo_id, name"
+    ).fetchall()
+    return [ComponentRow(repo_id=r["repo_id"], name=r["name"], evidence=r["evidence"]) for r in rows]
+
+
+def entry_points_by_kind(conn: sqlite3.Connection, kind: str) -> list[EntryPointRow]:
+    rows = conn.execute(
+        "SELECT repo_id, kind, detail, evidence FROM entry_points WHERE kind = ? "
+        "ORDER BY repo_id",
+        (kind,),
+    ).fetchall()
+    return [
+        EntryPointRow(
+            repo_id=r["repo_id"], kind=r["kind"], detail=r["detail"], evidence=r["evidence"]
         )
         for r in rows
     ]
