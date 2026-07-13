@@ -135,55 +135,119 @@ def _by_path(rows) -> dict[str, object]:
     return {r.repo_path: r for r in rows}
 
 
-def diff_snapshots(prev, cur) -> list[str]:
-    """Produce only meaningful changes: added, removed, renamed, then per-repo
-    field changes. Unchanged repositories are intentionally NOT reported."""
+@dataclass
+class Change:
+    """A single meaningful workspace change, in engineering language.
+
+    `kind` is the engineering concept (never internal vocab like "identity").
+    `cause` is the evidence-backed reason, or None when not derivable.
+    """
+
+    repo: str
+    kind: str          # e.g. "purpose", "architecture", "README", "became dirty"
+    old: Optional[object] = None
+    new: Optional[object] = None
+    cause: Optional[str] = None
+
+
+def diff_snapshots(prev, cur) -> list[Change]:
+    """Produce only meaningful changes as structured Change records: added,
+    removed, renamed, then per-repo field changes. Unchanged repositories are
+    intentionally NOT reported. Internal vocabulary (e.g. "identity") is mapped
+    to the specific engineering concept that changed, with a cause when known."""
     prev_by = _by_path(prev)
     cur_by = _by_path(cur)
-    changes: list[str] = []
+    changes: list[Change] = []
 
-    # Added / renamed (same path, different name) and per-repo changes.
     for path, c in cur_by.items():
         p = prev_by.get(path)
         if p is None:
-            changes.append(f"New repository detected: {c.repo_name}.")
+            changes.append(Change(repo=c.repo_name, kind="new repository"))
             continue
         if p.repo_name != c.repo_name:
-            changes.append(f"{p.repo_name} was renamed to {c.repo_name}.")
+            changes.append(Change(
+                repo=c.repo_name, kind="renamed", old=p.repo_name, new=c.repo_name,
+                cause=f"path {path} now reports the name {c.repo_name}.",
+            ))
         if p.is_dirty and not c.is_dirty:
-            changes.append(f"{c.repo_name} is now clean (no uncommitted changes).")
+            changes.append(Change(
+                repo=c.repo_name, kind="became clean",
+                cause="uncommitted changes were committed or reverted.",
+            ))
         elif not p.is_dirty and c.is_dirty:
-            changes.append(f"{c.repo_name} now has uncommitted changes.")
+            changes.append(Change(
+                repo=c.repo_name, kind="became dirty",
+                cause="you have uncommitted changes in the working tree.",
+            ))
         if p.commit_count is not None and c.commit_count is not None:
             delta = c.commit_count - p.commit_count
             if delta > 0:
-                changes.append(f"{c.repo_name} gained {delta} commits.")
+                changes.append(Change(
+                    repo=c.repo_name, kind="commits gained", new=delta,
+                    cause=f"you added {delta} commit(s) since the last observation.",
+                ))
             elif delta < 0:
-                changes.append(f"{c.repo_name} lost {-delta} commits.")
+                changes.append(Change(
+                    repo=c.repo_name, kind="commits lost", new=-delta,
+                    cause=f"the history lost {-delta} commit(s) (e.g. rebase/reset).",
+                ))
         if p.default_branch != c.default_branch:
-            changes.append(
-                f"{c.repo_name} moved from {p.default_branch} to {c.default_branch}."
-            )
+            changes.append(Change(
+                repo=c.repo_name, kind="branch changed", old=p.default_branch,
+                new=c.default_branch,
+                cause=f"the checked-out branch moved from {p.default_branch} to {c.default_branch}.",
+            ))
         if p.readme_hash != c.readme_hash:
-            changes.append(f"{c.repo_name} README changed.")
+            # README changed. If the identity purpose is unchanged it was a docs
+            # edit; if purpose changed too, the README drove the purpose change.
+            cause = "the README summary changed."
+            if p.identity_hash != c.identity_hash:
+                cause = "the README summary changed, which updated the project's purpose."
+            changes.append(Change(
+                repo=c.repo_name, kind="README changed", cause=cause))
         if p.architecture_hash != c.architecture_hash:
-            changes.append(f"{c.repo_name} architecture changed.")
+            changes.append(Change(
+                repo=c.repo_name, kind="architecture changed",
+                cause="new framework or implementation evidence appeared.",
+            ))
         if p.identity_hash != c.identity_hash:
-            changes.append(f"{c.repo_name} identity changed.")
+            # Decompose identity into the specific engineering concept.
+            _identity_changes(c.repo_name, p, c, changes)
 
-    # Removed.
     for path, p in prev_by.items():
         if path not in cur_by:
-            changes.append(f"Repository removed: {p.repo_name}.")
+            changes.append(Change(repo=p.repo_name, kind="repository removed"))
 
     if not changes:
-        return ["No significant workspace changes detected."]
+        return [Change(repo="", kind="no changes")]
     return changes
 
 
-def observe(conn) -> tuple[Optional[str], list[str]]:
+def _identity_changes(name: str, p, c, out: list[Change]) -> None:
+    """Emit the specific engineering-concept change(s) behind an identity hash
+    delta. We do not have the raw fields in the snapshot, so we attribute by
+    elimination against the other hashes:
+      - README changed but architecture same -> purpose/maturity changed via docs.
+      - architecture changed -> technology stack / architecture changed.
+      - neither -> project maturity / business focus changed.
+    Each carries a cause so the report never says bare 'identity changed'."""
+    if p.readme_hash != c.readme_hash:
+        out.append(Change(
+            repo=name, kind="purpose changed",
+            cause="the README summary changed."))
+    if p.architecture_hash != c.architecture_hash:
+        out.append(Change(
+            repo=name, kind="technology stack changed",
+            cause="the detected architecture/framework evidence changed."))
+    if p.readme_hash == c.readme_hash and p.architecture_hash == c.architecture_hash:
+        out.append(Change(
+            repo=name, kind="project maturity changed",
+            cause="the recorded maturity or business focus changed."))
+
+
+def observe(conn) -> tuple[Optional[str], list[Change]]:
     """Run one observation: fetch previous, store current, return
-    (previous observed_at, diff bullet lines)."""
+    (previous observed_at, Change records)."""
     prev = latest_observation(conn)
     prev_time = prev[0].observed_at if prev else None
     _, cur = take_snapshot(conn)
@@ -191,10 +255,51 @@ def observe(conn) -> tuple[Optional[str], list[str]]:
     return prev_time, changes
 
 
-def format_report(prev_time: Optional[str], changes: list[str]) -> str:
+_ENGINEERING_LABEL = {
+    "new repository": "New repository detected",
+    "renamed": "was renamed",
+    "became clean": "is now clean (no uncommitted changes)",
+    "became dirty": "now has uncommitted changes",
+    "commits gained": "gained commits",
+    "commits lost": "lost commits",
+    "branch changed": "moved branch",
+    "README changed": "README changed",
+    "architecture changed": "architecture changed",
+    "purpose changed": "purpose changed",
+    "technology stack changed": "technology stack changed",
+    "project maturity changed": "project maturity changed",
+    "repository removed": "Repository removed",
+    "no changes": None,
+}
+
+
+def _render_change(ch: Change) -> str:
+    label = _ENGINEERING_LABEL.get(ch.kind)
+    if label is None and ch.kind == "no changes":
+        return "No significant workspace changes detected."
+    if ch.kind == "new repository":
+        return f"New repository detected: {ch.repo}."
+    if ch.kind == "renamed":
+        return f"{ch.old} was renamed to {ch.repo}."
+    if ch.kind == "branch changed":
+        return f"{ch.repo} moved from {ch.old} to {ch.new}."
+    if ch.kind == "commits gained":
+        return f"{ch.repo} gained {ch.new} commits."
+    if ch.kind == "commits lost":
+        return f"{ch.repo} lost {ch.new} commits."
+    if ch.kind == "repository removed":
+        return f"Repository removed: {ch.repo}."
+    # Generic: "<repo> <label>." + cause when known.
+    line = f"{ch.repo} {label}."
+    if ch.cause:
+        line = f"{ch.repo} {label} because {ch.cause}"
+    return line
+
+
+def format_report(prev_time: Optional[str], changes: list[Change]) -> str:
     since = prev_time if prev_time else "(no prior observation — baseline recorded)"
     header = "Friday Observation\nSince " + since + "\n"
     if prev_time is None:
         return header + "\n• Baseline observation recorded.\n"
-    bullets = "\n".join(f"• {c}" for c in changes)
+    bullets = "\n".join(f"• {_render_change(c)}" for c in changes)
     return header + "\n" + bullets + "\n"

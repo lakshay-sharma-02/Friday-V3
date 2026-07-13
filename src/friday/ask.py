@@ -79,6 +79,51 @@ def _today() -> dt.date:
     return dt.date.today()
 
 
+def _portfolio_mode(question: str) -> str:
+    """Disambiguate the three questions that share the `portfolio` intent.
+
+    - "strengths": what engineering capabilities am I developing (patterns,
+      architectures, languages, systems, problem domains).
+    - "effort": where is my effort actually going (observation history, recent
+      activity, dirty repos, current work).
+    - "building": default — what am I building (themes + purpose + identity).
+    """
+    qlow = question.lower()
+    if any(w in qlow for w in (
+        "strengths", "skills am i", "developing", "good at", "capabilities",
+        "what can i", "engineering ability",
+    )):
+        return "strengths"
+    if any(w in qlow for w in (
+        "effort", "where is my", "where.*going", "attention", "spending my",
+        "time going", "focus", "currently investing",
+    )):
+        return "effort"
+    return "building"
+
+
+# Relationship kinds ordered by engineering value (M6 F6): shared problem /
+# responsibility / goal / capability / abstraction first; bare tech/stack
+# overlap last. Weak coincidences (shared-language/author/org) are excluded
+# from this list entirely — they are never surfaced as relationships.
+_REL_PREFERENCE = {
+    "duplicated-functionality": 0,
+    "shared-abstraction": 1,
+    "shared-implementation": 2,
+    "shared-architecture": 3,
+    "shared-framework": 4,
+    "shared-deployment": 5,
+    "shared-db": 6,
+    "shared-config": 7,
+    "shared-tech": 8,
+    "potential-reuse": 9,
+}
+
+
+def _rel_rank(kind: str) -> int:
+    return _REL_PREFERENCE.get(kind, 50)
+
+
 def _known_techs(conn) -> set[str]:
     techs: set[str] = set()
     for r in q.all_repositories(conn):
@@ -114,7 +159,8 @@ def deterministic_classifier(question: str, conn) -> str:
         "seem to be building", "building", "emerge", "emerging",
         "repeatedly solving", "skills am i", "across my projects",
         "strengths am i", "developing", "my portfolio", "my work",
-        "what am i working on",
+        "what am i working on", "where is my effort", "where is my work going",
+        "effort going", "engineering effort", "spending my time", "time going",
     )):
         return "portfolio"
     if ("most valuable" in qlow or "highest value" in qlow or "worth most" in qlow
@@ -142,6 +188,15 @@ def deterministic_classifier(question: str, conn) -> str:
         "how it works", "how it's built", "components", "implement",
     )):
         return "architecture"
+    # Surprising / non-obvious insight requests (M6 F2): "tell me something I
+    # haven't noticed", "what stands out", "surprise me". Route to the insights
+    # layer (engineering observations), NOT to a single-repo describe.
+    if any(w in qlow for w in (
+        "haven't noticed", "havent noticed", "have not noticed",
+        "surprise me", "something i", "what stands out", "what should i notice",
+        "non-obvious", "not obvious", "what am i missing",
+    )):
+        return "insights"
     # Human explanations: purpose/identity first (Milestone 3.5 §2, §3).
     # "explain"/"walk me through"/"tell me about" map here; "what is" too, so
     # "Explain Vivaha." and "What is Aether?" produce the onboarding answer.
@@ -373,9 +428,9 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
 
             pairs: list[str] = []
             name_by_id = {x.id: x.name for x in q.all_repositories(conn)}
-            for rel in get_all_relationships(conn):
-                if rel.strength == "Weak":
-                    continue
+            ranked = [rel for rel in get_all_relationships(conn) if rel.strength != "Weak"]
+            ranked.sort(key=lambda rel: _rel_rank(rel.kind))
+            for rel in ranked:
                 an = name_by_id.get(rel.repo_a)
                 bn = name_by_id.get(rel.repo_b)
                 if an and bn:
@@ -397,8 +452,12 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
                 continue
             strong = [p for p in pairs if p.strength != "Weak"]
             weak = [p for p in pairs if p.strength == "Weak"]
-            # Answer WHY they are related, not just WHAT they share.
-            why = [f"{p.kind.replace('shared-', 'shared ')} — {p.evidence}" for p in strong]
+            # Answer WHY they are related, not just WHAT they share. Prefer
+            # problem/responsibility/goal/abstraction over bare tech overlap.
+            why = [
+                f"{p.kind.replace('shared-', 'shared ')} — {p.evidence}"
+                for p in sorted(strong, key=lambda p: _rel_rank(p.kind))
+            ]
             if include_weak and weak:
                 why += [f"weak coincidence: {p.kind.replace('shared-', 'shared ')} ({p.evidence})"
                         for p in weak]
@@ -581,10 +640,25 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         return ev
 
     if intent == "portfolio":
-        from .portfolio import portfolio_synthesis, detect_themes
+        from .portfolio import (
+            portfolio_synthesis,
+            portfolio_strengths,
+            portfolio_effort,
+            detect_themes,
+        )
 
-        blocks = portfolio_synthesis(conn, today)
+        # F1: the same "portfolio" bucket covers three different questions.
+        # Select the smallest evidence set that answers the actual question
+        # instead of always dumping the full theme summary.
+        mode = _portfolio_mode(question)
+        if mode == "strengths":
+            blocks = portfolio_strengths(conn, today)
+        elif mode == "effort":
+            blocks = portfolio_effort(conn, today)
+        else:
+            blocks = portfolio_synthesis(conn, today)
         ev.blocks = blocks
+        ev.raw["portfolio_mode"] = mode
         ev.raw["portfolio"] = blocks
         ev.raw["themes"] = [
             {"theme": t.theme, "repos": t.repos, "confidence": t.confidence}
@@ -689,11 +763,22 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         return ev
 
     if intent == "insights":
-        from .insights import generate_insights
+        # F2: prefer the surprising engineering-observation layer over raw fact
+        # dumps. If nothing non-obvious is supported by evidence, say so plainly
+        # rather than falling back to "newest repository" filler.
+        from .insights import generate_insights, _engineering_insights
 
-        ins = generate_insights(conn, today)
-        ev.blocks = [i.text for i in ins]
-        ev.raw["insights"] = [i.text for i in ins]
+        eng = _engineering_insights(conn, today)
+        if eng:
+            ev.blocks = [i.text for i in eng]
+        else:
+            ev.blocks = [
+                "I don't see anything non-obvious in your workspace yet — no "
+                "repeated solutions, emerging trends, or effort shifts are "
+                "evident from the stored evidence. Keep ingesting and I'll "
+                "surface them as they appear."
+            ]
+        ev.raw["insights"] = ev.blocks
         return ev
 
     # general

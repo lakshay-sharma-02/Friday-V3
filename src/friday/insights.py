@@ -31,6 +31,12 @@ def generate_insights(conn, today: Optional[dt.date] = None) -> list[Insight]:
     repos = _repos(conn)
     out: list[Insight] = []
 
+    # --- Milestone 6 (F2/F7): surprising engineering observations FIRST ------
+    # A senior engineer surfaces the non-obvious before the obvious. These are
+    # evidence-cited and silent when unsupported; they must not be buried under
+    # raw facts like "newest repository".
+    out.extend(_engineering_insights(conn, today))
+
     # Newest repositories.
     newest = newest_repos(conn, 3)
     if newest:
@@ -96,6 +102,121 @@ def generate_insights(conn, today: Optional[dt.date] = None) -> list[Insight]:
         )
 
     return out
+
+
+def _engineering_insights(conn, today: dt.date) -> list[Insight]:
+    """Non-obvious engineering observations derived from stored evidence.
+
+    Only emitted when supported by Medium/Strong evidence. This is the layer
+    that answers 'tell me something I haven't noticed' — it must avoid obvious
+    facts (newest repo, shared language) and never fabricate."""
+    from .db import get_all_relationships, get_architecture
+    from . import judgment
+
+    out: list[Insight] = []
+
+    # Repeated solution: two repos sharing a Medium/Strong *implementation-level*
+    # relationship (not a coincidence) suggests a problem solved twice.
+    rels = get_all_relationships(conn)
+    seen_pairs: set[tuple[str, str]] = set()
+    name_by_id = {r.id: r.name for r in all_repositories(conn)}
+    for rel in rels:
+        if rel.strength == "Weak":
+            continue
+        if rel.kind in ("duplicated-functionality", "shared-abstraction",
+                        "shared-implementation"):
+            key = tuple(sorted((rel.repo_a, rel.repo_b)))
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            an, bn = name_by_id.get(rel.repo_a), name_by_id.get(rel.repo_b)
+            if an and bn:
+                out.append(Insight(
+                    text=f"{an} and {bn} appear to solve a similar problem "
+                         f"({rel.evidence}) — you may have built the same "
+                         f"capability twice."))
+
+    # Converging trend: a technology whose repo-count grew between the last two
+    # observations (requires observation history from M5).
+    trend = _converging_tech_trend(conn)
+    if trend:
+        tech, before, after = trend
+        out.append(Insight(
+            text=f"Your work is converging on {tech}: it now appears in {after} "
+                 f"repositories, up from {before} at the previous observation."))
+
+    # Commercial shift: a commercial/product-themed repo carrying the majority
+    # of commits — effort is tilting toward commercial work.
+    shift = _commercial_shift(conn, today)
+    if shift:
+        out.append(Insight(text=shift))
+
+    return out
+
+
+def _converging_tech_trend(conn) -> Optional[tuple[str, int, int]]:
+    """Best tech whose repo-count rose between the two most recent observations.
+    Returns (tech, prev_count, cur_count) or None (no history / no growth)."""
+    from .db import latest_observation
+    from . import query as q
+
+    snaps = latest_observation(conn)
+    if not snaps:
+        return None
+    latest_time = snaps[0].observed_at
+    rows = conn.execute(
+        "SELECT observed_at, repo_path, repo_name FROM snapshots "
+        "ORDER BY observed_at DESC"
+    ).fetchall()
+    times = sorted({r["observed_at"] for r in rows}, reverse=True)
+    if len(times) < 2:
+        return None
+    prev_time, cur_time = times[1], times[0]
+    prev_paths = {r["repo_path"] for r in rows if r["observed_at"] == prev_time}
+    cur_paths = {r["repo_path"] for r in rows if r["observed_at"] == cur_time}
+
+    prev_tech: dict[str, set[str]] = {}
+    cur_tech: dict[str, set[str]] = {}
+    for rid, f in q._repo_facts(conn, q._today()).items():
+        path = next((r.path for r in q.all_repositories(conn) if r.id == rid), None)
+        if path in prev_paths:
+            prev_tech.setdefault(path, set()).update(f["tech"])
+        if path in cur_paths:
+            cur_tech.setdefault(path, set()).update(f["tech"])
+
+    best = None
+    for tech in set().union(*cur_tech.values()) if cur_tech else set():
+        before = sum(1 for s in prev_tech.values() if tech in s)
+        after = sum(1 for s in cur_tech.values() if tech in s)
+        if after > before and (best is None or after - before > best[2] - best[1]):
+            best = (tech, before, after)
+    return best
+
+
+def _commercial_shift(conn, today: dt.date) -> Optional[str]:
+    """Return an insight string if a commercial/product repo leads workspace
+    commit share, else None."""
+    from .portfolio import detect_themes
+    from .query import most_active
+
+    repos = all_repositories(conn)
+    if not repos:
+        return None
+    comm = [t for t in detect_themes(conn, today)
+            if t.theme in ("Products", "Commercial applications")]
+    if not comm:
+        return None
+    names = {n for t in comm for n in t.repos}
+    active = {r.id: s for r, s in most_active(conn, today, len(repos))}
+    facts = {r.id: r for r in repos}
+    for rid, share_score in sorted(active.items(), key=lambda kv: -kv[1]):
+        r = facts.get(rid)
+        if r and r.name in names:
+            total = sum(x.commit_count or 0 for x in repos)
+            if r.commit_count and total and r.commit_count / total >= 0.4:
+                return (f"Commercial work is becoming your dominant engineering "
+                        f"effort: {r.name} carries the majority of workspace commits.")
+    return None
 
 
 def _repos(conn) -> list[Repository]:

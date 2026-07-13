@@ -349,6 +349,125 @@ def portfolio_synthesis(conn, today: Optional[dt.date] = None) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Portfolio sub-modes (Milestone 6, F1): same intent, different evidence
+# ---------------------------------------------------------------------------
+
+
+def portfolio_strengths(conn, today: Optional[dt.date] = None) -> list[str]:
+    """Answer 'what engineering strengths am I developing?' — evidence of
+    *capability*: repeated patterns, architectures built, languages, systems
+    shipped, problem domains tackled. Distinct from portfolio_synthesis, which
+    leads with product themes."""
+    today = today or dt.date.today()
+    facts = _repo_facts(conn, today)
+    blocks: list[str] = []
+
+    # Architectures / systems actually built (from stored architecture labels).
+    from .db import get_architecture
+
+    arch_counts: dict[str, list[str]] = {}
+    for r in _repos(conn):
+        if r.id is None:
+            continue
+        a = get_architecture(conn, r.id)
+        if a and a.architecture and a.architecture != "Unknown":
+            arch_counts.setdefault(a.architecture, []).append(r.name)
+    if arch_counts:
+        blocks.append("Systems and architectures you've built:")
+        for arch, names in sorted(arch_counts.items(), key=lambda kv: -len(kv[1])):
+            blocks.append(f"- {arch}: {', '.join(names)}.")
+
+    # Languages / tech breadth = the surface of your engineering capability.
+    langs = {l.language for r in _repos(conn) if r.id is not None
+             for l in _langs(conn, r.id)}
+    if langs:
+        blocks.append(
+            f"Language breadth: you work across {len(langs)} languages "
+            f"({', '.join(sorted(langs))})."
+        )
+
+    # Problem domains you keep returning to (theme purposes, not product names).
+    themes = detect_themes(conn, today)
+    eng_themes = [t for t in themes if t.theme in (
+        "Operating systems", "Developer tooling", "AI infrastructure", "Research")]
+    if eng_themes:
+        blocks.append("Engineering problem domains you keep returning to:")
+        for t in eng_themes:
+            blocks.append(f"- {t.theme} ({t.confidence}): {', '.join(t.repos)}.")
+
+    # Repeated engineering patterns (shared architecture labels = same kind of
+    # system solved more than once).
+    repeated = {k: v for k, v in arch_counts.items() if len(v) >= 2}
+    if repeated:
+        blocks.append("Patterns you've repeated across projects:")
+        for label, names in sorted(repeated.items(), key=lambda kv: -len(kv[1])):
+            blocks.append(f"- {label} (solved in {', '.join(names)})")
+
+    if not blocks:
+        blocks.append(
+            "Not enough built evidence yet to characterize your engineering "
+            "strengths. Run `friday analyze <path>` on more repositories."
+        )
+    blocks.append(
+        "Confidence: Medium — derived from stored architecture labels, "
+        "languages and problem-domain themes, not from commit counts."
+    )
+    return blocks
+
+
+def portfolio_effort(conn, today: Optional[dt.date] = None) -> list[str]:
+    """Answer 'where is my engineering effort going?' — current activity and
+    momentum, not lifetime totals. Pulls observation history, recent activity,
+    dirty repos and current work."""
+    today = today or dt.date.today()
+    from .db import latest_observation
+    from .query import most_active, inactive_repos
+
+    blocks: list[str] = []
+    facts = _repo_facts(conn, today)
+    active = {r.id: s for r, s in most_active(conn, today, len(facts))}
+
+    # Currently active, uncommitted work = effort happening right now.
+    dirty = [f["name"] for f in facts.values() if f["is_dirty"]]
+    if dirty:
+        blocks.append("Active, uncommitted work right now:")
+        for n in dirty:
+            blocks.append(f"- {n} has uncommitted changes.")
+
+    # Recent momentum: highest commit-rate repos.
+    if active:
+        by_id = {rid: f["name"] for rid, f in facts.items()}
+        top = sorted(active.items(), key=lambda kv: -kv[1])[:3]
+        blocks.append("Highest recent commit velocity:")
+        for rid, rate in top:
+            blocks.append(f"- {by_id.get(rid, '?')} (~{rate:.1f} commits/day over its lifetime)")
+
+    # Observation history: compare the last two snapshots for momentum shifts.
+    snaps = latest_observation(conn)
+    if snaps:
+        latest = snaps[0].observed_at
+        blocks.append(f"Last recorded observation: {latest}.")
+
+    # Stalled effort (no recent commit) — where attention has drained.
+    stale = inactive_repos(conn, today)
+    if stale:
+        blocks.append("Effort has stalled here (no recent commit):")
+        for r in stale[:3]:
+            blocks.append(f"- {r.name}")
+
+    if not blocks:
+        blocks.append(
+            "No current activity signal — no repositories are ingested or none "
+            "have commit history."
+        )
+    blocks.append(
+        "Confidence: Medium — based on live git status, commit velocity and "
+        "observation history, not on self-reported intent."
+    )
+    return blocks
+
+
+# ---------------------------------------------------------------------------
 # Project value (§4)
 # ---------------------------------------------------------------------------
 
