@@ -176,10 +176,11 @@ def test_b5_purpose_recovery_manifest(conn, tmp_path):
     rid = _seed(conn, "proj", str(repo_dir),
                 langs=("JavaScript",), techs=("Node.js",), arch=("CLI tool", "x"))
     repo = q.all_repositories(conn)[0]
-    purpose, sources = recover_purpose(repo, conn)
+    purpose, sources, conf = recover_purpose(repo, conn)
     assert purpose is not None
     assert "invoice reconciliation" in purpose
     assert "manifest description" in sources
+    assert conf == "Medium"
 
 
 def test_b5b_purpose_missing_is_honest(conn):

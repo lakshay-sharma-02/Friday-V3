@@ -112,10 +112,12 @@ def deterministic_classifier(question: str, conn) -> str:
         "am i building", "themes", "patterns across", "what am i building",
         "seem to be building", "building", "emerge", "emerging",
         "repeatedly solving", "skills am i", "across my projects",
-        "my portfolio", "my work", "what am i working on",
+        "strengths am i", "developing", "my portfolio", "my work",
+        "what am i working on",
     )):
         return "portfolio"
-    if "most valuable" in qlow or "highest value" in qlow or "worth most" in qlow:
+    if ("most valuable" in qlow or "highest value" in qlow or "worth most" in qlow
+            or "matters most" in qlow or "matter most" in qlow or "matters the most" in qlow):
         return "value"
     if "integrate" in qlow or "integration with friday" in qlow or "integration point" in qlow:
         return "integration"
@@ -123,7 +125,7 @@ def deterministic_classifier(question: str, conn) -> str:
     # parts overlap" — compare along dimensions, not syntax. Placed before the
     # architecture matcher so "how do my projects overlap" doesn't become an
     # architecture deep-dive, and before similarity (shared code / reuse).
-    if "overlap" in qlow:
+    if "overlap" in qlow or "merge" in qlow or "merging" in qlow:
         return "overlap"
     # Relationship questions first (so "how is X related to Y" is not swallowed
     # by the architecture matcher's "how is" rule). Audit §5: weak/strong
@@ -388,7 +390,25 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         qlow = question.lower()
         r = _detect_repo(question, conn)
         if not r or r.id is None:
-            ev.raw["note"] = "could not identify repository"
+            # No single subject named — answer at workspace level (e.g. "which
+            # projects feel related?"). Surface Medium/Strong relationships only;
+            # weak coincidences are omitted (Part F: prefer meaningful links).
+            from .db import get_all_relationships
+
+            pairs: list[str] = []
+            name_by_id = {x.id: x.name for x in q.all_repositories(conn)}
+            for rel in get_all_relationships(conn):
+                if rel.strength == "Weak":
+                    continue
+                an = name_by_id.get(rel.repo_a)
+                bn = name_by_id.get(rel.repo_b)
+                if an and bn:
+                    pairs.append(f"{an} and {bn}: {rel.kind.replace('shared-', 'shared ')} "
+                                 f"({rel.evidence})")
+            if pairs:
+                ev.blocks = ["Projects that are genuinely related (Medium/Strong evidence):"] + pairs
+            else:
+                ev.blocks = ["No Medium/Strong relationships detected across the workspace."]
             return ev
         # Weak relationships are coincidences (shared author/org/language), not
         # insight. Hide them unless the user explicitly asks to include weak ones.

@@ -60,6 +60,8 @@ class ProjectIdentity:
     related_projects: list[str] = field(default_factory=list)
     readme_quality: Optional[str] = None
     evidence_sources: list[str] = field(default_factory=list)
+    purpose_confidence: str = "None"
+    purpose_source: Optional[str] = None
 
     @property
     def has_identity(self) -> bool:
@@ -104,15 +106,18 @@ def entry_point_groups(entry_points: list[EntryPointRow]) -> EntryPointGroups:
 
 def recover_purpose(
     repo: Repository, conn, arch: Optional[ArchitectureRow] = None
-) -> tuple[Optional[str], list[str]]:
-    """Recover project purpose from deterministic evidence (audit §6).
+) -> tuple[Optional[str], list[str], str]:
+    """Recover project purpose from deterministic evidence (M3.6 §B).
 
     Order of authority:
       1. README summary Purpose line (richest, human-written).
       2. Manifest description (package.json / pyproject.toml).
-      3. Framework/architecture hint (e.g. "Next.js App Router" => web app).
-    Returns (purpose, evidence_sources). Never invents; returns (None, [...])
-    when nothing supports a purpose.
+      3. Project documentation (VISION/PRODUCT/ROADMAP/... Purpose sections).
+      4. Framework/architecture hint (e.g. "Next.js App Router" => web app).
+      5. Repository name + layout (Low confidence, last resort).
+    Returns (purpose, evidence_sources, confidence). Never invents; returns
+    (None, [...], "None") when nothing supports a purpose. Confidence is
+    surfaced so explanations can state *why* (M4 Part G).
     """
     sources: list[str] = []
 
@@ -123,33 +128,49 @@ def recover_purpose(
         line = _purpose_line(summary)
         if line and line != "No README summary available." and len(line.split()) >= 3:
             sources.append("README")
-            return line, sources
+            return line, sources, "High"
+        # README present but no Purpose line — still usable as a weak source.
+        if line and line != "No README summary available.":
+            sources.append("README")
+            return line, sources, "Medium"
 
-    # 2. Manifest description.
-    from .readme import manifest_description
+    # 2-5. Deterministic fallback chain (manifest > docs > layout/name).
+    from .readme import recover_purpose_fallback
 
-    desc = manifest_description(repo.path)
-    if desc:
-        sources.append("manifest description")
-        return desc, sources
+    purpose, source, confidence = recover_purpose_fallback(repo.path, repo.name)
+    if purpose:
+        sources.append(source)
+        # Architecture hint can lift a low-confidence name-based guess.
+        if confidence == "Low" and arch and arch.architecture and arch.architecture != "Unknown":
+            label = arch.architecture
+            if any(k in label for k in ("FastAPI", "Flask", "Django", "web app")):
+                return "A web application.", sources + ["architecture"], "Medium"
+            if "Next.js" in label or "React" in label:
+                return "A web frontend application.", sources + ["architecture"], "Medium"
+            if "CLI" in label:
+                return "A command-line tool.", sources + ["architecture"], "Medium"
+            if "Library" in label:
+                return "A software library / package.", sources + ["Medium"]
+            if "Cargo" in label:
+                return "A Rust application or workspace.", sources + ["architecture"], "Medium"
+        return purpose, sources, confidence
 
-    # 3. Framework/architecture hint — only a weak, general statement.
+    # 3 (explicit): architecture hint even without any text source.
     if arch and arch.architecture and arch.architecture != "Unknown":
         label = arch.architecture
         sources.append("architecture")
-        # Phrase as what kind of thing it is, not a fabricated mission.
-        if "FastAPI" in label or "Flask" in label or "Django" in label or "web app" in label:
-            return "A web application.", sources
+        if any(k in label for k in ("FastAPI", "Flask", "Django", "web app")):
+            return "A web application.", sources, "Medium"
         if "Next.js" in label or "React" in label:
-            return "A web frontend application.", sources
+            return "A web frontend application.", sources, "Medium"
         if "CLI" in label:
-            return "A command-line tool.", sources
+            return "A command-line tool.", sources, "Medium"
         if "Library" in label:
-            return "A software library / package.", sources
+            return "A software library / package.", sources, "Medium"
         if "Cargo" in label:
-            return "A Rust application or workspace.", sources
+            return "A Rust application or workspace.", sources, "Medium"
 
-    return None, sources
+    return None, sources, "None"
 
 
 def build_identity(conn, repo_id: int, today: Optional[dt.date] = None) -> Optional[ProjectIdentity]:
@@ -170,8 +191,8 @@ def build_identity(conn, repo_id: int, today: Optional[dt.date] = None) -> Optio
     langs = get_languages(conn, repo_id)
     techs = get_technologies(conn, repo_id)
 
-    # Purpose: README -> manifest -> architecture hint.
-    purpose, purpose_src = recover_purpose(repo, conn, arch)
+    # Purpose: README -> manifest -> docs -> architecture hint -> name/layout.
+    purpose, purpose_src, purpose_conf = recover_purpose(repo, conn, arch)
 
     # Maturity from README quality pass (stored); fall back to architecture conf.
     maturity = repo.maturity or "Unknown"
@@ -242,11 +263,19 @@ def build_identity(conn, repo_id: int, today: Optional[dt.date] = None) -> Optio
         related_projects=related,
         readme_quality=repo.readme_quality,
         evidence_sources=purpose_src,
+        purpose_confidence=purpose_conf,
+        purpose_source=purpose_src[-1] if purpose_src else None,
     )
 
 
 def explain_project_from_conn(conn, repo_id: int, detailed: bool = True) -> str:
-    """Like explain_project but with DB access for the architecture detail."""
+    """Explain a project like a senior engineer (M4 Part E).
+
+    Order: what it is / why it exists / maturity / purpose / technologies /
+    architecture — relationships and observations belong at the END, never the
+    opening. The answer leads with meaning, not static analysis. Appends a
+    confidence-reasoning line (Part G) so the basis is explicit.
+    """
     identity = build_identity(conn, repo_id)
     if identity is None:
         return "I don't have enough evidence: that project is not in the knowledge base."
@@ -263,62 +292,73 @@ def explain_project_from_conn(conn, repo_id: int, detailed: bool = True) -> str:
             f"Run `friday analyze <path>` or add a README to recover its identity."
         )
 
+    # 1. What it is (name + purpose first — never implementation).
     lines: list[str] = []
-    intro = f"{r.name}"
     if identity.purpose:
-        intro += f" — {identity.purpose}"
+        intro = f"{r.name} — {identity.purpose}"
     elif arch and arch.architecture != "Unknown":
-        intro += f" — a {arch.architecture} project"
+        intro = f"{r.name} — a {arch.architecture} project"
+    else:
+        intro = r.name
     lines.append(_end(intro))
 
-    if identity.phase:
-        lines.append(f"It is currently in {identity.phase}.")
-
-    extra: list[str] = []
+    # 2. Why it exists (business value / stated reason).
     if identity.business_value:
-        extra.append(f"Business value: {identity.business_value}")
-    status = [f"status: {identity.activity.lower()}"]
-    if identity.maturity and identity.maturity != "Unknown":
-        status.append(f"maturity {identity.maturity}")
-    if identity.importance:
-        status.append(identity.importance)
-    if identity.blockers:
-        status.append("blockers: " + "; ".join(identity.blockers))
-    extra.append("; ".join(status) + ".")
-    if identity.technologies:
-        extra.append("Major technologies: " + ", ".join(identity.technologies) + ".")
-    lines.append(" ".join(extra))
+        lines.append(f"It exists to deliver {identity.business_value}")
 
-    # Architecture detail.
-    arch_lines: list[str] = []
+    # 3. Current maturity + activity.
+    status = [f"It is currently {identity.activity.lower()}"]
+    if identity.maturity and identity.maturity != "Unknown":
+        status.append(f"at {identity.maturity} maturity")
+    if identity.phase:
+        status.append(f"({identity.phase})")
+    if identity.importance:
+        status.append(f"and is {identity.importance}")
+    lines.append(_end(" ".join(status)) + ".")
+
+    # 4. Major technologies.
+    if identity.technologies:
+        lines.append("Major technologies: " + ", ".join(identity.technologies) + ".")
+
+    # 5. Architecture (kept short; detail lives at the end).
+    arch_bits: list[str] = []
     if arch and arch.architecture != "Unknown":
-        arch_lines.append(f"Architecturally it is a {arch.architecture} project")
+        bit = f"Architecturally it is a {arch.architecture} project"
         if arch.confidence and arch.confidence != "Unknown":
-            arch_lines[-1] += f" (confidence: {arch.confidence})"
-        arch_lines[-1] += "."
+            bit += f" (confidence: {arch.confidence})"
+        arch_bits.append(bit + ".")
     comp_names = [c.name for c in comps]
     if comp_names:
-        arch_lines.append("Major components: " + ", ".join(comp_names) + ".")
-    # Entry points grouped (audit §7).
+        arch_bits.append("Major components: " + ", ".join(comp_names) + ".")
     if groups.application:
         apps = ", ".join(f"{e.kind} ({e.detail})" for e in groups.application)
-        arch_lines.append(f"Application entry points: {apps}.")
+        arch_bits.append(f"Application entry points: {apps}.")
     if groups.framework_root:
-        arch_lines.append("Framework root: " + ", ".join(groups.framework_root) + ".")
+        arch_bits.append("Framework root: " + ", ".join(groups.framework_root) + ".")
     if groups.utility:
         utils = ", ".join(e.detail for e in groups.utility)
-        arch_lines.append(f"Utility scripts (not application entry points): {utils}.")
-    if arch_lines:
-        lines.append(" ".join(arch_lines))
+        arch_bits.append(f"Utility scripts (not application entry points): {utils}.")
+    if arch_bits:
+        lines.append(" ".join(arch_bits))
 
-    # Observations.
+    # 6. Interesting observations (relationships last).
     obs: list[str] = []
     if identity.related_projects:
         obs.append("Related projects (shared architecture/framework/implementation): "
                    + ", ".join(identity.related_projects) + ".")
     if identity.readme_quality and identity.readme_quality in ("poor", "boilerplate", "none"):
         obs.append(f"Its README is {identity.readme_quality}; documentation is a gap.")
+    if identity.blockers:
+        obs.append("Known blockers: " + "; ".join(identity.blockers) + ".")
     if obs:
         lines.append(" ".join(obs))
+
+    # 7. Confidence reasoning (Part G) — why we trust this reading.
+    if identity.purpose_confidence and identity.purpose_confidence != "None":
+        src = identity.purpose_source or "stored evidence"
+        lines.append(
+            f"Confidence: {identity.purpose_confidence} — purpose recovered from "
+            f"{src}."
+        )
 
     return " ".join(lines).strip()

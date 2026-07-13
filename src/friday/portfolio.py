@@ -150,6 +150,50 @@ class WorkspaceRec:
 # ---------------------------------------------------------------------------
 
 
+def stated_intent(conn, repo_id: int) -> Optional[dict]:
+    """Compute the repository's *stated* intent from already-persisted evidence.
+
+    Part C: interpretation stays derived, not persisted. Reads the stored
+    README summary (Purpose / Roadmap / Mission / Goals lines) and returns the
+    explicit goals the author stated — distinct from the *recovered/derived*
+    purpose. Returns None when no goals were stated. Never invents.
+    """
+    from .db import get_repositories
+
+    repo = next((r for r in get_repositories(conn) if r.id == repo_id), None)
+    if repo is None or not repo.readme_summary:
+        return None
+    summary = repo.readme_summary
+    goals: list[str] = []
+    in_roadmap = False
+    for line in summary.splitlines():
+        low = line.strip().lower()
+        if low.startswith(("roadmap:", "mission:", "goals:", "goal:")):
+            in_roadmap = low.split(":", 1)[0] in ("roadmap", "goals", "goal")
+            val = line.split(":", 1)[1].strip()
+            if val and val != "none stated":
+                goals.append(val)
+        elif in_roadmap and low.startswith("- "):
+            g = low[2:].strip()
+            if g and g != "none stated":
+                goals.append(g)
+    if not goals:
+        return None
+    return {"repo": repo.name, "goals": goals}
+
+
+def all_stated_intents(conn) -> list[dict]:
+    """Every repository's computed stated intent (Part C)."""
+    out: list[dict] = []
+    for r in _repos(conn):
+        if r.id is None:
+            continue
+        si = stated_intent(conn, r.id)
+        if si:
+            out.append(si)
+    return out
+
+
 def _repo_facts(conn, today: dt.date) -> dict[int, dict]:
     """Build a per-repo evidence dict reused by every portfolio function."""
     from . import identity
@@ -280,6 +324,15 @@ def portfolio_synthesis(conn, today: Optional[dt.date] = None) -> list[str]:
         blocks.append(f"Skill breadth: you work across {len(langs)} languages "
                       f"({', '.join(sorted(langs))}).")
 
+    # Stated intent vs actual effort (Part C/D): what the author SAID they'd
+    # build (from README Roadmap/Goals) vs where commits actually flow. This is
+    # computed from persisted summary + git metadata — no new storage.
+    intents = all_stated_intents(conn)
+    if intents:
+        blocks.append("What you've stated you're building (from project roadmaps/goals):")
+        for si in intents:
+            blocks.append(f"- {si['repo']}: {'; '.join(si['goals'][:3])}.")
+
     # Confidence line (the basis, so it is never a bare claim).
     if themes:
         top = themes[0]
@@ -370,7 +423,7 @@ def meaningful_overlap(conn, today: Optional[dt.date] = None) -> list[OverlapRes
     """
     today = today or dt.date.today()
     from .query import compare_repositories, all_repositories
-    from .db import get_all_relationships, get_components
+    from .db import get_all_relationships, get_components, get_architecture
     from . import judgment
 
     repos = all_repositories(conn)
@@ -385,7 +438,14 @@ def meaningful_overlap(conn, today: Optional[dt.date] = None) -> list[OverlapRes
                 continue
             cmp = compare_repositories(conn, a.id, b.id)
             dims: list[str] = []
-            if cmp["architecture"]:
+            # Architecture counts as overlap ONLY when it is genuinely *shared*
+            # (same label), never a "X vs Y" difference — a difference is not a
+            # merge/overlap signal (audit Part D/F).
+            a_arch = get_architecture(conn, a.id)
+            b_arch = get_architecture(conn, b.id)
+            if (a_arch and b_arch
+                    and a_arch.architecture == b_arch.architecture
+                    and cmp["architecture"]):
                 dims.append(cmp["architecture"])
             if cmp["responsibilities"]:
                 dims.append(cmp["responsibilities"])

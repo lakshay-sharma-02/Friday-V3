@@ -128,18 +128,39 @@ def deterministic_summary(text: str) -> str:
 
 
 def process(repo: Repo) -> Optional[ReadmeResult]:
-    path = _find_readme(repo.path)
+    path = _find_readme(Path(repo.path))
     if path is None:
+        # No README at all — try to recover a purpose from other evidence so we
+        # never silently leave identity empty (M4 Part A).
+        purpose, source, conf = recover_purpose_fallback(repo.path, Path(repo.path).name)
+        if purpose:
+            summary = f"Purpose:\n{purpose}\n\nMaturity:\nUnknown"
+            return ReadmeResult(text="", summary=summary, used_llm=False)
         return None
     text = path.read_text(encoding="utf-8", errors="ignore").strip()
     if not text:
+        # README exists but is empty — same recovery path.
+        purpose, source, conf = recover_purpose_fallback(repo.path, Path(repo.path).name)
+        if purpose:
+            summary = f"Purpose:\n{purpose}\n\nMaturity:\nUnknown"
+            return ReadmeResult(text="", summary=summary, used_llm=False)
         return None
 
     summary = llm_summarize(text)
     if summary:
         return ReadmeResult(text=text, summary=summary, used_llm=True)
 
-    return ReadmeResult(text=text, summary=deterministic_summary(text), used_llm=False)
+    det = deterministic_summary(text)
+    # If the deterministic summary has no real Purpose line, attempt recovery
+    # from manifest/docs/name so the stored identity is still meaningful.
+    if "None stated" in det or "Purpose:\n\n" in det:
+        purpose, source, conf = recover_purpose_fallback(repo.path, Path(repo.path).name)
+        if purpose:
+            det = det.replace(
+                "Purpose:\nNone stated",
+                f"Purpose:\n{purpose}",
+            ).replace("Purpose:\n\n", f"Purpose:\n{purpose}\n")
+    return ReadmeResult(text=text, summary=det, used_llm=False)
 
 
 def purpose_only(text: str) -> str:
@@ -162,15 +183,112 @@ def manifest_description(repo_path: str | Path) -> Optional[str]:
         except (json.JSONDecodeError, OSError):
             data = {}
         desc = (data.get("description") or "").strip()
-        if desc and len(desc.split()) >= 3:
+        # Skip placeholder scaffolds ("Add your description here").
+        if desc and len(desc.split()) >= 3 and "add your description" not in desc.lower():
             return desc
     pp = repo / "pyproject.toml"
     if pp.is_file():
         txt = pp.read_text(encoding="utf-8", errors="ignore")
         m = re.search(r"(?m)^\s*description\s*=\s*['\"]([^'\"]+)['\"]\s*$", txt)
-        if m and len(m.group(1).split()) >= 3:
+        if m and len(m.group(1).split()) >= 3 and "add your description" not in m.group(1).lower():
             return m.group(1).strip()
     return None
+
+
+# Doc files that often carry explicit purpose when the README does not.
+_PURPOSE_DOC_NAMES = (
+    "VISION.md", "PRODUCT.md", "PURPOSE.md", "ABOUT.md", "MISSION.md",
+    "ROADMAP.md", "GOALS.md", "DESCRIPTION.md",
+)
+
+
+def _purpose_from_doc(repo_path: str | Path) -> Optional[str]:
+    """Recover purpose from a sibling doc file when README is absent/weak.
+
+    Scans known purpose-bearing docs for a '## Purpose' section or the first
+    substantive paragraph. Evidence-backed only — returns None otherwise.
+    """
+    repo = Path(repo_path)
+    if not repo.is_dir():
+        return None
+    candidates: list[Path] = []
+    for name in _PURPOSE_DOC_NAMES:
+        p = repo / name
+        if p.is_file():
+            candidates.append(p)
+    # Also any top-level *.md with a Purpose section.
+    try:
+        children = sorted(repo.iterdir())
+    except OSError:
+        children = []
+    for child in children:
+        if child.is_file() and child.suffix.lower() == ".md" and child.name not in _PURPOSE_DOC_NAMES:
+            candidates.append(child)
+
+    for p in candidates:
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        # Explicit '## Purpose' / '## About' section first.
+        sec = _section(text, "purpose") or _section(text, "about") or _section(text, "mission")
+        if sec:
+            first = _first_paragraph(sec)
+            if len(first.split()) >= 4:
+                return first
+        # Otherwise the first real paragraph of the doc.
+        para = _first_paragraph(text)
+        if len(para.split()) >= 6:
+            return para
+    return None
+
+
+def _purpose_from_layout(repo_path: str | Path, repo_name: str) -> Optional[str]:
+    """Weak, last-resort purpose hint from directory structure / naming.
+
+    Evidence must exist: a recognizable framework directory or a descriptive
+    name. Returns None rather than invent when nothing supports a claim.
+    """
+    repo = Path(repo_path)
+    if not repo.is_dir():
+        return None
+    # Framework directories imply a kind of project.
+    fw_map = {
+        "next": "A Next.js web application.",
+        "pages": "A Next.js web application.",
+        "src": None,  # too generic
+    }
+    for marker, hint in fw_map.items():
+        if (repo / marker).is_dir() and hint:
+            return hint
+    # Descriptive multi-word name (e.g. "finance-tracker", "mind-well").
+    words = re.split(r"[_\- ]+", repo_name.lower())
+    if len(words) >= 2 and all(len(w) > 2 for w in words):
+        return f"A {words[0]} {words[1]} project."
+    return None
+
+
+def recover_purpose_fallback(repo_path: str | Path, repo_name: str) -> tuple[Optional[str], str, str]:
+    """Deterministic purpose recovery when no usable README summary exists.
+
+    Returns (purpose, source, confidence). Chain of authority:
+      manifest description  >  doc-file purpose  >  layout/name hint.
+    Each step is evidence-backed; the weakest (layout/name) is flagged Low
+    confidence so callers can state it honestly. Never fabricates.
+    """
+    repo = Path(repo_path)
+    desc = manifest_description(repo)
+    if desc:
+        return desc, "manifest description", "Medium"
+    doc = _purpose_from_doc(repo)
+    if doc:
+        return doc, "project documentation", "Medium"
+    layout = _purpose_from_layout(repo, repo_name)
+    if layout:
+        return layout, "repository name and layout", "Low"
+    return None, "", "None"
 
 
 # Phrases that mark a README as scaffold/boilerplate rather than real docs.

@@ -159,7 +159,7 @@ _PRIORITY = {
     "shared-db": 75,
     "shared-config": 70,
     "potential-reuse": 65,
-    "duplicated-functionality": 60,
+    "duplicated-functionality": 78,
     "shared-tech": 50,
     "shared-lang-ecosystem": 40,
     "shared-language": 35,
