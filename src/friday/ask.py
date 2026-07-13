@@ -866,7 +866,11 @@ def ask(question: str, conn, verbose: bool = False) -> Answer:
     used_llm = False
     if intent == "chitchat":
         text = _deterministic_answer(question, ev, intent)
-    elif llm_enabled():
+    elif llm_enabled() and os.environ.get("FRIDAY_ANSWER_LLM") == "1":
+        # Opt-in: only with a strong model. The free/default model compresses
+        # evidence into terse "Next:" bullets, so deterministic rendering is the
+        # default (clean, fast, fully evidence-backed). Set FRIDAY_ANSWER_LLM=1
+        # to let the LLM rephrase the evidence into prose.
         text = _synthesize(question, ev)
         used_llm = text is not None
     if text is None:
