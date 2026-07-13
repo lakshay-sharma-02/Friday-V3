@@ -21,6 +21,7 @@ from .db import Repository, get_technologies
 from .identity import explain_project_from_conn
 from .llm import _enabled as llm_enabled
 from .llm import _extract_content
+from .llm import _call
 
 _CHITCHAT = {
     "hello", "hi", "hey", "thanks", "thank you", "ok", "okay", "cool", "nice",
@@ -251,35 +252,13 @@ def extract_intent(question: str, conn) -> Optional[Intent]:
     base = os.environ.get("FRIDAY_LLM_BASE_URL", "http://localhost:20128/v1").rstrip("/")
     model = os.environ["FRIDAY_LLM_MODEL"]
     api_key = os.environ["FRIDAY_LLM_API_KEY"]
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _intent_explanation()},
-            {"role": "user", "content": (
-                f"Known projects in this workspace: {names_block}\n\n"
-                f"Question: {question}"
-            )},
-        ],
-        "temperature": 0.0,
-    }
-    import json as _json
-    import urllib.request
-
-    req = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=_json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
+    # `_call` already returns the assistant message text (extracted from either a
+    # single JSON object or an SSE stream). That text is itself JSON we parse.
+    content = _call(
+        _intent_explanation(),
+        f"Known projects in this workspace: {names_block}\n\n"
+        f"Question: {question}",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode("utf-8")
-    except Exception:
-        return None
-    content = _extract_content(raw)
     if not content:
         return None
     # Strip a markdown ```json ... ``` fence if the model wrapped its answer.
@@ -820,37 +799,7 @@ def _synthesize(question: str, ev: Evidence) -> Optional[str]:
         f"Evidence:\n{evidence_str}\n\n"
         f"Answer (grounded only in Evidence):"
     )
-    # Reuse the SSE-aware client; we build the request manually to control prompt.
-    import urllib.request
-
-    base = os.environ.get("FRIDAY_LLM_BASE_URL", "http://localhost:20128/v1").rstrip("/")
-    model = os.environ["FRIDAY_LLM_MODEL"]
-    api_key = os.environ["FRIDAY_LLM_API_KEY"]
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.0,
-    }
-    import json as _json
-
-    req = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=_json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode("utf-8")
-        return _extract_content(raw)
-    except Exception:
-        return None
+    return _call(_SYSTEM, user)
 
 
 def _deterministic_answer(question: str, ev: Evidence, intent: str) -> str:

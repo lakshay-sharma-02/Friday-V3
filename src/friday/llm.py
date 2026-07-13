@@ -51,20 +51,20 @@ def _enabled() -> bool:
     return bool(os.environ.get("FRIDAY_LLM_API_KEY") and os.environ.get("FRIDAY_LLM_MODEL"))
 
 
-def summarize(readme_text: str) -> Optional[str]:
-    """Return an LLM-generated summary, or None if disabled or on any error."""
+def _call(system: str, user: str) -> Optional[str]:
+    """Single OpenAI-compatible chat call. Returns assistant text, or None on any
+    failure (disabled model, network/parse/proxy error) so callers fall back
+    deterministically. SSE and single-object responses are both handled."""
     if not _enabled():
         return None
-
     base = os.environ.get("FRIDAY_LLM_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
     model = os.environ["FRIDAY_LLM_MODEL"]
     api_key = os.environ["FRIDAY_LLM_API_KEY"]
-
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _USER_TEMPLATE.format(readme=readme_text[:12000])},
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
         ],
         "temperature": 0.0,
     }
@@ -82,8 +82,15 @@ def summarize(readme_text: str) -> Optional[str]:
             raw = resp.read().decode("utf-8")
         return _extract_content(raw)
     except Exception:
-        # Graceful fallback: any network / parse / proxy failure -> None.
         return None
+
+
+def summarize(readme_text: str) -> Optional[str]:
+    """Return an LLM-generated summary, or None if disabled or on any error."""
+    return _call(
+        _SYSTEM_PROMPT,
+        _USER_TEMPLATE.format(readme=readme_text[:12000]),
+    )
 
 
 def _extract_content(raw: str) -> Optional[str]:

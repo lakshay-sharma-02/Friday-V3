@@ -131,7 +131,18 @@ def commit_count(repo: Path) -> Optional[int]:
 
 
 def primary_author(repo: Path) -> Optional[str]:
-    return _run(repo, ["log", "-1", "--format=%ae"])
+    # Most-prolific contributor (matches the "primary" meaning), not merely the
+    # author of the single latest commit. `git shortlog -sn` ranks by commit
+    # count; the top line's email is the primary author.
+    out = _run(repo, ["shortlog", "-sn", "--email", "HEAD"])
+    if not out:
+        # Fallback: no shortlog (e.g. shallow clone) -> last commit author.
+        return _run(repo, ["log", "-1", "--format=%ae"])
+    first = out.splitlines()[0]
+    # Format: "   12\t name <email>" or "   12\t email".
+    if "<" in first and first.strip().endswith(">"):
+        return first[first.index("<"):].strip("<>").strip()
+    return first.split("\t", 1)[-1].strip()
 
 
 _LICENSE_NAMES = ("LICENSE", "LICENCE", "COPYING", "LICENSE.md", "LICENSE.txt")

@@ -42,7 +42,8 @@ def generate_insights(conn, today: Optional[dt.date] = None) -> list[Insight]:
                           f"(first commit {newest[0].first_commit_date[:10]}).")
             )
 
-    # Repository with the majority of recent commits.
+    # Repository carrying the majority of workspace commits (lifetime share,
+    # not recent velocity — most_active scores commits/day over the repo's age).
     active = most_active(conn, today, 3)
     if active and repos:
         top_repo, _ = active[0]
@@ -51,8 +52,8 @@ def generate_insights(conn, today: Optional[dt.date] = None) -> list[Insight]:
             share = top_repo.commit_count / total_commits
             if share >= 0.4:
                 out.append(
-                    Insight(text=f"{top_repo.name} has received the majority of recent "
-                              f"commits ({share:.0%} of all commits across the workspace).")
+                    Insight(text=f"{top_repo.name} has received the majority of commits "
+                              f"({share:.0%} of all commits across the workspace).")
                 )
 
     # Shared technologies (languages excluded — sharing a language is not a
@@ -105,14 +106,10 @@ def _code_langs(conn, repo: Repository) -> list[str]:
     if repo.id is None:
         return []
     from .db import get_languages
+    from .summary import NON_CODE_LANGS
 
     rows = get_languages(conn, repo.id)
-    # Mirror summary.NON_CODE_LANGS without importing it.
-    non_code = {
-        "Markdown", "reStructuredText", "HTML", "CSS", "SCSS", "JSON",
-        "YAML", "XML", "TOML", "Shell",
-    }
-    return [r.language for r in rows if r.language not in non_code]
+    return [r.language for r in rows if r.language not in NON_CODE_LANGS]
 
 
 def _code_langs_set(conn) -> set[str]:
