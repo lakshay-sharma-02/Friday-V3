@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .discovery import Repo
+from . import judgment
 
 # Directories that are never descended into (mirrors tech.py).
 IGNORED_DIRS = {
@@ -59,6 +60,7 @@ class EntryPoint:
 class Component:
     name: str
     evidence: str
+    strength: str = "Medium"  # Weak/Medium/Strong (judgment.COMPONENT_STRENGTH)
 
 
 @dataclass
@@ -83,6 +85,7 @@ class ArchitectureProfile:
     # 3. Architecture
     architecture: str = "Unknown"
     architecture_evidence: list[str] = field(default_factory=list)
+    architecture_confidence: str = "Unknown"  # Verified / Likely / Unknown
     patterns: list[tuple[str, str]] = field(default_factory=list)
     # 4. Components
     components: list[Component] = field(default_factory=list)
@@ -119,7 +122,7 @@ def _source_files(repo: Path) -> list[str]:
                     out.append(rel)
                 elif ext in _CONFIG_EXT or f in _CONFIG_NAMES:
                     out.append(rel)
-                elif f.endswith(".sh") or rel.split("/")[0] in ("bin", "scripts"):
+                elif f.endswith(".sh") or rel.split("/")[0] in ("bin", "scripts", "tools"):
                     out.append(rel)
     except OSError:
         return out
@@ -565,20 +568,41 @@ def _detect_next_pages_router(repo: Path, files: list[str], ctx: dict) -> Option
         return None
     if (repo / "pages").is_dir():
         return ["next dependency", "pages/ directory present (Pages Router)"]
-    # next without app/ or pages/ — still a Next.js project.
-    return ["next dependency present"]
+    return None
+
+
+def _detect_next_unknown_router(repo: Path, files: list[str], ctx: dict) -> Optional[list[str]]:
+    """Next.js present but neither app/ nor pages/ route dir found.
+
+    We must NOT claim a specific router type. Confidence is Likely and the label
+    explicitly states the router type is unknown.
+    """
+    if "next" not in ctx["ext"]:
+        return None
+    if (repo / "app").is_dir() or (repo / "pages").is_dir():
+        return None
+    return ["next dependency", "no app/ or pages/ route directory found"]
 
 
 def _detect_react_spa(repo: Path, files: list[str], ctx: dict) -> Optional[list[str]]:
     if "react" not in ctx["ext"]:
         return None
+    # A bare react import is NOT enough (audit §6): require at least one SPA
+    # signal (Vite bundler, public/index.html entry, or main.tsx/main.jsx).
+    # Without it we must NOT claim "React SPA" — fall through to Unknown/Library.
     ev = ["react dependency"]
+    spa_signal = False
     if (repo / "vite.config.ts").is_file() or (repo / "vite.config.js").is_file():
         ev.append("Vite config (SPA bundler)")
+        spa_signal = True
     if (repo / "public" / "index.html").is_file():
         ev.append("public/index.html entry")
+        spa_signal = True
     if any(f.endswith("main.tsx") or f.endswith("main.jsx") for f in files):
         ev.append("main.tsx/main.jsx entry")
+        spa_signal = True
+    if not spa_signal:
+        return None
     return ev
 
 
@@ -661,35 +685,55 @@ def _detect_generic_web(repo: Path, files: list[str], ctx: dict) -> Optional[lis
 
 
 # (label, detector, priority) — higher priority wins for the primary label.
-_ARCH_DETECTORS: list[tuple[str, Callable, int]] = [
-    ("FastAPI REST API", _detect_fastapi, 100),
-    ("Flask web app", _detect_flask, 95),
-    ("Django web app", _detect_django, 95),
-    ("Next.js App Router", _detect_next_app_router, 92),
-    ("Next.js Pages Router", _detect_next_pages_router, 90),
-    ("React SPA", _detect_react_spa, 85),
-    ("Cargo workspace", _detect_cargo_workspace, 80),
-    ("Cargo binary", _detect_cargo_binary, 80),
-    ("CLI tool", _detect_cli, 70),
-    ("Pytest test suite", _detect_pytest, 60),
-    ("Library", _detect_library, 50),
-    ("Web app", _detect_generic_web, 45),
+# NOTE: Pytest is intentionally NOT a primary architecture. A library/CLI with
+# tests is still a Library/CLI; testing tooling never defines the project.
+_ARCH_DETECTORS: list[tuple[str, Callable, int, str]] = [
+    ("FastAPI REST API", _detect_fastapi, 100, "Verified"),
+    ("Flask web app", _detect_flask, 95, "Verified"),
+    ("Django web app", _detect_django, 95, "Verified"),
+    ("Next.js App Router", _detect_next_app_router, 92, "Verified"),
+    ("Next.js Pages Router", _detect_next_pages_router, 90, "Likely"),
+    ("React SPA", _detect_react_spa, 85, "Likely"),
+    ("Cargo workspace", _detect_cargo_workspace, 80, "Verified"),
+    ("Cargo binary", _detect_cargo_binary, 80, "Verified"),
+    ("CLI tool", _detect_cli, 70, "Verified"),
+    ("Next.js (router type unknown)", _detect_next_unknown_router, 88, "Likely"),
+    ("Library", _detect_library, 50, "Verified"),
+    ("Web app", _detect_generic_web, 45, "Likely"),
+]
+
+# Detectors that can fire but must never become the primary architecture label.
+# They are recorded as supporting patterns only.
+_ARCH_SUPPORTING_ONLY: list[tuple[str, Callable, int, str]] = [
+    ("Pytest test suite", _detect_pytest, 60, "Verified"),
 ]
 
 
-def _architecture(repo: Path, files: list[str], ctx: dict) -> tuple[str, list[str], list[tuple[str, str]]]:
-    fired: list[tuple[str, int, list[str]]] = []
-    for label, fn, prio in _ARCH_DETECTORS:
+def _architecture(repo: Path, files: list[str], ctx: dict) -> tuple[str, list[str], list[tuple[str, str]], str]:
+    fired: list[tuple[str, int, list[str], str]] = []
+    for label, fn, prio, conf in _ARCH_DETECTORS:
         ev = fn(repo, files, ctx)
         if ev:
-            fired.append((label, prio, ev))
+            fired.append((label, prio, ev, conf))
+    for label, fn, prio, conf in _ARCH_SUPPORTING_ONLY:
+        ev = fn(repo, files, ctx)
+        if ev:
+            # Record as supporting pattern but it cannot win primary selection.
+            fired.append((label, -1, ev, conf))  # -1 priority -> never primary
     if not fired:
-        return ("Unknown", ["No recognizable framework or manifest pattern matched"], [])
-    # Primary = highest priority.
-    fired.sort(key=lambda x: x[1], reverse=True)
-    primary, _, primary_ev = fired[0]
-    patterns = [(label, "; ".join(ev)) for label, _, ev in fired]
-    return (primary, primary_ev, patterns)
+        return ("Unknown", ["No recognizable framework or manifest pattern matched"], [], "Unknown")
+    # Primary = highest positive priority (supporting-only entries have -1).
+    primary_entry = max((f for f in fired if f[1] >= 0), key=lambda x: x[1], default=None)
+    if primary_entry is None:
+        # Only supporting patterns fired (e.g. pytest present but no real arch).
+        return ("Unknown", ["No primary architecture detected (only test tooling present)"], [], "Unknown")
+    primary, _, primary_ev, primary_conf = primary_entry
+    # Patterns list includes supporting entries too (clearly lower priority).
+    patterns = [(label, "; ".join(ev)) for label, _, ev, _ in fired]
+    confidence = primary_conf
+    # If the chosen label is a "Likely" label but stronger corroboration is
+    # missing, keep it Likely — do not upgrade to Verified.
+    return (primary, primary_ev, patterns, confidence)
 
 
 # ---------------------------------------------------------------------------
@@ -726,44 +770,80 @@ def _c_auth(c: dict) -> list[str]:
 
 
 def _c_db(c: dict) -> list[str]:
+    """Database component — requires behavioral evidence, not just a filename.
+
+    'has a db.py' / 'imports sqlite3' is NOT enough (audit §7): that is a concept,
+    not reusable database logic. Real signals are an ORM abstraction or an actual
+    schema/models/repository/migrations layer. A bare db.py with a low-level driver
+    import emits NO Database component at all.
+    """
     ev: list[str] = []
-    db_files = [f for f in c["file_names_low"]
-                if re.search(r"(^|/)(db|database|models?|schema|orm|migrations?)\.", f)
-                or "/migrations/" in f]
-    if db_files:
-        ev.append("db/model files: " + ", ".join(db_files[:4]))
-    libs = {"sqlite3", "sqlalchemy", "psycopg", "psycopg2", "databases",
-            "prisma", "mongoose", "typeorm", "drizzle-orm", "django.db",
-            "pymongo", "redis", "sqlmodel"}
-    hit = libs & c["ext"]
-    if hit:
-        ev.append("database libraries imported: " + ", ".join(sorted(hit)))
+    # ORM libraries are themselves the abstraction -> behavioral DB evidence.
+    orm_libs = {"sqlalchemy", "sqlmodel", "databases", "prisma", "mongoose",
+                "typeorm", "drizzle-orm", "django.db"}
+    orm_hit = orm_libs & c["ext"]
+    # Low-level drivers need an accompanying schema/models layer to count.
+    driver_libs = {"sqlite3", "psycopg", "psycopg2", "pymongo", "redis"}
+    driver_hit = driver_libs & c["ext"]
+    # NOTE: a file literally named db.py/database.py is the component name itself,
+    # not evidence — excluded from the behavioral-file match on purpose.
+    behavioral_files = any(
+        re.search(r"(^|/)(models?|schema|orm|migrations?|repositories?)\.", f)
+        for f in c["file_names_low"]
+    ) or "/migrations/" in c["name_blob"] or "schema.prisma" in c["file_names_low"]
+    if orm_hit:
+        ev.append("ORM library imported: " + ", ".join(sorted(orm_hit)))
+    if driver_hit and behavioral_files:
+        ev.append("database driver with schema/models layer: " + ", ".join(sorted(driver_hit)))
     if "schema.prisma" in c["file_names_low"]:
-        ev.append("schema.prisma present")
+        ev.append("schema.prisma present (Prisma schema)")
     return ev
 
 
 def _c_config(c: dict) -> list[str]:
+    """Configuration component — requires actual config loading behavior.
+
+    A bare config.py that merely imports `os` is NOT evidence (audit §7:
+    "Finding config.py does not prove Configuration"). Real signals are a config
+    library import, or a module that actually reads the environment / parses a
+    settings object.
+    """
     ev: list[str] = []
-    cfg = [f for f in c["files"] if _is_config_file(f)]
-    if cfg:
-        ev.append("config files: " + ", ".join(cfg[:4]))
     libs = {"dotenv", "python-dotenv", "pydantic-settings", "configparser",
             "environs", "viper", "config", "dynaconf"}
     hit = libs & c["ext"]
     if hit:
         ev.append("config libraries imported: " + ", ".join(sorted(hit)))
+        return ev
+    # No config library: require proof the file actually *loads* config — env
+    # reads, settings objects, or a real .env/toml loader — not just a name.
+    env_load = any(
+        re.search(r"(getenv|environ|load_dotenv|load_env|parse_config|settings\s*=|\.env)", t)
+        for f in c["files"]
+        for t in (c["repo"] / f).read_text(encoding="utf-8", errors="ignore").splitlines()
+        if f.lower().endswith((".py", ".ts", ".js"))
+    ) if c["files"] else False
+    if env_load:
+        loaderish = [f for f in c["files"]
+                     if re.search(r"(settings|config)\.(py|ts|js)$", f.lower())]
+        if loaderish:
+            ev.append("config loader modules: " + ", ".join(loaderish[:4]))
     return ev
 
 
 def _c_routing(c: dict) -> list[str]:
+    """Routing component — requires actual routes, not just a framework import."""
     ev: list[str] = []
-    if any(re.search(r"(^|/)(routers?|routes?|urls)\.", f) or "/routes/" in f or "/routers/" in f for f in c["file_names_low"]):
+    if any(re.search(r"(^|/)(routers?|routes?|urls)\.", f) or "/routes/" in f or "/routers/" in f
+           for f in c["file_names_low"]):
         ev.append("routing modules/directories present")
+    # Behavioral: route registration. We require the framework to be present AND
+    # a routers/ directory or route decorators; a bare FastAPI import alone is not
+    # enough (verified separately via AST in the architecture layer).
     libs = {"fastapi", "flask", "django", "react-router-dom", "express", "next/navigation", "vue-router"}
     hit = libs & c["ext"]
-    if hit:
-        ev.append("routing libraries imported: " + ", ".join(sorted(hit)))
+    if hit and any("routers" in f or "routes" in f for f in c["file_names_low"]):
+        ev.append("routing libraries with route modules: " + ", ".join(sorted(hit)))
     return ev
 
 
@@ -828,11 +908,16 @@ def _c_networking(c: dict) -> list[str]:
 
 
 def _c_testing(c: dict) -> list[str]:
-    ev: list[str] = []
-    if any(re.search(r"(^|/)tests?/", f) for f in c["files"]):
-        ev.append("tests/ directory present")
-    if any(re.search(r"test_.*\.py$|_test\.py$|\.test\.(ts|tsx|js|jsx)$", f) for f in c["files"]):
-        ev.append("test files present")
+    """Testing component — requires actual test functions, not a bare conftest."""
+    has_test_files = any(
+        re.search(r"test_.*\.py$|_test\.py$|\.test\.(ts|tsx|js|jsx)$", f)
+        for f in c["files"]
+    )
+    # A tests/ directory with only conftest/fixtures and no test_* fns is NOT a
+    # test suite. Require at least one real test file to emit the component.
+    if not has_test_files:
+        return []
+    ev = ["test files present (test_*/_test/*.test.*)"]
     libs = {"pytest", "jest", "vitest", "unittest", "mocha", "cucumber"}
     hit = libs & c["ext"]
     if hit:
@@ -861,13 +946,39 @@ def _components(repo: Path, files: list[str], ext: set[str]) -> list[Component]:
     for name, fn in _COMPONENTS:
         ev = fn(c)
         if ev:
-            out.append(Component(name=name, evidence="; ".join(ev)))
+            out.append(
+                Component(
+                    name=name, evidence="; ".join(ev),
+                    strength=_component_strength(name),
+                )
+            )
     return out
+
+
+def _component_strength(name: str) -> str:
+    return judgment.component_strength(name)
 
 
 # ---------------------------------------------------------------------------
 # 5. Entry points
 # ---------------------------------------------------------------------------
+
+
+# Directories that are never runtime entry points, even if they contain a
+# main()/shebang. (Audit: tests/main() and examples/fixtures are NOT entries.)
+_IGNORED_ENTRY_DIRS = {
+    "tests", "test", "examples", "example", "fixtures", "fixture",
+    "benchmarks", "benchmark", "tools", "tool", "docs",
+}
+
+# `scripts/` are maintenance/utility scripts, not application entry points.
+_UTILITY_DIRS = {"scripts"}
+
+
+def _is_runtime_path(rel: str) -> bool:
+    """True if `rel` lives somewhere we treat as a real runtime entry point."""
+    top = rel.split("/")[0]
+    return top not in _IGNORED_ENTRY_DIRS and top not in _UTILITY_DIRS
 
 
 def _entry_points(repo: Path, files: list[str], ctx: dict) -> list[EntryPoint]:
@@ -880,9 +991,12 @@ def _entry_points(repo: Path, files: list[str], ctx: dict) -> list[EntryPoint]:
             seen.add(key)
             eps.append(EntryPoint(kind=kind, detail=detail, evidence=evidence))
 
-    # main() + __main__ guard (Python).
+    # main() + __main__ guard (Python). Skip files under non-runtime dirs
+    # (tests, examples, fixtures, benchmarks, tools, scripts).
     for rel in files:
         if not rel.lower().endswith(".py"):
+            continue
+        if not _is_runtime_path(rel):
             continue
         t = _rel_text(repo, rel) or ""
         has_main_fn = bool(re.search(r"\bdef\s+main\s*\(", t))
@@ -899,6 +1013,8 @@ def _entry_points(repo: Path, files: list[str], ctx: dict) -> list[EntryPoint]:
     # FastAPI / Flask app objects (AST call detection, not raw-text).
     for rel in files:
         if not rel.lower().endswith(".py"):
+            continue
+        if not _is_runtime_path(rel):
             continue
         t = _rel_text(repo, rel) or ""
         calls = _ast_call_names(t)
@@ -919,12 +1035,19 @@ def _entry_points(repo: Path, files: list[str], ctx: dict) -> list[EntryPoint]:
     if re.search(r"^\s*\[\[bin\]\]", cargo, re.MULTILINE) or (repo / "src" / "main.rs").is_file():
         add("Cargo binary", "src/main.rs", "Cargo [[bin]] / src/main.rs")
 
-    # Executable scripts (shebang).
+    # Executable scripts (shebang). We already collected bin/, scripts/, tools/,
+    # *.sh files in the walk. Classify by directory:
+    #  - scripts/ (and tools/fixtures/etc excluded earlier): maintenance -> Utility.
+    #  - bin/ and other runtime dirs: runtime -> Executable script.
     for rel in files:
-        if rel.split("/")[0] in ("bin", "scripts") or rel.endswith(".sh"):
-            t = _rel_text(repo, rel) or ""
-            if t.startswith("#!"):
-                add("Executable script", rel, f"shebang executable script {rel}")
+        top = rel.split("/")[0]
+        t = _rel_text(repo, rel) or ""
+        if not t.startswith("#!"):
+            continue
+        if top in _UTILITY_DIRS:
+            add("Utility script", rel, f"maintenance script (shebang) {rel}")
+        elif _is_runtime_path(rel):
+            add("Executable script", rel, f"shebang executable script {rel}")
 
     return eps
 
@@ -1061,7 +1184,7 @@ def analyze(repo_path: Path) -> ArchitectureProfile:
         "packages": struct["packages"],
         "files": files,
     }
-    arch_label, arch_ev, patterns = _architecture(repo, files, ctx_base)
+    arch_label, arch_ev, patterns, arch_conf = _architecture(repo, files, ctx_base)
 
     profile = ArchitectureProfile(path=str(repo))
     profile.top_level = struct["top_level"]
@@ -1072,6 +1195,10 @@ def analyze(repo_path: Path) -> ArchitectureProfile:
     profile.tests = struct["tests"]
     profile.config_files = struct["config_files"]
     profile.scripts = struct["scripts"]
+    profile.architecture = arch_label
+    profile.architecture_evidence = arch_ev
+    profile.architecture_confidence = arch_conf
+    profile.patterns = patterns
     profile.internal_imports = dep["internal_imports"]
     profile.package_boundaries = sorted(roots)
     profile.external_dependencies = dep["external_dependencies"]
@@ -1128,10 +1255,12 @@ def analyze_and_store(conn, repo: Repo) -> ArchitectureProfile:
         data_flow="\n".join(profile.data_flow) or None,
         known_patterns="\n".join(profile.known_patterns) or None,
         complexity=profile.complexity,
+        confidence=profile.architecture_confidence,
     )
     replace_components(
         conn, rid,
-        [ComponentRow(repo_id=rid, name=c.name, evidence=c.evidence) for c in profile.components],
+        [ComponentRow(repo_id=rid, name=c.name, evidence=c.evidence, strength=c.strength)
+         for c in profile.components],
     )
     replace_entry_points(
         conn, rid,

@@ -71,6 +71,7 @@ class Relationship:
     b: str
     evidence: str
     priority: int = 0
+    strength: str = "Medium"
 
 
 @dataclass
@@ -150,17 +151,19 @@ def build_views(conn) -> list[RepoView]:
 
 # Relationship kinds, ranked by analytical value (higher = more insightful).
 _PRIORITY = {
-    "shared-framework": 90,
-    "shared-db": 85,
+    "shared-implementation": 100,
+    "shared-abstraction": 95,
+    "shared-architecture": 90,
+    "shared-framework": 85,
     "shared-deployment": 80,
-    "shared-architecture": 75,
+    "shared-db": 75,
     "shared-config": 70,
-    "shared-lang-ecosystem": 65,
-    "potential-reuse": 60,
-    "duplicated-functionality": 55,
+    "potential-reuse": 65,
+    "duplicated-functionality": 60,
     "shared-tech": 50,
-    "shared-language": 40,
-    "shared-org": 20,
+    "shared-lang-ecosystem": 40,
+    "shared-language": 35,
+    "shared-org": 15,
     "shared-author": 10,
 }
 
@@ -172,16 +175,28 @@ _DEPLOY_TECH = {"Docker"}
 
 def _add(rels: list[Relationship], a: str, b: str, kind: str, evidence: str) -> None:
     rels.append(
-        Relationship(kind=kind, a=a, b=b, evidence=evidence, priority=_PRIORITY.get(kind, 0))
+        Relationship(
+            kind=kind, a=a, b=b, evidence=evidence,
+            priority=_PRIORITY.get(kind, 0),
+            strength=_relationship_strength(kind),
+        )
     )
+
+
+def _relationship_strength(kind: str) -> str:
+    from . import judgment
+
+    return judgment.relationship_strength(kind)
 
 
 def infer_relationships(views: list[RepoView]) -> list[Relationship]:
     """Compute evidence-backed relationships between repositories.
 
-    High-value kinds (shared framework/database/deployment/architecture/config,
-    potential reuse, duplicated functionality) are favored over low-value ones
-    (shared author/organization). Every relationship cites evidence.
+    Every relationship carries a strength (Weak/Medium/Strong). Weak
+    relationships (shared author/organization/language) are still recorded for
+    completeness but must never be presented as architectural insight or drive a
+    reuse recommendation. Engineering recommendations are generated only from
+    Medium/Strong evidence (see `query.reuse_opportunities`).
     """
     rels: list[Relationship] = []
     for i in range(len(views)):
@@ -208,7 +223,7 @@ def infer_relationships(views: list[RepoView]) -> list[Relationship]:
                     f"Both are built on {'/'.join(shared_fw)}",
                 )
 
-            # Shared configuration loading.
+            # Shared configuration loading (Medium, not a reuse recommendation).
             shared_cfg = sorted(set(a.config_files) & set(b.config_files))
             if shared_cfg:
                 _add(
@@ -217,14 +232,15 @@ def infer_relationships(views: list[RepoView]) -> list[Relationship]:
                     + ", ".join(shared_cfg[:3]) + ")",
                 )
 
-            # Shared language ecosystem (programming language overlap).
+            # Shared language ecosystem (programming language overlap) — Weak.
             if shared_lang:
                 _add(
                     rels, an, bn, "shared-lang-ecosystem",
                     "Both in the " + "/".join(shared_lang) + " ecosystem",
                 )
 
-            # Potential code reuse: substantial shared tech stack.
+            # Potential code reuse: substantial shared tech stack (Medium).
+            # NOTE: this is evidence of *stack overlap*, not of identical code.
             if len(shared_tech) >= 3:
                 _add(
                     rels, an, bn, "potential-reuse",
@@ -243,13 +259,12 @@ def infer_relationships(views: list[RepoView]) -> list[Relationship]:
                 if tech not in _FRAMEWORK_TECH and tech not in _DB_TECH and tech != "Docker":
                     _add(rels, an, bn, "shared-tech", f"Both use {tech}")
 
-            # Generic shared language (low value catch-all).
-            if not shared_lang and shared_tech:
-                pass  # covered by shared-tech
+            # Generic shared language (Weak catch-all).
             if shared_lang and not shared_fw:
                 _add(rels, an, bn, "shared-language", "Both use " + ", ".join(shared_lang))
 
-            # Low-value: shared org / author.
+            # Weak: shared org / author. Recorded but flagged Weak; never surfaced
+            # as architectural insight.
             org_a, org_b = _github_org(a.repo.remote_url), _github_org(b.repo.remote_url)
             if org_a and org_a == org_b:
                 _add(rels, an, bn, "shared-org", f"Both under GitHub org '{org_a}'")
@@ -290,7 +305,8 @@ def infer_relationship_rows(views: list[RepoView]) -> list[RelationshipRow]:
             continue
         rows.append(
             RelationshipRow(
-                repo_a=ra, repo_b=rb, kind=r.kind, evidence=r.evidence, priority=r.priority
+                repo_a=ra, repo_b=rb, kind=r.kind, evidence=r.evidence,
+                priority=r.priority, strength=r.strength,
             )
         )
     return rows
@@ -301,36 +317,46 @@ def cross_project_observations(
 ) -> list[Observation]:
     obs: list[Observation] = []
 
-    # Duplicate technologies across repos.
+    # Duplicate technologies across repos (languages excluded — a shared
+    # language is not a "configuration to duplicate"; that wording was a bug).
     tech_to_repos: dict[str, list[str]] = {}
     for v in views:
         for t in v.tech_names:
+            if t in NON_CODE_LANGS:
+                continue
             tech_to_repos.setdefault(t, []).append(v.repo.name)
     for tech, repos in sorted(tech_to_repos.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         if len(repos) >= 2:
             obs.append(
                 Observation(
-                    text=f"{len(repos)} repositories duplicate {tech}: "
+                    text=f"{len(repos)} repositories use {tech}: "
                     + ", ".join(repos)
                 )
             )
 
-    # Shared language / tech relationship bullets (collapsed, deduplicated).
+    # Shared relationship bullets — only Medium/Strong kinds are worth surfacing
+    # as cross-project observations. Weak kinds (shared-language, shared-org) are
+    # coincidences and are intentionally omitted (audit: a staff eng would not
+    # trust "they share a GitHub org" as insight).
     seen_pairs: set[tuple[str, str, str]] = set()
-    _PHRASE = {
-        "shared-language": "a programming language",
-        "shared-tech": "a technology",
+    _STRONG_PHRASE = {
+        "shared-framework": "a framework",
+        "shared-db": "a database engine",
+        "shared-deployment": "a deployment stack",
+        "shared-architecture": "an architecture",
         "shared-config": "configuration loading",
-        "shared-org": "a GitHub organization",
+        "shared-tech": "a technology",
     }
     for r in rels:
-        if r.kind in _PHRASE:
+        if r.strength == "Weak":
+            continue
+        if r.kind in _STRONG_PHRASE:
             key = (r.a, r.b, r.kind)
             if key in seen_pairs:
                 continue
             seen_pairs.add(key)
             obs.append(
-                Observation(text=f"{r.a} and {r.b} share {_PHRASE[r.kind]} ({r.evidence}).")
+                Observation(text=f"{r.a} and {r.b} share {_STRONG_PHRASE[r.kind]} ({r.evidence}).")
             )
 
     # Stale repos (no commit in STALE_DAYS).

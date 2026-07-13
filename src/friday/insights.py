@@ -55,12 +55,16 @@ def generate_insights(conn, today: Optional[dt.date] = None) -> list[Insight]:
                               f"commits ({share:.0%} of all commits across the workspace).")
                 )
 
-    # Duplicate technologies / config.
+    # Shared technologies (languages excluded — sharing a language is not a
+    # "configuration to duplicate"; that wording was a bug, audit W8).
     dups = duplicate_tech(conn)
-    for tech, names in sorted(dups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+    non_lang = {
+        t: names for t, names in dups.items()
+        if t not in _code_langs_set(conn)
+    }
+    for tech, names in sorted(non_lang.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         out.append(
-            Insight(text=f"Several projects duplicate {tech} configuration "
-                      f"({'/'.join(names)}).")
+            Insight(text=f"Several projects use {tech} ({'/'.join(names)}).")
         )
 
     # Similar language layouts (same primary language ecosystem across many).
@@ -109,3 +113,11 @@ def _code_langs(conn, repo: Repository) -> list[str]:
         "YAML", "XML", "TOML", "Shell",
     }
     return [r.language for r in rows if r.language not in non_code]
+
+
+def _code_langs_set(conn) -> set[str]:
+    """All code languages used across the workspace (for insight filtering)."""
+    out: set[str] = set()
+    for r in _repos(conn):
+        out.update(_code_langs(conn, r))
+    return out

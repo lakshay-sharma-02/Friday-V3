@@ -60,7 +60,8 @@ def test_duplicate_tech_observation():
     b = _view("B", techs=("SQLite",))
     c = _view("C", techs=("SQLite",))
     obs = cross_project_observations([a, b, c], infer_relationships([a, b, c]), date.today())
-    assert any("3 repositories duplicate SQLite" in o.text for o in obs)
+    # Wording fixed: sharing a tech is "use", not "duplicate configuration".
+    assert any("3 repositories use SQLite" in o.text for o in obs)
 
 
 def test_stale_repo_observation():

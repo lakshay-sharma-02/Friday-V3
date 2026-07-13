@@ -8,6 +8,7 @@ deterministic one on any failure.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -146,6 +147,32 @@ def purpose_only(text: str) -> str:
     return _first_paragraph(text) or "No README summary available."
 
 
+def manifest_description(repo_path: str | Path) -> Optional[str]:
+    """Recover a project description from manifest metadata, else None.
+
+    Used by identity purpose-recovery (audit §6): package.json `description`
+    and pyproject.toml `[project].description` are deterministic, evidence-backed
+    signals. Returns None when absent so callers fall through rather than invent.
+    """
+    repo = Path(repo_path)
+    pkg = repo / "package.json"
+    if pkg.is_file():
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore") or "{}")
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        desc = (data.get("description") or "").strip()
+        if desc and len(desc.split()) >= 3:
+            return desc
+    pp = repo / "pyproject.toml"
+    if pp.is_file():
+        txt = pp.read_text(encoding="utf-8", errors="ignore")
+        m = re.search(r"(?m)^\s*description\s*=\s*['\"]([^'\"]+)['\"]\s*$", txt)
+        if m and len(m.group(1).split()) >= 3:
+            return m.group(1).strip()
+    return None
+
+
 # Phrases that mark a README as scaffold/boilerplate rather than real docs.
 _BOILERPLATE_MARKERS = (
     "this is a template",
@@ -200,12 +227,22 @@ def readme_completeness(text: Optional[str]) -> str:
 
 
 def maturity_from_summary(summary: Optional[str]) -> Optional[str]:
-    """Extract the Maturity field from a stored README summary."""
+    """Extract the Maturity field from a stored README summary.
+
+    Handles both inline form (`Maturity: WIP`) and block form
+    (`Maturity:\nWIP`) produced by the deterministic summary.
+    """
     if not summary:
         return None
-    for line in summary.splitlines():
+    lines = summary.splitlines()
+    for i, line in enumerate(lines):
         s = line.strip()
         if s.lower().startswith("maturity:"):
             val = s.split(":", 1)[1].strip()
-            return val or None
+            if val:
+                return val
+            # Block form: value on the next non-empty line.
+            for nxt in lines[i + 1:]:
+                if nxt.strip():
+                    return nxt.strip()
     return None

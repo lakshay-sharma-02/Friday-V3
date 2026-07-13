@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS relationships (
     repo_b   INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     kind     TEXT NOT NULL,
     evidence TEXT NOT NULL,
-    priority INTEGER NOT NULL DEFAULT 0
+    priority INTEGER NOT NULL DEFAULT 0,
+    strength TEXT NOT NULL DEFAULT 'Medium'
 );
 
 CREATE TABLE IF NOT EXISTS architecture (
@@ -67,13 +68,15 @@ CREATE TABLE IF NOT EXISTS architecture (
     evidence        TEXT NOT NULL,
     data_flow       TEXT,
     known_patterns  TEXT,
-    complexity      TEXT
+    complexity      TEXT,
+    confidence      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS components (
     repo_id   INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     name      TEXT NOT NULL,
     evidence  TEXT NOT NULL,
+    strength  TEXT NOT NULL DEFAULT 'Medium',
     PRIMARY KEY (repo_id, name)
 );
 
@@ -126,6 +129,7 @@ class RelationshipRow:
     kind: str
     evidence: str
     priority: int = 0
+    strength: str = "Medium"
 
 
 @dataclass
@@ -136,6 +140,7 @@ class ArchitectureRow:
     data_flow: Optional[str]
     known_patterns: Optional[str]
     complexity: Optional[str]
+    confidence: Optional[str] = None
 
 
 @dataclass
@@ -143,6 +148,7 @@ class ComponentRow:
     repo_id: int
     name: str
     evidence: str
+    strength: str = "Medium"
 
 
 @dataclass
@@ -165,7 +171,7 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Apply additive schema changes idempotently (M2: identity-card columns)."""
+    """Apply additive schema changes idempotently (M2/M4 columns)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(repositories)")}
     for col, ctype in (
         ("maturity", "TEXT"),
@@ -174,6 +180,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE repositories ADD COLUMN {col} {ctype}")
+    # M4: evidence-strength model.
+    for table, col in (
+        ("relationships", "strength"),
+        ("components", "strength"),
+        ("architecture", "confidence"),
+    ):
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT NOT NULL DEFAULT 'Medium'")
     conn.commit()
 
 
@@ -320,9 +335,9 @@ def replace_relationships(
         "DELETE FROM relationships WHERE repo_a = ? OR repo_b = ?", (repo_id, repo_id)
     )
     conn.executemany(
-        """INSERT INTO relationships (repo_a, repo_b, kind, evidence, priority)
-           VALUES (?, ?, ?, ?, ?)""",
-        [(r.repo_a, r.repo_b, r.kind, r.evidence, r.priority) for r in rels],
+        """INSERT INTO relationships (repo_a, repo_b, kind, evidence, priority, strength)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        [(r.repo_a, r.repo_b, r.kind, r.evidence, r.priority, r.strength) for r in rels],
     )
     conn.commit()
 
@@ -331,16 +346,16 @@ def replace_all_relationships(conn: sqlite3.Connection, rels: list[RelationshipR
     """Wipe and rewrite the entire relationships table (used at ingest)."""
     conn.execute("DELETE FROM relationships")
     conn.executemany(
-        """INSERT INTO relationships (repo_a, repo_b, kind, evidence, priority)
-           VALUES (?, ?, ?, ?, ?)""",
-        [(r.repo_a, r.repo_b, r.kind, r.evidence, r.priority) for r in rels],
+        """INSERT INTO relationships (repo_a, repo_b, kind, evidence, priority, strength)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        [(r.repo_a, r.repo_b, r.kind, r.evidence, r.priority, r.strength) for r in rels],
     )
     conn.commit()
 
 
 def get_relationships(conn: sqlite3.Connection, repo_id: int) -> list[RelationshipRow]:
     rows = conn.execute(
-        """SELECT repo_a, repo_b, kind, evidence, priority
+        """SELECT repo_a, repo_b, kind, evidence, priority, strength
            FROM relationships WHERE repo_a = ? OR repo_b = ? ORDER BY priority DESC, kind""",
         (repo_id, repo_id),
     ).fetchall()
@@ -351,6 +366,7 @@ def get_relationships(conn: sqlite3.Connection, repo_id: int) -> list[Relationsh
             kind=r["kind"],
             evidence=r["evidence"],
             priority=r["priority"],
+            strength=r["strength"],
         )
         for r in rows
     ]
@@ -358,7 +374,7 @@ def get_relationships(conn: sqlite3.Connection, repo_id: int) -> list[Relationsh
 
 def get_all_relationships(conn: sqlite3.Connection) -> list[RelationshipRow]:
     rows = conn.execute(
-        "SELECT repo_a, repo_b, kind, evidence, priority FROM relationships ORDER BY priority DESC, kind"
+        "SELECT repo_a, repo_b, kind, evidence, priority, strength FROM relationships ORDER BY priority DESC, kind"
     ).fetchall()
     return [
         RelationshipRow(
@@ -367,6 +383,7 @@ def get_all_relationships(conn: sqlite3.Connection) -> list[RelationshipRow]:
             kind=r["kind"],
             evidence=r["evidence"],
             priority=r["priority"],
+            strength=r["strength"],
         )
         for r in rows
     ]
@@ -386,20 +403,22 @@ def upsert_architecture(
     data_flow: Optional[str] = None,
     known_patterns: Optional[str] = None,
     complexity: Optional[str] = None,
+    confidence: Optional[str] = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO architecture
-            (repo_id, architecture, evidence, data_flow, known_patterns, complexity)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (repo_id, architecture, evidence, data_flow, known_patterns, complexity, confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(repo_id) DO UPDATE SET
             architecture=excluded.architecture,
             evidence=excluded.evidence,
             data_flow=excluded.data_flow,
             known_patterns=excluded.known_patterns,
-            complexity=excluded.complexity
+            complexity=excluded.complexity,
+            confidence=excluded.confidence
         """,
-        (repo_id, architecture, evidence, data_flow, known_patterns, complexity),
+        (repo_id, architecture, evidence, data_flow, known_patterns, complexity, confidence),
     )
     conn.commit()
 
@@ -417,6 +436,7 @@ def get_architecture(conn: sqlite3.Connection, repo_id: int) -> Optional[Archite
         data_flow=row["data_flow"],
         known_patterns=row["known_patterns"],
         complexity=row["complexity"],
+        confidence=row["confidence"],
     )
 
 
@@ -425,18 +445,23 @@ def replace_components(
 ) -> None:
     conn.execute("DELETE FROM components WHERE repo_id = ?", (repo_id,))
     conn.executemany(
-        "INSERT OR REPLACE INTO components (repo_id, name, evidence) VALUES (?, ?, ?)",
-        [(repo_id, c.name, c.evidence) for c in components],
+        "INSERT OR REPLACE INTO components (repo_id, name, evidence, strength) VALUES (?, ?, ?, ?)",
+        [(repo_id, c.name, c.evidence, c.strength) for c in components],
     )
     conn.commit()
 
 
 def get_components(conn: sqlite3.Connection, repo_id: int) -> list[ComponentRow]:
     rows = conn.execute(
-        "SELECT repo_id, name, evidence FROM components WHERE repo_id = ? ORDER BY name",
+        "SELECT repo_id, name, evidence, strength FROM components WHERE repo_id = ? ORDER BY name",
         (repo_id,),
     ).fetchall()
-    return [ComponentRow(repo_id=r["repo_id"], name=r["name"], evidence=r["evidence"]) for r in rows]
+    return [
+        ComponentRow(
+            repo_id=r["repo_id"], name=r["name"], evidence=r["evidence"], strength=r["strength"]
+        )
+        for r in rows
+    ]
 
 
 def replace_entry_points(
@@ -480,9 +505,15 @@ def all_entry_points(conn: sqlite3.Connection) -> list[EntryPointRow]:
 def all_components(conn: sqlite3.Connection) -> list[ComponentRow]:
     """Every component across all repositories (for cross-repo similarity)."""
     rows = conn.execute(
-        "SELECT repo_id, name, evidence FROM components ORDER BY repo_id, name"
+        "SELECT repo_id, name, evidence, strength FROM components ORDER BY repo_id, name"
     ).fetchall()
-    return [ComponentRow(repo_id=r["repo_id"], name=r["name"], evidence=r["evidence"]) for r in rows]
+    return [
+        ComponentRow(
+            repo_id=r["repo_id"], name=r["name"], evidence=r["evidence"],
+            strength=r["strength"],
+        )
+        for r in rows
+    ]
 
 
 def entry_points_by_kind(conn: sqlite3.Connection, kind: str) -> list[EntryPointRow]:

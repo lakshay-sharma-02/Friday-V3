@@ -42,9 +42,12 @@ def _seed_repo(conn, name: str, path: str, arch: str, comps: list[str], eps: lis
         "INSERT INTO architecture (repo_id, architecture, evidence) VALUES (?, ?, ?)",
         (rid, arch, f"evidence for {arch}"),
     )
+    # Concept component names are Weak evidence (audit: a name is not an
+    # implementation). Mirror the production detector's strength assignment.
+    from friday import judgment
     conn.executemany(
-        "INSERT OR REPLACE INTO components (repo_id, name, evidence) VALUES (?, ?, ?)",
-        [(rid, comp, f"{comp} evidence") for comp in comps],
+        "INSERT OR REPLACE INTO components (repo_id, name, evidence, strength) VALUES (?, ?, ?, ?)",
+        [(rid, comp, f"{comp} evidence", judgment.component_strength(comp)) for comp in comps],
     )
     conn.executemany(
         "INSERT OR REPLACE INTO entry_points (repo_id, kind, detail, evidence) VALUES (?, ?, ?, ?)",
@@ -111,12 +114,18 @@ def test_cli_analyze_rejects_non_git(tmp_path, capsys):
 # --- Cross-repository similarity (query layer) ------------------------------
 
 
-def test_shared_components_query(conn):
+def test_shared_components_query_excludes_weak_concepts(conn):
+    # Concept components are Weak; shared_components(min_strength=Medium) must
+    # exclude them so they never drive a reuse recommendation.
     _seed_repo(conn, "A", "/a", "CLI tool", ["Authentication", "Configuration"], [("CLI", "x")])
     _seed_repo(conn, "B", "/b", "CLI tool", ["Authentication", "Database"], [("CLI", "y")])
-    shared = shared_components(conn)
-    assert "Authentication" in shared
-    assert set(shared["Authentication"]) == {"A", "B"}
+    shared = shared_components(conn)  # default Medium -> excludes concepts
+    assert "Authentication" not in shared
+    assert "Configuration" not in shared
+    assert "Database" not in shared
+    # With Weak allowed, they reappear (plain inventory).
+    weak = shared_components(conn, min_strength="Weak")
+    assert "Authentication" in weak
 
 
 def test_similar_layouts_query(conn):
@@ -129,11 +138,33 @@ def test_similar_layouts_query(conn):
     assert frozenset({"A", "C"}) not in pair_names
 
 
-def test_reuse_opportunities_query(conn):
-    _seed_repo(conn, "A", "/a", "CLI tool", ["Configuration"], [])
-    _seed_repo(conn, "B", "/b", "CLI tool", ["Configuration"], [])
+def test_reuse_opportunities_excludes_concept_components(conn):
+    # Two repos both having a db.py/Configuration must NOT become a reuse rec.
+    _seed_repo(conn, "A", "/a", "CLI tool", ["Configuration"], [("CLI", "x")])
+    _seed_repo(conn, "B", "/b", "CLI tool", ["Configuration"], [("CLI", "y")])
     opps = reuse_opportunities(conn)
-    assert any("Configuration" in o for o in opps)
+    assert not any("Configuration" in o for o in opps)
+    assert not any("Database" in o for o in opps)
+    # But a shared *entry point* (e.g. CLI) is actionable.
+    assert any("CLI entry point" in o for o in opps)
+
+
+def test_reuse_opportunities_from_shared_framework(conn):
+    # Two FastAPI repos with >=3 shared techs -> potential-reuse relationship
+    # (Medium) -> surfaced as a shared-code candidate.
+    for n, p in (("A", "/a"), ("B", "/b")):
+        rid = upsert_repository(conn, name=n, path=p, default_branch="main", is_dirty=False,
+            first_commit_date="2024-01-01", last_commit_date="2026-01-01", remote_url=None,
+            commit_count=10, readme_summary=None, license=None, primary_author=None)
+        conn.execute("INSERT INTO architecture (repo_id, architecture, evidence) VALUES (?,?,?)",
+                     (rid, "FastAPI REST API", "f"))
+        conn.executemany("INSERT INTO technologies (repo_id, tech, evidence) VALUES (?,?,?)",
+                         [(rid, t, "x") for t in ("FastAPI", "Python", "Pydantic")])
+    conn.execute("""INSERT INTO relationships (repo_a, repo_b, kind, evidence, priority, strength)
+                    VALUES (1,2,'potential-reuse','Overlapping stack: FastAPI, Python, Pydantic',65,'Medium')""")
+    conn.commit()
+    opps = reuse_opportunities(conn)
+    assert any("share" in o and "FastAPI" in o for o in opps)
 
 
 # --- Ask intents ------------------------------------------------------------
@@ -168,13 +199,16 @@ def test_ask_similarity_honest_when_empty(conn, tmp_path):
     assert "No evidence-backed" in ans.text or "similar" in ans.text.lower()
 
 
-def test_ask_similarity_finds_shared_components(conn, tmp_path):
+def test_ask_similarity_no_concept_components(conn, tmp_path):
+    # Config/Auth/Database are concepts; they must NOT appear as reuse recs.
     _seed_repo(conn, "A", "/a", "CLI tool", ["Configuration", "Authentication"], [("CLI", "x")])
     _seed_repo(conn, "B", "/b", "CLI tool", ["Configuration", "Database"], [("CLI", "y")])
     ans = ask("Which projects duplicate configuration loading?", conn, verbose=False)
     assert not ans.used_llm
-    assert "Configuration" in ans.text
-    assert "A" in ans.text and "B" in ans.text
+    # Forbidden: recommending reuse purely from shared concept components.
+    assert "Configuration" not in ans.text or "Realistic shared-code" not in ans.text
+    # The shared CLI entry point IS actionable, so it can appear.
+    assert "CLI entry point" in ans.text
 
 
 def test_ask_architecture_data_flow_not_character_split(conn, tmp_path):

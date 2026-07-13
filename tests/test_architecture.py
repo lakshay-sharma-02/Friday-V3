@@ -201,17 +201,24 @@ def test_detect_library(tmp_path):
 
 def test_component_discovery_auth_db_config(tmp_path):
     repo = _mk(tmp_path, {
-        "main.py": "import fastapi\napp = fastapi.FastAPI()\n",
+        "main.py": "import fastapi\napp = fastapi.FastAPI()\n@app.get('/')\ndef r(): return {}\n",
         "auth.py": "import jwt\n",
         "db.py": "import sqlalchemy\n",
-        "config.py": "import pydantic_settings\n",
+        "config.py": "import os\nfrom pydantic_settings import BaseSettings\nclass S(BaseSettings):\n    pass\nsettings = S()\n",
+        "routers/users.py": "from fastapi import APIRouter\nr = APIRouter()\n",
     })
     p = analyze(repo.path)
     names = {c.name for c in p.components}
     assert "Authentication" in names
-    assert "Database" in names
+    assert "Database" in names          # sqlalchemy -> behavioral DB evidence
+    # Configuration requires proof of config *loading*, not just a library import.
     assert "Configuration" in names
-    assert "Routing" in names  # fastapi -> routing
+    assert any("loader" in c.evidence
+               for c in p.components if c.name == "Configuration")
+    # Routing now requires actual route modules, not just a FastAPI import.
+    assert "Routing" in names
+    # Components are Weak evidence (concepts, not implementations).
+    assert all(c.strength == "Weak" for c in p.components)
 
 
 def test_component_evidence_backed(tmp_path):
@@ -250,7 +257,18 @@ def test_entry_point_shebang_script(tmp_path):
         "bin/run": "#!/usr/bin/env bash\necho hi\n",
     })
     p = analyze(repo.path)
+    # bin/ script is a runtime executable entry point.
     assert any(e.kind == "Executable script" for e in p.entry_points)
+
+
+def test_scripts_dir_is_utility_not_app_entry(tmp_path):
+    # scripts/fix-layouts.sh must be classified Utility script, NOT an app entry.
+    repo = _mk(tmp_path, {
+        "scripts/fix-layouts.sh": "#!/usr/bin/env bash\necho hi\n",
+    })
+    p = analyze(repo.path)
+    assert any(e.kind == "Utility script" for e in p.entry_points)
+    assert not any(e.kind == "Executable script" for e in p.entry_points)
 
 
 # --- Summary ----------------------------------------------------------------

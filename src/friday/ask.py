@@ -18,6 +18,7 @@ from typing import Optional
 
 from . import query as q
 from .db import Repository, get_technologies
+from .identity import explain_project_from_conn
 from .llm import _enabled as llm_enabled
 from .llm import _extract_content
 
@@ -67,23 +68,37 @@ def classify(question: str, conn) -> str:
         return "chitchat"
     if "compare" in qlow or " vs " in qlow or " versus " in qlow or "difference" in qlow:
         return "compare"
-    # Architecture explanation / how-it-works.
+    # Relationship questions first (so "how is X related to Y" is not swallowed
+    # by the architecture matcher's "how is" rule). Audit §5: weak/strong
+    # relationships must be presented distinctly.
+    if "related" in qlow or "how are" in qlow or "connection" in qlow:
+        return "related"
+    # Architecture explanation / how-it-works (granular technical deep-dive).
+    # Placed BEFORE the human-explain matcher so "Explain X's architecture"
+    # routes here (data_flow / components), not to the onboarding summary.
     if any(w in qlow for w in (
-        "how is", "how does", "how do", "architecture", "architect", "explain",
+        "how is", "how does", "how do", "architecture", "architect",
         "built", "structure", "entry point", "entry points", "startup",
         "how it works", "how it's built", "components", "implement",
     )):
         return "architecture"
+    # Human explanations: purpose/identity first (Milestone 3.5 §2, §3).
+    # "explain"/"walk me through"/"tell me about" map here; "what is" too, so
+    # "Explain Vivaha." and "What is Aether?" produce the onboarding answer.
+    if any(w in qlow for w in (
+        "explain", "walk me through", "tell me about", "describe",
+        "what is", "what does", "what are", "overview of",
+    )):
+        return "describe"
     # Cross-repo similarity / reuse / shared code.
     if any(w in qlow for w in (
         "similar", "similarities", "duplicate", "duplicated", "share code",
         "sharing code", "shared code", "reuse", "reusable", "overlap",
-        "same layout", "alike", "compare the architectures",
+        "same layout", "alike", "comparable", "teach each other",
+        "compare the architectures",
     )):
         return "similarity"
-    if "related" in qlow or "how are" in qlow or "connection" in qlow:
-        return "related"
-    if "why" in qlow or "purpose" in qlow or "what is" in qlow or "what does" in qlow or "tell me about" in qlow:
+    if "why" in qlow or "purpose" in qlow:
         return "describe"
     if "inactive" in qlow or "abandoned" in qlow or "stale" in qlow or "dead" in qlow:
         return "inactive"
@@ -168,20 +183,39 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         return ev
 
     if intent == "related":
+        qlow = question.lower()
         r = _detect_repo(question, conn)
         if not r or r.id is None:
             ev.raw["note"] = "could not identify repository"
             return ev
+        # Weak relationships are coincidences (shared author/org/language), not
+        # insight. Hide them unless the user explicitly asks to include weak ones.
+        include_weak = any(w in qlow for w in ("weak", "all relationships", "everything", "including"))
         others = [o for o in q.all_repositories(conn) if o.id is not None and o.id != r.id]
-        rels = []
+        rels: list[str] = []
         for o in others:
             pairs = q.relationships_between(conn, r.id, o.id)
-            if pairs:
-                rels.append(f"{o.name}: " + "; ".join(f"{p.kind} ({p.evidence})" for p in pairs))
+            if not pairs:
+                continue
+            strong = [p for p in pairs if p.strength != "Weak"]
+            weak = [p for p in pairs if p.strength == "Weak"]
+            # Answer WHY they are related, not just WHAT they share.
+            why = [f"{p.kind.replace('shared-', 'shared ')} — {p.evidence}" for p in strong]
+            if include_weak and weak:
+                why += [f"weak coincidence: {p.kind.replace('shared-', 'shared ')} ({p.evidence})"
+                        for p in weak]
+            if why:
+                rels.append(f"{o.name}: " + "; ".join(why))
         if rels:
             ev.blocks = rels
+        elif include_weak:
+            ev.blocks = [f"No relationships found for {r.name}."]
         else:
-            ev.blocks = [f"No evidence-backed relationships found for {r.name}."]
+            ev.blocks = [
+                f"No strong or medium relationships found for {r.name}. "
+                f"(Weak coincidences like shared author/language are omitted — "
+                f"ask 'including weak relationships' to see them.)"
+            ]
         ev.raw["repo"] = r.name
         return ev
 
@@ -200,16 +234,28 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
             ev.raw["repo"] = r.name
             return ev
         lines = [f"{r.name} — {arch.architecture}"]
+        if arch.confidence:
+            lines.append(f"Confidence: {arch.confidence}")
         lines.append("Evidence:")
         lines.append("- " + arch.evidence.replace("\n", "\n- "))
         if comps:
             lines.append("Major components:")
             for c in comps:
-                lines.append(f"- {c.name} ({c.evidence})")
+                # Components are Weak concepts — say so, don't imply reusable code.
+                lines.append(f"- {c.name} ({c.strength} evidence): {c.evidence}")
         if eps:
-            lines.append("Primary entry points:")
-            for e in eps:
-                lines.append(f"- {e.kind}: {e.detail} ({e.evidence})")
+            # Group entry points by role (Application / Framework root / Utility).
+            app_eps = [e for e in eps if e.kind in ("main()", "CLI", "FastAPI app",
+                                                   "Flask app", "Next.js app", "Cargo binary", "Executable script")]
+            util_eps = [e for e in eps if e.kind == "Utility script"]
+            if app_eps:
+                lines.append("Application entry points:")
+                for e in app_eps:
+                    lines.append(f"- {e.kind}: {e.detail} ({e.evidence})")
+            if util_eps:
+                lines.append("Utility scripts (not application entry points):")
+                for e in util_eps:
+                    lines.append(f"- {e.detail} ({e.evidence})")
         if arch.data_flow:
             lines.append("Data flow:")
             lines.append("- " + "\n- ".join(arch.data_flow.split("\n")))
@@ -224,24 +270,55 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         return ev
 
     if intent == "similarity":
-        shared_comp = q.shared_components(conn)
-        shared_ep = q.shared_entry_points(conn)
         pairs = q.similar_layouts(conn)
         reuse = q.reuse_opportunities(conn)
         blocks: list[str] = []
+        # Actionable shared-code candidates (Medium/Strong evidence only).
         if reuse:
-            blocks.append("Realistic shared-code opportunities (evidence-backed):")
+            blocks.append("Realistic shared-code opportunities (Medium/Strong evidence only):")
             for line in reuse:
                 blocks.append(f"- {line}")
-        if pairs:
-            blocks.append("Repositories with similar layouts/architecture:")
+        # "Could these teach each other something?" — compare along dimensions,
+        # not a flat dependency list (audit §9). Compare any pair that shares a
+        # Medium/Strong relationship OR the same architecture label.
+        name_by_id = {r.id: r.name for r in q.all_repositories(conn) if r.id is not None}
+        id_by_name = {v: k for k, v in name_by_id.items()}
+        compared: list[str] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        from .db import get_all_relationships
+
+        for rel in get_all_relationships(conn):
+            if rel.strength == "Weak":
+                continue
+            an, bn = name_by_id.get(rel.repo_a), name_by_id.get(rel.repo_b)
+            if an and bn:
+                seen_pairs.add(tuple(sorted((an, bn))))
+        # Also compare same-architecture label pairs (no relationship needed).
+        for a, b in pairs:
+            seen_pairs.add(tuple(sorted((a, b))))
+
+        for an, bn in seen_pairs:
+            a_id, b_id = id_by_name.get(an), id_by_name.get(bn)
+            if a_id is None or b_id is None:
+                continue
+            cmp = q.compare_repositories(conn, a_id, b_id)
+            dims = [v for v in (
+                cmp["architecture"], cmp["responsibilities"], cmp["deployment"],
+                cmp["persistence"], cmp["interfaces"],
+            ) if v]
+            if dims:
+                compared.append(f"- {an} and {bn}: " + "; ".join(dims) + ".")
+        if compared:
+            blocks.append("What these projects share (architecture, not just dependencies):")
+            blocks.extend(compared)
+        elif pairs:
+            blocks.append("Repositories with similar architecture labels (verify before acting):")
             for a, b in pairs:
                 blocks.append(f"- {a} and {b}")
         if not blocks:
             blocks = ["No evidence-backed cross-repository similarities found."]
         ev.blocks = blocks
-        ev.raw["shared_components"] = shared_comp
-        ev.raw["shared_entry_points"] = shared_ep
+        ev.raw["reuse"] = reuse
         ev.raw["similar_layouts"] = [list(p) for p in pairs]
         return ev
 
@@ -250,9 +327,11 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         if not r or r.id is None:
             ev.raw["note"] = "could not identify repository"
             return ev
-        card = q.identity_card(conn, r.id, today)
-        ev.blocks = [_card_text(card)]
+        # Human explanation: purpose/identity first, then architecture (§2/§3/§11).
+        text = explain_project_from_conn(conn, r.id, detailed=True)
+        ev.blocks = [text]
         ev.raw["repo"] = r.name
+        ev.raw["identity"] = True
         return ev
 
     if intent == "inactive":
@@ -283,18 +362,23 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         return ev
 
     if intent == "recommend":
-        active = q.most_active(conn, today, 3)
-        newest = q.newest_repos(conn, 3)
-        dirty = [r.name for r in q.all_repositories(conn) if r.is_dirty]
-        lines = []
-        if active:
-            lines.append(f"Most active by commit frequency: {active[0][0].name} "
-                         f"(~{active[0][1]:.1f} commits/day)")
-        if newest:
-            lines.append(f"Newest project: {newest[0].name}")
-        if dirty:
-            lines.append(f"Has uncommitted changes: {', '.join(dirty)}")
-        ev.blocks = lines or ["No activity data available."]
+        # "Which should I continue?" — combine activity, blockers, importance,
+        # business value, recent work, uncommitted changes, README maturity and
+        # purpose (audit §10). Not commit counts alone.
+        priorities = q.workspace_priorities(conn, today, n=3)
+        if not priorities:
+            ev.blocks = ["I don't have enough evidence to prioritize — no repositories are ingested."]
+            return ev
+        lines: list[str] = []
+        top = priorities[0]
+        top_repo, top_reasons = top
+        lines.append(f"If you want the highest-leverage next step, continue {top_repo.name}.")
+        lines.append("Why: " + "; ".join(top_reasons) + ".")
+        if len(priorities) > 1:
+            lines.append("Next after that:")
+            for repo, reasons in priorities[1:]:
+                lines.append(f"- {repo.name}: {'; '.join(reasons)}.")
+        ev.blocks = lines
         ev.raw["recommend"] = lines
         return ev
 
