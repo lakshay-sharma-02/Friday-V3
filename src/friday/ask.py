@@ -877,7 +877,7 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
     # resting on one repo. The note is appended to the evidence the answer is
     # built from, so neither the deterministic nor the LLM path can claim
     # completeness it does not have.
-    from .evidence_scope import build_scope_report, coverage_note
+    from .evidence_scope import build_scope_report, coverage_note, build_coverage_report
 
     report = build_scope_report(req, decision, conn, ev.blocks)
     ev.raw["scope"] = report.scope
@@ -893,6 +893,8 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
         "flagged": report.bias,
     }
     ev.raw["missing"] = report.missing
+    # Full auditable coverage picture (Part C) — surfaced via --verbose only.
+    ev.raw["coverage_report"] = build_coverage_report(req, decision, conn, ev.blocks)
     note = coverage_note(report)
     if note:
         ev.blocks = list(ev.blocks) + [note]
@@ -1756,6 +1758,32 @@ def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
             return ("clarify",
                     f"I'm not sure which project '{tail}' refers to. "
                     f"Name it exactly and I'll compare.")
+
+    # "Compare that to X" / "contrast with X" — a follow-up contrast. Resolve a
+    # pronoun subject ("that"/"this"/"it") to the previous subject so the contrast
+    # carries context instead of falling through to a no-subject generic fallback.
+    _COMPARE_PREFIX = ("compare", "contrast", "versus", "vs")
+    _PRONOUNS = ("that", "this", "it", "them")
+    _STOPWORDS = ("to", "with", "against", "and", "the")
+    for p in _COMPARE_PREFIX:
+        if qlow.startswith(p + " ") or qlow == p:
+            tail = qlow[len(p):].strip()
+            # Drop leading stopwords/pronouns (word-based, never char-based).
+            toks = tail.split()
+            while toks and (toks[0] in _STOPWORDS or toks[0] in _PRONOUNS):
+                toks.pop(0)
+            tail = " ".join(toks).strip(" ?.,")
+            cand = _named_repo_in(tail, conn)
+            if cand and subj and cand.lower() != subj.lower():
+                return ("restate", _contrast_text(subj, cand, conn, ev))
+            if cand and subj and cand.lower() == subj.lower():
+                return ("restate", _restate_text(prev, conn))
+            if subj and not cand:
+                # "Compare that" with no second name -> contrast prev subject
+                # against the most-related repo, or clarify.
+                return ("restate", _contrast_text(subj, subj, conn, ev))
+            return ("clarify",
+                    "Compare against what? Name the other project.")
 
     for p in _NEXT_PREFIX:
         if qlow.startswith(p) or qlow == p:

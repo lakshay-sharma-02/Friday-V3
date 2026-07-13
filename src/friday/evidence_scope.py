@@ -175,6 +175,131 @@ def build_scope_report(req, decision, conn, blocks: list[str]) -> ScopeReport:
     )
 
 
+def build_coverage_report(req, decision, conn, blocks: list[str]) -> dict:
+    """Full, auditable coverage picture for one answer (Part C).
+
+    Deterministic. Surfaces how complete the evidence was BEFORE reasoning, so a
+    human (or a future CI gate) can audit an answer's basis. No LLM, no keywords.
+    Exposed via `ask --verbose`; never clutters a normal answer.
+    """
+    from .db import get_architecture, get_all_relationships, latest_observation
+    from .query import all_repositories
+
+    scope_report = build_scope_report(req, decision, conn, blocks)
+    all_repos = [r for r in all_repositories(conn) if r.id is not None]
+    n_repos = len(all_repos)
+
+    # Purpose / architecture / relationship evidence presence across the workspace.
+    repos_with_purpose = sum(
+        1 for r in all_repos if r.readme_summary and r.readme_summary.strip() not in ("", "None stated"))
+    repos_with_arch = sum(1 for r in all_repos if get_architecture(conn, r.id))
+    rels = get_all_relationships(conn)
+    strong_rels = sum(1 for r in rels if r.strength != "Weak")
+    obs = latest_observation(conn)
+
+    def conf(frac: float) -> str:
+        if frac >= 0.8:
+            return "Strong"
+        if frac >= 0.5:
+            return "Medium"
+        if frac > 0:
+            return "Weak"
+        return "None"
+
+    return {
+        "scope": scope_report.scope,
+        "secondary_scopes": scope_report.secondary,
+        "repositories_considered": scope_report.requested,
+        "repositories_represented": scope_report.represented,
+        "coverage_pct": round(scope_report.pct * 100, 1),
+        "bias": {"flagged": scope_report.bias, "dominant": scope_report.dominant,
+                 "dominant_pct": round(scope_report.dominant_pct * 100, 1)},
+        "missing_evidence": scope_report.missing,
+        "workspace_purpose_confidence": conf(repos_with_purpose / n_repos) if n_repos else "None",
+        "workspace_architecture_confidence": conf(repos_with_arch / n_repos) if n_repos else "None",
+        "relationship_confidence": conf(strong_rels / max(1, n_repos)) if n_repos else "None",
+        "observation_history": "available" if obs else "none",
+        "timeline_confidence": "Medium" if obs else "None",
+    }
+
+
+def audit_evidence_completeness(conn) -> list[dict]:
+    """Per-repository evidence-completeness audit (Part D).
+
+    For every repository, list exactly WHY it contributes weak evidence — never
+    silently degrade. Computed from the DB, never invented. Empty gaps = strong.
+    """
+    from .db import get_architecture, get_all_relationships, latest_observation
+    from .query import all_repositories
+
+    repos = [r for r in all_repositories(conn) if r.id is not None]
+    rels = get_all_relationships(conn)
+    name_by_id = {r.id: r.name for r in repos}
+    paired: set[str] = set()
+    for r in rels:
+        if r.strength != "Weak":
+            paired.add(name_by_id[r.repo_a])
+            paired.add(name_by_id[r.repo_b])
+    obs = latest_observation(conn)
+
+    out: list[dict] = []
+    for r in repos:
+        gaps: list[str] = []
+        if not r.readme_summary or r.readme_summary.strip() in ("", "None stated"):
+            gaps.append("missing README / purpose summary")
+        elif (r.readme_quality or "good") in ("boilerplate", "poor", "none"):
+            gaps.append(f"boilerplate/poor README (quality={r.readme_quality})")
+        if not get_architecture(conn, r.id):
+            gaps.append("missing architecture profile")
+        if r.id not in {rid for rid in (name_by_id.keys())}:
+            pass
+        if r.name not in paired:
+            gaps.append("missing relationship evidence (no strong link to another repo)")
+        if not obs:
+            gaps.append("no observation history")
+        out.append({
+            "repo": r.name,
+            "gaps": gaps,
+            "complete": not gaps,
+        })
+    return out
+
+
+def format_completeness_audit(rows: list[dict]) -> str:
+    lines = ["Evidence completeness audit:"]
+    for row in rows:
+        if row["complete"]:
+            lines.append(f"  {row['repo']}: complete")
+        else:
+            lines.append(f"  {row['repo']}: weak evidence")
+            for g in row["gaps"]:
+                lines.append(f"    - {g}")
+    return "\n".join(lines)
+
+
+def format_coverage_report(report: dict) -> str:
+    """Human, --verbose rendering of build_coverage_report()."""
+    lines = ["Coverage report:"]
+    lines.append(f"  Scope: {report['scope']}"
+                 + (f" (+{', '.join(report['secondary_scopes'])})" if report['secondary_scopes'] else ""))
+    lines.append(f"  Repositories used: {report['repositories_represented']}"
+                 f"/{report['repositories_considered']} "
+                 f"({report['coverage_pct']}%)")
+    if report["bias"]["flagged"]:
+        lines.append(f"  Bias: {report['bias']['dominant']} dominates "
+                     f"({report['bias']['dominant_pct']}%)")
+    lines.append(f"  Purpose confidence: {report['workspace_purpose_confidence']}")
+    lines.append(f"  Architecture confidence: {report['workspace_architecture_confidence']}")
+    lines.append(f"  Relationship confidence: {report['relationship_confidence']}")
+    lines.append(f"  Observation history: {report['observation_history']}")
+    lines.append(f"  Timeline confidence: {report['timeline_confidence']}")
+    if report["missing_evidence"]:
+        lines.append("  Missing evidence:")
+        for m in report["missing_evidence"]:
+            lines.append(f"    - {m}")
+    return "\n".join(lines)
+
+
 def coverage_note(report: ScopeReport) -> str:
     """Human line stating how many repos the answer actually rests on.
 

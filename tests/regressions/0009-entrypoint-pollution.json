@@ -1,0 +1,15 @@
+{
+  "id": "0009-entrypoint-pollution",
+  "title": "Architecture explain must render data_flow / known_patterns as whole lines, not per-character",
+  "question": "Explain Vivaha's architecture",
+  "required_scope": "project",
+  "expected": {
+    "objective": "architecture"
+  },
+  "forbidden": ["\n- s\n- t", "\n- p\n- 1"],
+  "required_evidence": ["step one", "step two", "p1", "p2"],
+  "inject": {
+    "vivaha": {"data_flow": "step one\nstep two", "known_patterns": "p1\np2"}
+  },
+  "note": "Explain-X's-architecture routes to the ARCHITECTURE objective and must render data_flow / known_patterns as whole lines, never splitting the stored string character-by-character."
+}

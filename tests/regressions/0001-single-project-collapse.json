@@ -1,0 +1,13 @@
+{
+  "id": "0001-single-project-collapse",
+  "title": "Workspace question must not collapse to one repository's describe dump",
+  "question": "What am I building?",
+  "required_scope": "workspace",
+  "expected": {
+    "objective": "themes",
+    "min_repos_cited": 3
+  },
+  "forbidden": [],
+  "required_evidence": ["friday-v3", "aether", "vivaha"],
+  "note": "Canonical regression: a workspace question used to answer from one repo. Evidence must span the portfolio."
+}

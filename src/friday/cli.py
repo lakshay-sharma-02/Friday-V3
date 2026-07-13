@@ -50,6 +50,10 @@ def cmd_ask(args: argparse.Namespace) -> int:
             print("\n".join(f"- {b}" for b in answer.evidence.blocks))
         else:
             print("(no retrieved evidence)")
+        cov = answer.evidence.raw.get("coverage_report")
+        if cov:
+            from .evidence_scope import format_coverage_report
+            print("\n" + format_coverage_report(cov))
         print(f"\n[synthesized via LLM: {answer.used_llm}]\n")
     print(answer.text)
     return 0
@@ -112,6 +116,19 @@ def cmd_observe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Audit every repository for exactly why its evidence is weak (Part D)."""
+    from .evidence_scope import audit_evidence_completeness, format_completeness_audit
+
+    conn = connect()
+    rows = audit_evidence_completeness(conn)
+    conn.close()
+    print(format_completeness_audit(rows))
+    weak = sum(1 for r in rows if not r["complete"])
+    print(f"\n{weak} of {len(rows)} repositories have weak evidence.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="friday",
@@ -155,6 +172,11 @@ def main(argv: list[str] | None = None) -> int:
         "observe", help="Record the workspace and report changes since last time."
     )
     p_observe.set_defaults(func=cmd_observe)
+
+    p_audit = sub.add_parser(
+        "audit", help="Show exactly why each repository contributes weak evidence."
+    )
+    p_audit.set_defaults(func=cmd_audit)
 
     args = parser.parse_args(argv)
     return args.func(args)
