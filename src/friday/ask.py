@@ -47,6 +47,33 @@ class Answer:
     used_llm: bool
 
 
+@dataclass
+class Intent:
+    """Structured understanding of a question, produced by LLM extraction.
+
+    The LLM NEVER retrieves or answers — it only identifies what the user is
+    asking (intent), which entities are involved, whether a comparison is
+    requested, whether the question spans the whole workspace, and how
+    confident it is. Deterministic retrieval runs afterward from this object.
+    """
+
+    intent: str
+    entities: list[str] = field(default_factory=list)
+    compare: bool = False
+    workspace: bool = False
+    confidence: float = 1.0
+
+
+# Canonical retrieval intents — must match the dispatch in `retrieve`. The LLM is
+# instructed to return exactly one of these so the extracted intent drives the
+# existing deterministic retrieval unchanged.
+_VALID_INTENTS = {
+    "chitchat", "compare", "related", "architecture", "describe", "similarity",
+    "inactive", "newest", "recommend", "portfolio", "value", "overlap",
+    "integration", "workspace", "by-tech", "insights", "general",
+}
+
+
 def _today() -> dt.date:
     return dt.date.today()
 
@@ -59,8 +86,13 @@ def _known_techs(conn) -> set[str]:
     return techs
 
 
-def classify(question: str, conn) -> str:
-    """Determine the query intent from the question text + known entities."""
+def deterministic_classifier(question: str, conn) -> str:
+    """OFFLINE fallback: keyword cascade over question text + known entities.
+
+    Used only when no LLM is configured (or extraction fails). The spec forbids
+    keyword routing as the *primary* path; this remains as graceful degradation,
+    not as the default. Keep it in sync with the canonical intent set.
+    """
     qlow = question.lower()
     techs = {t.lower() for t in _known_techs(conn)}
 
@@ -68,6 +100,31 @@ def classify(question: str, conn) -> str:
         return "chitchat"
     if "compare" in qlow or " vs " in qlow or " versus " in qlow or "difference" in qlow:
         return "compare"
+    # Workspace-level intents (Milestone 3.6) — placed before the generic
+    # "which project" -> by-tech fallback so "which project is most valuable"
+    # routes here, not to a technology lookup.
+    if any(w in qlow for w in (
+        "engineering universe", "how has my work evolved", "where is my work heading",
+        "my direction", "overall picture", "big picture", "my career",
+    )):
+        return "workspace"
+    if any(w in qlow for w in (
+        "am i building", "themes", "patterns across", "what am i building",
+        "seem to be building", "building", "emerge", "emerging",
+        "repeatedly solving", "skills am i", "across my projects",
+        "my portfolio", "my work", "what am i working on",
+    )):
+        return "portfolio"
+    if "most valuable" in qlow or "highest value" in qlow or "worth most" in qlow:
+        return "value"
+    if "integrate" in qlow or "integration with friday" in qlow or "integration point" in qlow:
+        return "integration"
+    # Meaningful overlap (Milestone 3.6): "how do my projects overlap", "what
+    # parts overlap" — compare along dimensions, not syntax. Placed before the
+    # architecture matcher so "how do my projects overlap" doesn't become an
+    # architecture deep-dive, and before similarity (shared code / reuse).
+    if "overlap" in qlow:
+        return "overlap"
     # Relationship questions first (so "how is X related to Y" is not swallowed
     # by the architecture matcher's "how is" rule). Audit §5: weak/strong
     # relationships must be presented distinctly.
@@ -93,7 +150,7 @@ def classify(question: str, conn) -> str:
     # Cross-repo similarity / reuse / shared code.
     if any(w in qlow for w in (
         "similar", "similarities", "duplicate", "duplicated", "share code",
-        "sharing code", "shared code", "reuse", "reusable", "overlap",
+        "sharing code", "shared code", "reuse", "reusable",
         "same layout", "alike", "comparable", "teach each other",
         "compare the architectures",
     )):
@@ -106,6 +163,11 @@ def classify(question: str, conn) -> str:
         return "newest"
     if "most active" in qlow or "work on next" in qlow or "should i" in qlow:
         return "recommend"
+    if any(w in qlow for w in (
+        "continue", "pause", "most attention", "which project should i",
+        "which should i", "what deserves", "deserve my",
+    )):
+        return "recommend"
     if "insight" in qlow or "observation" in qlow or "overview" in qlow:
         return "insights"
     if "share" in qlow or "use" in qlow or "which project" in qlow:
@@ -117,6 +179,146 @@ def classify(question: str, conn) -> str:
                 return "by-tech"
         return "by-tech"
     return "general"
+
+
+def _intent_explanation() -> str:
+    """System prompt for LLM intent extraction (spec: one prompt, JSON only).
+
+    The model is explicitly told it is NOT answering — only identifying intent,
+    entities, comparison, workspace scope, and confidence. No prose, no retrieval.
+    """
+    intents = ", ".join(sorted(_VALID_INTENTS))
+    return (
+        "You are Friday's intent extractor. You are NOT answering the question. "
+        "You are ONLY identifying what the user is asking so a deterministic "
+        "retriever can fetch the right evidence.\n"
+        "Identify:\n"
+        "  - intent: one of [" + intents + "]\n"
+        "      chitchat = greeting, thanks, 'who are you'\n"
+        "      compare = an explicit request to compare two repositories\n"
+        "      related = how one repo relates to another\n"
+        "      architecture = how a repo is built / its internals / components\n"
+        "      describe = explain a single project's purpose / identity\n"
+        "      similarity = shared code / reuse / similar layout across repos\n"
+        "      inactive = which repos are stale / abandoned / dead\n"
+        "      newest = which repos are newest / most recent\n"
+        "      recommend = what to continue / pause / work on next / prioritize\n"
+        "      portfolio = recurring themes / what the user is building / patterns\n"
+        "      value = which project is most valuable / worth most\n"
+        "      overlap = meaningful overlap BETWEEN projects (problem domain, "
+        "architecture, persistence, business goal) — NOT shared code\n"
+        "      integration = which project should integrate with Friday / merge into one system\n"
+        "      workspace = the whole engineering universe / direction / evolution\n"
+        "      by-tech = which projects use a technology or language\n"
+        "      insights = workspace observations / overview\n"
+        "      general = does not fit any other category\n"
+        "  - entities: repository / project names mentioned (exact names from context)\n"
+        "  - compare: true ONLY if the user explicitly wants two repos compared\n"
+        "  - workspace: true if the question spans the WHOLE workspace, not one repo\n"
+        "  - confidence: 0.0-1.0, your certainty about this classification\n"
+        "Understand questions naturally — do NOT rely on literal keywords. "
+        "e.g. 'What am I building?', 'What seems to connect my projects?', "
+        "'What direction is my work heading?', 'If someone saw my repositories what "
+        "would they think I build?' should all be portfolio. 'What overlaps?', "
+        "'What should integrate?', 'What should eventually become one system?' are "
+        "overlap / integration respectively.\n"
+        "Return valid JSON only. No prose, no explanations, no markdown. "
+        "If confidence is genuinely low (<0.3), return {\"intent\": \"Unknown\"}. "
+        'Schema: {"intent": str, "entities": [str], "compare": bool, "workspace": bool, "confidence": float}'
+    )
+
+
+def extract_intent(question: str, conn) -> Optional[Intent]:
+    """Structured intent extraction — the ONLY step that uses the LLM for
+    understanding.
+
+    OFFLINE (no LLM configured): returns the keyword classifier wrapped as an
+    Intent (graceful degradation).
+    ONLINE: calls the LLM. Returns the parsed Intent, or None when the model was
+    available but genuinely uncertain (returned "Unknown" / an invalid label) —
+    in which case the caller should admit it couldn't determine the question.
+    The LLM never retrieves and never answers here.
+    """
+    if not llm_enabled():
+        return Intent(intent=deterministic_classifier(question, conn))
+
+    # Give the model the vocabulary it can reason against (names only — no PII).
+    repo_names = [r.name for r in q.all_repositories(conn) if r.id is not None]
+    names_block = ", ".join(repo_names) if repo_names else "(no repositories ingested yet)"
+
+    base = os.environ.get("FRIDAY_LLM_BASE_URL", "http://localhost:20128/v1").rstrip("/")
+    model = os.environ["FRIDAY_LLM_MODEL"]
+    api_key = os.environ["FRIDAY_LLM_API_KEY"]
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _intent_explanation()},
+            {"role": "user", "content": (
+                f"Known projects in this workspace: {names_block}\n\n"
+                f"Question: {question}"
+            )},
+        ],
+        "temperature": 0.0,
+    }
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8")
+    except Exception:
+        return None
+    content = _extract_content(raw)
+    if not content:
+        return None
+    # Strip a markdown ```json ... ``` fence if the model wrapped its answer.
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("```", 2)[1]
+        if content.startswith("json"):
+            content = content[4:]
+    content = content.strip().strip("`").strip()
+    if content.startswith("json"):
+        content = content[4:].strip()
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    intent = data.get("intent")
+    if intent == "Unknown" or not intent:
+        # Honest uncertainty — signal the caller to say so plainly.
+        return None
+    if intent not in _VALID_INTENTS:
+        return None  # unknown label — degrade to keyword fallback
+    return Intent(
+        intent=intent,
+        entities=list(data.get("entities") or []),
+        compare=bool(data.get("compare", False)),
+        workspace=bool(data.get("workspace", False)),
+        confidence=float(data.get("confidence", 0.5)),
+    )
+
+
+def classify(question: str, conn) -> str:
+    """Public classify (kept for tests / direct callers).
+
+    ONLINE: LLM intent extraction. OFFLINE: keyword fallback. Returns the
+    canonical intent string consumed by `retrieve`.
+    """
+    intent = extract_intent(question, conn)
+    if intent is not None:
+        return intent.intent
+    return deterministic_classifier(question, conn)
 
 
 def _detect_repo(question: str, conn) -> Optional[Repository]:
@@ -382,6 +584,94 @@ def retrieve(question: str, intent: str, conn) -> Evidence:
         ev.raw["recommend"] = lines
         return ev
 
+    if intent == "portfolio":
+        from .portfolio import portfolio_synthesis, detect_themes
+
+        blocks = portfolio_synthesis(conn, today)
+        ev.blocks = blocks
+        ev.raw["portfolio"] = blocks
+        ev.raw["themes"] = [
+            {"theme": t.theme, "repos": t.repos, "confidence": t.confidence}
+            for t in detect_themes(conn, today)
+        ]
+        return ev
+
+    if intent == "value":
+        from .portfolio import project_value_ranking
+
+        ranked = project_value_ranking(conn, today)
+        if not ranked:
+            ev.raw["note"] = "no value signals available"
+            return ev
+        top = ranked[0]
+        lines = [
+            f"If 'most valuable' means accumulated evidence of purpose, business "
+            f"value, activity and importance, {top.repo} ranks highest."
+        ]
+        for v in ranked[:3]:
+            lines.append(f"- {v.repo} ({v.confidence} confidence): {'; '.join(v.signals)}.")
+        lines.append(
+            f"Confidence: {top.confidence} — based on stored purpose, business "
+            f"value, activity and relationship evidence, not commit counts alone."
+        )
+        ev.blocks = lines
+        ev.raw["value"] = [
+            {"repo": v.repo, "confidence": v.confidence, "signals": v.signals}
+            for v in ranked
+        ]
+        return ev
+
+    if intent == "overlap":
+        from .portfolio import meaningful_overlap
+
+        results = meaningful_overlap(conn, today)
+        if not results:
+            ev.blocks = [
+                "No meaningful cross-project overlap found in the stored evidence "
+                "(architecture, shared purpose, persistence, auth, storage, config)."
+            ]
+            return ev
+        blocks = ["Meaningful overlap across your projects (by responsibility and problem domain, not syntax):"]
+        for o in results:
+            blocks.append(f"- {o.a} and {o.b} ({o.confidence} confidence): "
+                          + "; ".join(o.dimensions) + ".")
+        ev.blocks = blocks
+        ev.raw["overlap"] = [
+            {"a": o.a, "b": o.b, "dimensions": o.dimensions, "confidence": o.confidence}
+            for o in results
+        ]
+        return ev
+
+    if intent == "integration":
+        from .portfolio import integration_opportunities
+
+        cands = integration_opportunities(conn, today)
+        if not cands:
+            ev.blocks = [
+                "No project currently shows reasonable evidence for integration "
+                "with Friday (no shared AI/assistant/workflow/OS purpose or "
+                "overlapping technology). Confidence: Weak."
+            ]
+            ev.raw["integration"] = []
+            return ev
+        blocks = ["Candidates to integrate with Friday (reasoned from project identity):"]
+        for c in cands:
+            blocks.append(f"- {c.repo} ({c.confidence} confidence): {c.reason}.")
+        ev.blocks = blocks
+        ev.raw["integration"] = [
+            {"repo": c.repo, "confidence": c.confidence, "reason": c.reason}
+            for c in cands
+        ]
+        return ev
+
+    if intent == "workspace":
+        from .portfolio import engineering_universe
+
+        lines = engineering_universe(conn, today)
+        ev.blocks = lines
+        ev.raw["universe"] = lines
+        return ev
+
     if intent == "by-tech":
         tech = _detect_tech(question, conn)
         if tech:
@@ -485,6 +775,14 @@ _SYSTEM = (
     "newest, uncommitted changes), clearly framed as a suggestion, not a command.\n"
     "5. Cite the basis briefly where natural (README, git metadata, technology "
     "detection, relationships).\n"
+    "6. PRIMACY: when a question is about one project, spend 80-90% of the answer "
+    "on that project's purpose, context and meaning. Put its relationships and "
+    "other repositories only near the END. Never open with implementation, "
+    "architecture dumps, or component lists.\n"
+    "7. CONFIDENCE: when the Evidence supports a judgement (value, overlap, "
+    "integration, themes), state Confidence: Strong / Medium / Weak and the basis. "
+    "Prefer context, purpose and engineering meaning; reserve architecture detail "
+    "for the final part of the answer.\n"
     "Do not role-play or add commentary beyond the answer."
 )
 
@@ -548,7 +846,20 @@ def _deterministic_answer(question: str, ev: Evidence, intent: str) -> str:
 
 
 def ask(question: str, conn, verbose: bool = False) -> Answer:
-    intent = classify(question, conn)
+    # ONLINE: LLM understands intent. OFFLINE / failure: keyword fallback.
+    extracted = extract_intent(question, conn)
+    if extracted is None:
+        # Could not confidently determine intent (LLM unavailable, or it returned
+        # "Unknown" / an invalid label). Honest, extremely-rare degradation.
+        return Answer(
+            text=("I couldn't confidently determine what you are asking. "
+                  "Try rephrasing, or set FRIDAY_LLM_MODEL so I can interpret "
+                  "open-ended questions."),
+            evidence=Evidence(intent="general"),
+            used_llm=False,
+        )
+    intent = extracted.intent
+
     ev = retrieve(question, intent, conn)
 
     text: Optional[str] = None

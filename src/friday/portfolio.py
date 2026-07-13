@@ -1,0 +1,626 @@
+"""Workspace-level reasoning — Milestone 3.6.
+
+Pure, deterministic aggregation over the SQLite knowledge base. No LLM, no new
+infrastructure: everything is derived from repositories, languages, technologies,
+architecture, components, entry points, relationships, identity and insights that
+M1–M3.5 already persist.
+
+The functions here answer the questions Friday *couldn't* before because it
+thought repository-first:
+
+  - What am I building?            (recurring themes across projects)
+  - Which project is most valuable? (aggregated evidence + confidence)
+  - What parts overlap?            (meaningful dimensions, not syntax)
+  - Which should integrate w/ Friday? (reasoned from identity)
+  - Which to continue / pause?     (leverage, not commit counts)
+  - What is my engineering universe? (workspace observations)
+
+Every output is evidence-backed and carries a Confidence level (Strong/Medium/
+Weak) with the basis stated. Nothing here invents — when evidence is thin we say
+so plainly rather than refusing with "I don't have enough evidence".
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Theme taxonomy (spec §1, §3, §9)
+# ---------------------------------------------------------------------------
+#
+# Candidate themes come from a FIXED registry, not from free-form inference.
+# Each theme lists signals; a signal matches a repo on one of its stored fields.
+# `weight` makes confidence computable: purpose-grade text is strong, a shared
+# technology/framework is medium, a maturity keyword is a weak coincidence.
+
+_STRONG = "Strong"
+_MEDIUM = "Medium"
+_WEAK = "Weak"
+
+# field: which stored fact a signal reads.
+#   purpose  -> ProjectIdentity.purpose (README/manifest/architecture hint)
+#   tech      -> detected technologies
+#   arch      -> stored architecture label
+#   maturity  -> repo.maturity
+#   biz       -> README-stated business value (presence)
+_THEME_SIGNALS: dict[str, list[tuple[str, str, str]]] = {
+    # theme: [(field, match_substring, weight)]
+    "AI infrastructure": [
+        ("purpose", "ai", _STRONG),
+        ("purpose", "machine learning", _STRONG),
+        ("purpose", "assistant", _STRONG),
+        ("purpose", "model", _MEDIUM),
+        ("tech", "supabase", _MEDIUM),
+        ("tech", "pytorch", _MEDIUM),
+        ("tech", "tensorflow", _MEDIUM),
+        ("arch", "ai", _MEDIUM),
+    ],
+    "Operating systems": [
+        ("purpose", "operating system", _STRONG),
+        ("purpose", "kernel", _STRONG),
+        ("purpose", "os in", _STRONG),
+        ("arch", "os", _MEDIUM),
+        ("tech", "rust", _MEDIUM),  # OS work is predominantly Rust here
+    ],
+    "Developer tooling": [
+        ("purpose", "developer", _STRONG),
+        ("purpose", "tooling", _STRONG),
+        ("purpose", "cli", _MEDIUM),
+        ("purpose", "command-line", _MEDIUM),
+        ("arch", "cli", _MEDIUM),
+        ("arch", "library", _MEDIUM),
+    ],
+    "Products": [
+        ("maturity", "beta", _MEDIUM),
+        ("maturity", "stable", _MEDIUM),
+        ("maturity", "alpha", _MEDIUM),
+        ("purpose", "app", _MEDIUM),
+        ("purpose", "product", _MEDIUM),
+        ("biz", "present", _STRONG),
+    ],
+    "Mental health": [
+        ("purpose", "mental health", _STRONG),
+        ("purpose", "wellness", _STRONG),
+        ("purpose", "therapy", _STRONG),
+    ],
+    "Commercial applications": [
+        ("biz", "present", _STRONG),
+        ("purpose", "commercial", _STRONG),
+        ("purpose", "business", _MEDIUM),
+        ("maturity", "beta", _WEAK),
+        ("maturity", "stable", _WEAK),
+    ],
+    "Research": [
+        ("purpose", "research", _STRONG),
+        ("purpose", "experiment", _MEDIUM),
+        ("maturity", "unknown", _WEAK),
+        ("maturity", "wip", _WEAK),
+    ],
+}
+
+
+@dataclass
+class ThemeResult:
+    theme: str
+    repos: list[str]
+    evidence: list[str]
+    confidence: str
+
+    @property
+    def is_real(self) -> bool:
+        return bool(self.repos)
+
+
+@dataclass
+class ValueResult:
+    repo: str
+    score: float
+    signals: list[str]
+    confidence: str
+
+
+@dataclass
+class OverlapResult:
+    a: str
+    b: str
+    dimensions: list[str]  # meaningful, evidence-backed dimensions only
+    confidence: str
+
+
+@dataclass
+class IntegrationResult:
+    repo: str
+    reason: str
+    confidence: str
+
+
+@dataclass
+class WorkspaceRec:
+    continue_projects: list[tuple[str, str]]   # (name, why)
+    pause_projects: list[tuple[str, str]]      # (name, why)
+    attention: tuple[str, str]                  # (name, why) — most attention
+    confidence: str
+
+
+# ---------------------------------------------------------------------------
+# Evidence gathering helpers
+# ---------------------------------------------------------------------------
+
+
+def _repo_facts(conn, today: dt.date) -> dict[int, dict]:
+    """Build a per-repo evidence dict reused by every portfolio function."""
+    from . import identity
+    from .db import get_technologies, get_architecture
+
+    out: dict[int, dict] = {}
+    for r in _repos(conn):
+        if r.id is None:
+            continue
+        ident = identity.build_identity(conn, r.id, today)
+        techs = [t.tech for t in get_technologies(conn, r.id)]
+        arch = get_architecture(conn, r.id)
+        biz = bool(ident.business_value) if ident else False
+        out[r.id] = {
+            "name": r.name,
+            "purpose": (ident.purpose or "").lower() if ident else "",
+            "tech": {t.lower() for t in techs},
+            "arch": (arch.architecture or "").lower() if arch else "",
+            "maturity": (r.maturity or "unknown").lower(),
+            "biz": biz,
+            "commit_count": r.commit_count or 0,
+            "last_commit_date": r.last_commit_date,
+            "is_dirty": r.is_dirty,
+            "identity": ident,
+        }
+    return out
+
+
+def _repos(conn):
+    from .query import all_repositories
+
+    return all_repositories(conn)
+
+
+# ---------------------------------------------------------------------------
+# Themes (§1, §3, §9)
+# ---------------------------------------------------------------------------
+
+
+def detect_themes(conn, today: Optional[dt.date] = None) -> list[ThemeResult]:
+    today = today or dt.date.today()
+    facts = _repo_facts(conn, today)
+    results: list[ThemeResult] = []
+
+    for theme, signals in _THEME_SIGNALS.items():
+        matched: list[str] = []
+        ev: list[str] = []
+        strong_hits = 0
+        medium_hits = 0
+        for rid, f in facts.items():
+            for field_, match, weight in signals:
+                val = {
+                    "purpose": f["purpose"],
+                    "tech": " ".join(f["tech"]),
+                    "arch": f["arch"],
+                    "maturity": f["maturity"],
+                    "biz": "present" if f["biz"] else "",
+                }[field_]
+                if match in val:
+                    if f["name"] not in matched:
+                        matched.append(f["name"])
+                        ev.append(f"{f['name']}: {field_} mentions '{match}'")
+                    if weight == _STRONG:
+                        strong_hits += 1
+                    elif weight == _MEDIUM:
+                        medium_hits += 1
+                    break  # one signal per repo is enough to count the repo
+        if not matched:
+            continue
+        if strong_hits >= 2 or (strong_hits >= 1 and medium_hits >= 1):
+            conf = _STRONG
+        elif strong_hits == 1 or medium_hits >= 2:
+            conf = _MEDIUM
+        else:
+            conf = _WEAK
+        results.append(ThemeResult(theme=theme, repos=matched, evidence=ev, confidence=conf))
+
+    # Rank: confidence then breadth of support.
+    order = {_STRONG: 0, _MEDIUM: 1, _WEAK: 2}
+    results.sort(key=lambda r: (order[r.confidence], -len(r.repos)))
+    return results
+
+
+def portfolio_synthesis(conn, today: Optional[dt.date] = None) -> list[str]:
+    """Answer 'What am I building?' — themes first, then recurring tech, then
+    repeated problems, then skills. Always ends with a Confidence line."""
+    today = today or dt.date.today()
+    blocks: list[str] = []
+    themes = detect_themes(conn, today)
+    if themes:
+        blocks.append("Recurring themes across your projects:")
+        for t in themes:
+            names = ", ".join(t.repos)
+            blocks.append(f"- {t.theme} ({t.confidence} confidence): {names}.")
+    else:
+        blocks.append("No strong recurring themes detected yet — too few projects with purpose evidence.")
+
+    from .query import duplicate_tech
+
+    dups = duplicate_tech(conn)
+    non_lang = {k: v for k, v in dups.items() if k not in _LANG_SET}
+    if non_lang:
+        top = sorted(non_lang.items(), key=lambda kv: -len(kv[1]))[:5]
+        blocks.append("Technologies that keep appearing:")
+        for tech, names in top:
+            blocks.append(f"- {tech}: {', '.join(names)}.")
+
+    # Repeated engineering problems: shared architecture labels + shared purpose.
+    from .db import get_architecture
+
+    arch_groups: dict[str, list[str]] = {}
+    for r in _repos(conn):
+        if r.id is None:
+            continue
+        a = get_architecture(conn, r.id)
+        if a and a.architecture not in ("Unknown", ""):
+            arch_groups.setdefault(a.architecture, []).append(r.name)
+    repeated = {k: v for k, v in arch_groups.items() if len(v) >= 2}
+    if repeated:
+        blocks.append("Engineering problems you keep solving:")
+        for label, names in sorted(repeated.items(), key=lambda kv: -len(kv[1])):
+            blocks.append(f"- {label}: {', '.join(names)}.")
+
+    # Skills signal: language/tech breadth across the workspace.
+    langs = {l.language for r in _repos(conn) if r.id is not None
+             for l in _langs(conn, r.id)}
+    if langs:
+        blocks.append(f"Skill breadth: you work across {len(langs)} languages "
+                      f"({', '.join(sorted(langs))}).")
+
+    # Confidence line (the basis, so it is never a bare claim).
+    if themes:
+        top = themes[0]
+        blocks.append(
+            f"Confidence: {top.confidence} — themes derived from README purposes, "
+            f"technologies and architecture labels already stored for your projects."
+        )
+    else:
+        blocks.append(
+            "Confidence: Weak — little purpose/architecture evidence is stored. "
+            "Run `friday analyze <path>` on more repos to sharpen this picture."
+        )
+    return blocks
+
+
+# ---------------------------------------------------------------------------
+# Project value (§4)
+# ---------------------------------------------------------------------------
+
+
+def project_value_ranking(conn, today: Optional[dt.date] = None) -> list[ValueResult]:
+    """Aggregate evidence into a value ranking (spec §4 signals). Never refuses
+    with 'not enough evidence' when any signal exists — instead states
+    Medium/Weak confidence and the basis."""
+    today = today or dt.date.today()
+    from .query import most_active
+
+    facts = _repo_facts(conn, today)
+    total_commits = sum(f["commit_count"] for f in facts.values())
+    active = {r.id: s for r, s in most_active(conn, today, len(facts))}
+
+    results: list[ValueResult] = []
+    for rid, f in facts.items():
+        signals: list[str] = []
+        score = 0.0
+        if f["identity"] and f["identity"].purpose:
+            signals.append("has a stated purpose")
+            score += 2
+        if f["biz"]:
+            signals.append("explicitly states business value")
+            score += 3
+        if rid in active:
+            signals.append("high recent commit frequency")
+            score += min(active[rid], 4)
+        if f["commit_count"] and total_commits and f["commit_count"] / total_commits >= 0.4:
+            signals.append("carries the majority of workspace commits")
+            score += 3
+        if f["identity"]:
+            if f["identity"].readme_quality and f["identity"].readme_quality not in ("poor", "boilerplate", "none"):
+                signals.append("mature README")
+                score += 1
+            if f["identity"].related_projects:
+                signals.append(f"tied to {len(f['identity'].related_projects)} other project(s)")
+                score += 1.5
+            if f["identity"].blockers:
+                signals.append("has known blockers (" + "; ".join(f["identity"].blockers) + ")")
+                score -= 1.5
+        if f["is_dirty"]:
+            signals.append("has active, uncommitted work")
+            score += 2
+
+        if not signals:
+            continue  # truly nothing — exclude rather than fabricate
+        if score >= 6:
+            conf = _STRONG
+        elif score >= 3:
+            conf = _MEDIUM
+        else:
+            conf = _WEAK
+        results.append(ValueResult(repo=f["name"], score=score, signals=signals, confidence=conf))
+
+    results.sort(key=lambda r: r.score, reverse=True)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Meaningful overlap (§5)
+# ---------------------------------------------------------------------------
+
+
+def meaningful_overlap(conn, today: Optional[dt.date] = None) -> list[OverlapResult]:
+    """Compare projects along meaningful dimensions (spec §5), never syntax.
+
+    Reuses query.compare_repositories for architecture/responsibilities/deployment/
+    persistence/interfaces, then adds business goal, authentication, storage and
+    config approach from relationships + Medium+ components. main()/Utility
+    script/package.json/single-dependency noise is excluded by construction.
+    """
+    today = today or dt.date.today()
+    from .query import compare_repositories, all_repositories
+    from .db import get_all_relationships, get_components
+    from . import judgment
+
+    repos = all_repositories(conn)
+    named = {r.id: r.name for r in repos if r.id is not None}
+    rels = get_all_relationships(conn)
+
+    results: list[OverlapResult] = []
+    for i in range(len(repos)):
+        for j in range(i + 1, len(repos)):
+            a, b = repos[i], repos[j]
+            if a.id is None or b.id is None:
+                continue
+            cmp = compare_repositories(conn, a.id, b.id)
+            dims: list[str] = []
+            if cmp["architecture"]:
+                dims.append(cmp["architecture"])
+            if cmp["responsibilities"]:
+                dims.append(cmp["responsibilities"])
+            if cmp["deployment"]:
+                dims.append(cmp["deployment"])
+            if cmp["persistence"]:
+                dims.append(cmp["persistence"])
+            if cmp["interfaces"]:
+                dims.append(cmp["interfaces"])
+
+            # Business goal: shared stated purpose / duplicated functionality.
+            for r in rels:
+                if {r.repo_a, r.repo_b} == {a.id, b.id} and r.kind == "duplicated-functionality":
+                    dims.append(f"shared business goal: {r.evidence}")
+                    break
+
+            # Auth / Storage from Medium+ components (Weak concepts excluded).
+            for rid, rname in ((a.id, a.name), (b.id, b.name)):
+                for c in get_components(conn, rid):
+                    if judgment.is_weak(judgment.component_strength(c.name)):
+                        continue  # concept, not an implementation to compare
+                    if c.name in ("Authentication", "Storage"):
+                        other = b.name if rname == a.name else a.name
+                        dims.append(f"both implement {c.name.lower()} ({c.evidence})")
+
+            # Config approach: shared-config relationship.
+            for r in rels:
+                if {r.repo_a, r.repo_b} == {a.id, b.id} and r.kind == "shared-config":
+                    dims.append(f"similar configuration approach ({r.evidence})")
+
+            if dims:
+                # Dedup while preserving order.
+                seen = set()
+                clean = [d for d in dims if not (d in seen or seen.add(d))]
+                conf = _STRONG if len(clean) >= 3 else _MEDIUM
+                results.append(OverlapResult(a=a.name, b=b.name, dimensions=clean, confidence=conf))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Integration opportunities (§6)
+# ---------------------------------------------------------------------------
+
+
+def integration_opportunities(conn, today: Optional[dt.date] = None) -> list[IntegrationResult]:
+    """Which project should eventually integrate with Friday (spec §6).
+
+    Reasoned from identity — not hardcoded names. A repo is a candidate when its
+    purpose/tech indicates AI-assistant, knowledge-management, developer-workflow
+    or systems-integration potential, OR it already shares architecture/tech with
+    a Friday repo. Confidence reflects how direct that evidence is.
+    """
+    today = today or dt.date.today()
+    from .query import all_repositories
+
+    friday_repo = next(
+        (r for r in all_repositories(conn) if r.id is not None and "friday" in r.name.lower()),
+        None,
+    )
+    friday_techs = set()
+    if friday_repo and friday_repo.id is not None:
+        friday_techs = {t.tech.lower() for t in _techs(conn, friday_repo.id)}
+
+    # Purpose/tech markers that signal a natural fit with an operating partner.
+    _FIT = [
+        ("ai", _STRONG), ("assistant", _STRONG), ("knowledge", _MEDIUM),
+        ("developer", _MEDIUM), ("workflow", _MEDIUM), ("kernel", _MEDIUM),
+        ("operating system", _MEDIUM), ("health", _MEDIUM), ("mental", _MEDIUM),
+        ("product", _WEAK), ("app", _WEAK),
+    ]
+
+    results: list[IntegrationResult] = []
+    for r in all_repositories(conn):
+        if r.id is None:
+            continue
+        if friday_repo and r.id == friday_repo.id:
+            continue
+        ident = _identity(conn, r.id, today)
+        purpose = (ident.purpose or "").lower() if ident else ""
+        techs = {t.lower() for t in _techs_names(conn, r.id)}
+        reasons: list[str] = []
+
+        for marker, weight in _FIT:
+            if marker in purpose:
+                reasons.append(f"purpose suggests {marker}-oriented work")
+                strength = weight
+                break
+        else:
+            strength = _WEAK
+
+        shared = sorted(techs & friday_techs)
+        if shared:
+            reasons.append("shares technology with Friday: " + ", ".join(shared))
+            strength = _STRONG if strength in (_STRONG, _MEDIUM) else _MEDIUM
+
+        if reasons:
+            results.append(IntegrationResult(
+                repo=r.name, reason="; ".join(reasons), confidence=strength,
+            ))
+
+    results.sort(key=lambda x: {"Strong": 0, "Medium": 1, "Weak": 2}[x.confidence])
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Workspace recommendations (§8)
+# ---------------------------------------------------------------------------
+
+
+def workspace_recommendations(conn, today: Optional[dt.date] = None) -> WorkspaceRec:
+    """Continue / pause / most-attention (spec §8). Combines identity, business
+    value, activity, blockers, importance, maturity, recent work, relationships
+    and purpose — never commit counts alone."""
+    today = today or dt.date.today()
+    from .query import workspace_priorities
+
+    prios = workspace_priorities(conn, today, n=3)
+    facts = _repo_facts(conn, today)
+
+    continue_list: list[tuple[str, str]] = [(r.name, "; ".join(reasons)) for r, reasons in prios]
+
+    # Most attention: the top priority repo, enriched with business value.
+    if prios:
+        top_repo, top_reasons = prios[0]
+        why = "; ".join(top_reasons)
+        if facts.get(top_repo.id) and facts[top_repo.id]["biz"]:
+            why += " — and it states explicit business value"
+        attention = (top_repo.name, why)
+    else:
+        attention = ("(none)", "no repositories ingested")
+
+    # Pause candidates: dormant / low maturity / low importance, no active blockers.
+    pause: list[tuple[str, str]] = []
+    for rid, f in facts.items():
+        if f["identity"] and f["identity"].blockers:
+            continue  # something is actively in the way — not a pause candidate
+        stale = f["last_commit_date"] and (today - dt.date.fromisoformat(f["last_commit_date"][:10])).days > 180
+        low = (f["maturity"] in ("wip", "unknown")) and f["commit_count"] < 50
+        if stale or low:
+            reason = "no commit in 180+ days" if stale else "early/low-maturity with little activity"
+            pause.append((f["name"], reason))
+
+    # Confidence: grounded if we have priorities + identity signal.
+    if prios and any(facts.get(r.id) and facts[r.id]["identity"] for r, _ in prios):
+        conf = _MEDIUM
+    else:
+        conf = _WEAK
+    return WorkspaceRec(
+        continue_projects=continue_list,
+        pause_projects=pause,
+        attention=attention,
+        confidence=conf,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Engineering universe (§9)
+# ---------------------------------------------------------------------------
+
+
+def engineering_universe(conn, today: Optional[dt.date] = None) -> list[str]:
+    """Workspace-level observations (spec §9). Derived from themes, shared tech
+    and relationships — never from a single repository."""
+    today = today or dt.date.today()
+    out: list[str] = []
+    themes = detect_themes(conn, today)
+
+    # Theme prevalence.
+    for t in themes:
+        if t.confidence in (_STRONG, _MEDIUM):
+            out.append(f"{len(t.repos)} of your projects relate to {t.theme.lower()} "
+                       f"({', '.join(t.repos)}).")
+
+    # Repeated technology -> "several projects reuse X".
+    from .query import duplicate_tech
+
+    non_lang = {k: v for k, v in duplicate_tech(conn).items() if k not in _LANG_SET}
+    for tech, names in sorted(non_lang.items(), key=lambda kv: -len(kv[1]))[:3]:
+        out.append(f"Several projects reuse {tech} ({'/'.join(names)}).")
+
+    # Friday as integration point.
+    friday_repo = next(
+        (r for r in _repos(conn) if r.id is not None and "friday" in r.name.lower()), None
+    )
+    from .db import get_all_relationships
+
+    if friday_repo:
+        rel_count = sum(1 for r in get_all_relationships(conn)
+                        if r.repo_a == friday_repo.id or r.repo_b == friday_repo.id)
+        if rel_count >= 2:
+            out.append(f"Friday has become the integration point for {rel_count} other efforts.")
+
+    # Commercial shift.
+    if any(t.theme in ("Commercial applications", "Products") for t in themes):
+        out.append("Development focus has shifted toward commercial products.")
+
+    # OS exploration count.
+    os_theme = next((t for t in themes if t.theme == "Operating systems"), None)
+    if os_theme:
+        out.append(f"{len(os_theme.repos)} projects explore operating-system ideas.")
+
+    if not out:
+        out.append("Not enough cross-project evidence yet to characterize the workspace.")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Small reused helpers (kept local to avoid import churn)
+# ---------------------------------------------------------------------------
+
+
+_LANG_SET = {
+    "Rust", "Python", "Go", "TypeScript", "Java", "C++", "JavaScript",
+    "Ruby", "Swift", "Kotlin", "C#", "C", "PHP", "Elixir",
+}
+
+
+def _langs(conn, repo_id: int):
+    from .db import get_languages
+
+    return get_languages(conn, repo_id)
+
+
+def _techs(conn, repo_id: int):
+    from .db import get_technologies
+
+    return get_technologies(conn, repo_id)
+
+
+def _techs_names(conn, repo_id: int) -> list[str]:
+    return [t.tech for t in _techs(conn, repo_id)]
+
+
+def _identity(conn, repo_id: int, today: dt.date):
+    from . import identity
+
+    return identity.build_identity(conn, repo_id, today)
