@@ -397,7 +397,13 @@ def compare_repositories(conn, a_id: int, b_id: int) -> dict:
     # Persistence = db-ish techs only (not every shared dependency).
     _DB = {"SQLite", "Postgres", "Redis", "MySQL", "MongoDB", "Prisma"}
     shared_persistence = [t for t in shared_tech if t in _DB]
-    shared_interfaces = sorted({e.kind for e in a_eps} & {e.kind for e in b_eps})
+    # Shared *meaningful* interface surface only — a main()/script in two repos
+    # is not an abstraction to share (audit: reused by meaningful_overlap, which
+    # must NOT surface main() as overlap, M3.6 §5).
+    _WEAK_EP = {"main()", "Executable script", "Utility script"}
+    shared_interfaces = sorted(
+        ({e.kind for e in a_eps} & {e.kind for e in b_eps}) - _WEAK_EP
+    )
 
     def arch_label(x):
         return x.architecture if x else "Unknown"

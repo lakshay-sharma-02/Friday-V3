@@ -213,3 +213,30 @@ def test_classify_3_6_intents(conn):
     assert classify("What is my engineering universe?", conn) == "workspace"
     assert classify("What is Aether?", conn) == "describe"
     assert classify("Which projects use Rust?", conn) == "by-tech"
+
+
+# --- B18: overlap must never surface main() as a meaningful dimension ---------
+
+
+def test_b18_overlap_excludes_main_entry_point(conn):
+    from friday.portfolio import meaningful_overlap
+
+    results = meaningful_overlap(conn)
+    for o in results:
+        assert "main()" not in "; ".join(o.dimensions), (
+            f"{o.a}/{o.b} overlap leaked main(): {o.dimensions}"
+        )
+
+
+# --- B19: theme/integration matching uses whole tokens (no 'ai' in 'domain') ---
+
+
+def test_b19_ai_token_match_is_whole_word(tmp_path):
+    from friday.portfolio import _matches
+
+    # 'ai' as a standalone token / prefix should match...
+    assert _matches("an ai-native operating system", "ai")
+    assert _matches("purpose: ai assistant", "ai")
+    # ...but NOT as a substring of unrelated words.
+    assert not _matches("a domain-specific language", "ai")
+    assert not _matches("please email me", "ai")

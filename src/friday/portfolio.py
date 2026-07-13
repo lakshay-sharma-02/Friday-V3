@@ -208,7 +208,7 @@ def detect_themes(conn, today: Optional[dt.date] = None) -> list[ThemeResult]:
                     "maturity": f["maturity"],
                     "biz": "present" if f["biz"] else "",
                 }[field_]
-                if match in val:
+                if _matches(val, match):
                     if f["name"] not in matched:
                         matched.append(f["name"])
                         ev.append(f"{f['name']}: {field_} mentions '{match}'")
@@ -470,7 +470,7 @@ def integration_opportunities(conn, today: Optional[dt.date] = None) -> list[Int
         reasons: list[str] = []
 
         for marker, weight in _FIT:
-            if marker in purpose:
+            if _matches(purpose, marker):
                 reasons.append(f"purpose suggests {marker}-oriented work")
                 strength = weight
                 break
@@ -602,6 +602,15 @@ _LANG_SET = {
     "Rust", "Python", "Go", "TypeScript", "Java", "C++", "JavaScript",
     "Ruby", "Swift", "Kotlin", "C#", "C", "PHP", "Elixir",
 }
+
+
+def _matches(text: str, needle: str) -> bool:
+    """Whole-token match: 'ai' matches 'ai'/'ai-native'/'ai-assisted' but NOT
+    'domain'/'email'/'train'. Needed so loose theme tokens don't false-positive
+    on substrings (e.g. Aether is an AI-native OS, not generic 'ai' noise)."""
+    import re
+
+    return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", text) is not None
 
 
 def _langs(conn, repo_id: int):
