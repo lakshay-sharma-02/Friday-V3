@@ -16,6 +16,7 @@ from .query import (
     abandoned_repos,
     all_repositories,
     duplicate_tech,
+    get_technologies,
     most_active,
     newest_repos,
 )
@@ -177,12 +178,12 @@ def _converging_tech_trend(conn) -> Optional[tuple[str, int, int]]:
 
     prev_tech: dict[str, set[str]] = {}
     cur_tech: dict[str, set[str]] = {}
-    for rid, f in q._repo_facts(conn, q._today()).items():
-        path = next((r.path for r in q.all_repositories(conn) if r.id == rid), None)
-        if path in prev_paths:
-            prev_tech.setdefault(path, set()).update(f["tech"])
-        if path in cur_paths:
-            cur_tech.setdefault(path, set()).update(f["tech"])
+    for r in q.all_repositories(conn):
+        techs = {t.tech for t in get_technologies(conn, r.id)}
+        if r.path in prev_paths:
+            prev_tech.setdefault(r.path, set()).update(techs)
+        if r.path in cur_paths:
+            cur_tech.setdefault(r.path, set()).update(techs)
 
     best = None
     for tech in set().union(*cur_tech.values()) if cur_tech else set():

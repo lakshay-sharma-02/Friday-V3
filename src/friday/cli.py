@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .ask import ask
+from .ask import Exchange, ask
 from .architecture import analyze_and_store
 from .db import connect
 from .knowledge import ingest_paths
@@ -52,6 +52,33 @@ def cmd_ask(args: argparse.Namespace) -> int:
             print("(no retrieved evidence)")
         print(f"\n[synthesized via LLM: {answer.used_llm}]\n")
     print(answer.text)
+    return 0
+
+
+def cmd_chat(args: argparse.Namespace) -> int:
+    """Bounded conversational loop (M6.5D): remembers only the last exchange.
+
+    Thin wrapper over ask(prev=...) — no new architecture, no persistence.
+    """
+    conn = connect()
+    prev: Exchange | None = None
+    print("Friday chat — type 'exit' to quit. I only remember the last thing we said.")
+    while True:
+        try:
+            q = input("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not q:
+            continue
+        if q.lower() in ("exit", "quit"):
+            break
+        ans = ask(q, conn, prev=prev, verbose=args.verbose)
+        prev = Exchange(q, ans)
+        if args.verbose:
+            print("[evidence]", "; ".join(ans.evidence.blocks) or "(none)")
+        print(ans.text)
+    conn.close()
     return 0
 
 
@@ -107,6 +134,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Show the retrieved evidence block behind the answer.",
     )
     p_ask.set_defaults(func=cmd_ask)
+
+    p_chat = sub.add_parser(
+        "chat", help="Conversational loop that remembers only the last exchange."
+    )
+    p_chat.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show the retrieved evidence block behind each answer.",
+    )
+    p_chat.set_defaults(func=cmd_chat)
 
     p_analyze = sub.add_parser(
         "analyze", help="Extract and persist repository architecture knowledge."

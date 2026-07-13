@@ -212,11 +212,14 @@ def _repo_facts(conn, today: dt.date) -> dict[int, dict]:
             "purpose": (ident.purpose or "").lower() if ident else "",
             "tech": {t.lower() for t in techs},
             "arch": (arch.architecture or "").lower() if arch else "",
+            "arch_raw": (arch.architecture or "") if arch else "",
+            "complexity": (arch.complexity or "") if arch else "",
             "maturity": (r.maturity or "unknown").lower(),
             "biz": biz,
             "commit_count": r.commit_count or 0,
             "last_commit_date": r.last_commit_date,
             "is_dirty": r.is_dirty,
+            "related": ident.related_projects if ident else [],
             "identity": ident,
         }
     return out
@@ -278,10 +281,19 @@ def detect_themes(conn, today: Optional[dt.date] = None) -> list[ThemeResult]:
 
 
 def portfolio_synthesis(conn, today: Optional[dt.date] = None) -> list[str]:
-    """Answer 'What am I building?' — themes first, then recurring tech, then
-    repeated problems, then skills. Always ends with a Confidence line."""
+    """Answer 'What am I building?' — portfolio IDENTITY only.
+
+    Pulls the smallest evidence set that answers 'what/who am I building':
+    recurring themes (purpose-level), then what each project's stated purpose
+    is, then the roadmap/goals the author set. Deliberately OMITS languages,
+    architectures and activity — those answer 'what strengths am I developing'
+    and 'where is my effort going', not 'what am I building'. Ends with a
+    Confidence line."""
     today = today or dt.date.today()
     blocks: list[str] = []
+    facts = _repo_facts(conn, today)
+
+    # Recurring themes across projects — the clearest 'what am I building' signal.
     themes = detect_themes(conn, today)
     if themes:
         blocks.append("Recurring themes across your projects:")
@@ -291,42 +303,18 @@ def portfolio_synthesis(conn, today: Optional[dt.date] = None) -> list[str]:
     else:
         blocks.append("No strong recurring themes detected yet — too few projects with purpose evidence.")
 
-    from .query import duplicate_tech
+    # Portfolio identity: each project's stated purpose (what it IS being built).
+    by_purpose = sorted(
+        {f["name"]: f["purpose"] for f in facts.values() if f["purpose"]}.items(),
+        key=lambda kv: kv[0],
+    )
+    if by_purpose:
+        blocks.append("What each project is (by stated purpose):")
+        for name, purpose in by_purpose:
+            blocks.append(f"- {name}: {purpose.rstrip('.')}.")
 
-    dups = duplicate_tech(conn)
-    non_lang = {k: v for k, v in dups.items() if k not in _LANG_SET}
-    if non_lang:
-        top = sorted(non_lang.items(), key=lambda kv: -len(kv[1]))[:5]
-        blocks.append("Technologies that keep appearing:")
-        for tech, names in top:
-            blocks.append(f"- {tech}: {', '.join(names)}.")
-
-    # Repeated engineering problems: shared architecture labels + shared purpose.
-    from .db import get_architecture
-
-    arch_groups: dict[str, list[str]] = {}
-    for r in _repos(conn):
-        if r.id is None:
-            continue
-        a = get_architecture(conn, r.id)
-        if a and a.architecture not in ("Unknown", ""):
-            arch_groups.setdefault(a.architecture, []).append(r.name)
-    repeated = {k: v for k, v in arch_groups.items() if len(v) >= 2}
-    if repeated:
-        blocks.append("Engineering problems you keep solving:")
-        for label, names in sorted(repeated.items(), key=lambda kv: -len(kv[1])):
-            blocks.append(f"- {label}: {', '.join(names)}.")
-
-    # Skills signal: language/tech breadth across the workspace.
-    langs = {l.language for r in _repos(conn) if r.id is not None
-             for l in _langs(conn, r.id)}
-    if langs:
-        blocks.append(f"Skill breadth: you work across {len(langs)} languages "
-                      f"({', '.join(sorted(langs))}).")
-
-    # Stated intent vs actual effort (Part C/D): what the author SAID they'd
-    # build (from README Roadmap/Goals) vs where commits actually flow. This is
-    # computed from persisted summary + git metadata — no new storage.
+    # Stated intent (Part C): what the author SAID they'd build (README
+    # Roadmap/Goals). This is the author's own 'what I'm building' statement.
     intents = all_stated_intents(conn)
     if intents:
         blocks.append("What you've stated you're building (from project roadmaps/goals):")
@@ -337,12 +325,12 @@ def portfolio_synthesis(conn, today: Optional[dt.date] = None) -> list[str]:
     if themes:
         top = themes[0]
         blocks.append(
-            f"Confidence: {top.confidence} — themes derived from README purposes, "
-            f"technologies and architecture labels already stored for your projects."
+            f"Confidence: {top.confidence} — derived from project purposes and "
+            f"roadmaps already stored for your projects."
         )
     else:
         blocks.append(
-            "Confidence: Weak — little purpose/architecture evidence is stored. "
+            "Confidence: Weak — little purpose/roadmap evidence is stored. "
             "Run `friday analyze <path>` on more repos to sharpen this picture."
         )
     return blocks
@@ -355,29 +343,33 @@ def portfolio_synthesis(conn, today: Optional[dt.date] = None) -> list[str]:
 
 def portfolio_strengths(conn, today: Optional[dt.date] = None) -> list[str]:
     """Answer 'what engineering strengths am I developing?' — evidence of
-    *capability*: repeated patterns, architectures built, languages, systems
-    shipped, problem domains tackled. Distinct from portfolio_synthesis, which
-    leads with product themes."""
+    *capability built*: repeated architectures, engineering patterns, languages,
+    systems shipped, and complexity handled. Deliberately OMITS portfolio
+    purpose/themes (that is 'what am I building') and current activity (that is
+    'where is my effort going'). Ends with a Confidence line."""
     today = today or dt.date.today()
     facts = _repo_facts(conn, today)
     blocks: list[str] = []
 
-    # Architectures / systems actually built (from stored architecture labels).
-    from .db import get_architecture
-
+    # Systems / architectures actually built (from stored architecture labels).
     arch_counts: dict[str, list[str]] = {}
-    for r in _repos(conn):
-        if r.id is None:
-            continue
-        a = get_architecture(conn, r.id)
-        if a and a.architecture and a.architecture != "Unknown":
-            arch_counts.setdefault(a.architecture, []).append(r.name)
+    for f in facts.values():
+        a = f["arch_raw"]
+        if a and a != "Unknown":
+            arch_counts.setdefault(a, []).append(f["name"])
     if arch_counts:
         blocks.append("Systems and architectures you've built:")
         for arch, names in sorted(arch_counts.items(), key=lambda kv: -len(kv[1])):
             blocks.append(f"- {arch}: {', '.join(names)}.")
 
-    # Languages / tech breadth = the surface of your engineering capability.
+    # Repeated architectures = the same class of system solved more than once.
+    repeated = {k: v for k, v in arch_counts.items() if len(v) >= 2}
+    if repeated:
+        blocks.append("Engineering patterns you've repeated across projects:")
+        for label, names in sorted(repeated.items(), key=lambda kv: -len(kv[1])):
+            blocks.append(f"- {label} (solved in {', '.join(names)})")
+
+    # Language / tech surface = breadth of capability.
     langs = {l.language for r in _repos(conn) if r.id is not None
              for l in _langs(conn, r.id)}
     if langs:
@@ -386,22 +378,12 @@ def portfolio_strengths(conn, today: Optional[dt.date] = None) -> list[str]:
             f"({', '.join(sorted(langs))})."
         )
 
-    # Problem domains you keep returning to (theme purposes, not product names).
-    themes = detect_themes(conn, today)
-    eng_themes = [t for t in themes if t.theme in (
-        "Operating systems", "Developer tooling", "AI infrastructure", "Research")]
-    if eng_themes:
-        blocks.append("Engineering problem domains you keep returning to:")
-        for t in eng_themes:
-            blocks.append(f"- {t.theme} ({t.confidence}): {', '.join(t.repos)}.")
-
-    # Repeated engineering patterns (shared architecture labels = same kind of
-    # system solved more than once).
-    repeated = {k: v for k, v in arch_counts.items() if len(v) >= 2}
-    if repeated:
-        blocks.append("Patterns you've repeated across projects:")
-        for label, names in sorted(repeated.items(), key=lambda kv: -len(kv[1])):
-            blocks.append(f"- {label} (solved in {', '.join(names)})")
+    # Complexity handled (stored architecture complexity) = depth of strength.
+    complex_bits = [(f["name"], f["complexity"]) for f in facts.values() if f["complexity"]]
+    if complex_bits:
+        blocks.append("Complex systems you've taken on:")
+        for name, c in complex_bits:
+            blocks.append(f"- {name}: {c}")
 
     if not blocks:
         blocks.append(
@@ -410,7 +392,7 @@ def portfolio_strengths(conn, today: Optional[dt.date] = None) -> list[str]:
         )
     blocks.append(
         "Confidence: Medium — derived from stored architecture labels, "
-        "languages and problem-domain themes, not from commit counts."
+        "languages and complexity, not from purpose themes or commit counts."
     )
     return blocks
 
@@ -463,6 +445,92 @@ def portfolio_effort(conn, today: Optional[dt.date] = None) -> list[str]:
     blocks.append(
         "Confidence: Medium — based on live git status, commit velocity and "
         "observation history, not on self-reported intent."
+    )
+    return blocks
+
+
+def portfolio_identity(conn, today: Optional[dt.date] = None) -> list[str]:
+    """Answer 'What kind of engineer am I?' — self-portrait from the body of
+    work: engineering DOMAINS you operate in, breadth vs specialization, the
+    recurring engineering DECISIONS you make, and the DIRECTION the portfolio is
+    heading. Deliberately OMITS current activity ('where is my effort going')
+    and product purpose ('what am I building'). Ends with a Confidence line."""
+    today = today or dt.date.today()
+    facts = _repo_facts(conn, today)
+    blocks: list[str] = []
+
+    # Engineering domains: which engineering areas the work actually spans.
+    themes = detect_themes(conn, today)
+    if themes:
+        blocks.append("Engineering domains you operate across:")
+        for t in themes:
+            blocks.append(f"- {t.theme} ({t.confidence} confidence): {', '.join(t.repos)}.")
+
+    # Breadth vs specialization, computed from the workspace itself.
+    langs = {l.language for r in _repos(conn) if r.id is not None
+             for l in _langs(conn, r.id)}
+    arch_counts: dict[str, int] = {}
+    for f in facts.values():
+        a = f["arch_raw"]
+        if a and a != "Unknown":
+            arch_counts[a] = arch_counts.get(a, 0) + 1
+    # Specialization within a domain: a single theme / architecture dominating.
+    if langs:
+        if len(langs) >= 4:
+            breadth = (f"Broad: you work across {len(langs)} languages "
+                       f"({', '.join(sorted(langs))}) — a generalist's reach.")
+        else:
+            breadth = (f"Focused: concentrated in {len(langs)} languages "
+                       f"({', '.join(sorted(langs))}) — a specialist's depth.")
+        blocks.append(breadth)
+    if arch_counts:
+        top_arch, top_n = max(arch_counts.items(), key=lambda kv: kv[1])
+        if top_n >= 2:
+            blocks.append(
+                f"Specialization signal: {top_arch} is the system type you reach "
+                f"for most ({top_n} projects) — a recurring engineering decision."
+            )
+
+    # Repeated engineering decisions: relationships + reused approaches (Medium+
+    # only — weak coincidences are not decisions).
+    from .db import get_all_relationships
+    decs: list[str] = []
+    name_by_id = {r.id: r.name for r in _repos(conn) if r.id is not None}
+    seen_dec: set[tuple[str, str]] = set()
+    for rel in get_all_relationships(conn):
+        if rel.strength == "Weak":
+            continue
+        if rel.kind in ("shared-architecture", "shared-framework", "shared-db",
+                        "shared-deployment"):
+            an = name_by_id.get(rel.repo_a)
+            bn = name_by_id.get(rel.repo_b)
+            if an and bn:
+                key = tuple(sorted((an, bn)))
+                if key in seen_dec:
+                    continue
+                seen_dec.add(key)
+                decs.append(f"- you repeatedly choose a shared {rel.kind.replace('shared-', '')} "
+                            f"({an} + {bn}: {rel.evidence})")
+    if decs:
+        blocks.append("Engineering decisions you keep making:")
+        blocks.extend(decs)
+
+    # Portfolio direction: the trajectory the body of work is heading (themes
+    # that are newest / most recently started) — derived from first_commit_date.
+    ranked = sorted(facts.values(), key=lambda f: f["last_commit_date"] or "", reverse=True)
+    recent = [f["name"] for f in ranked[:3] if f["last_commit_date"]]
+    if recent:
+        blocks.append("Portfolio direction (most recently started): "
+                      + ", ".join(recent) + ".")
+
+    if not blocks:
+        blocks.append(
+            "Not enough cross-project evidence yet to characterize the kind of "
+            "engineer you are. Run `friday analyze <path>` on more repositories."
+        )
+    blocks.append(
+        "Confidence: Medium — derived from engineering domains, breadth, repeated "
+        "decisions and portfolio direction, not from current activity."
     )
     return blocks
 

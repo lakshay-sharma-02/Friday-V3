@@ -1,10 +1,37 @@
-"""Conversational query over the knowledge base.
+"""Conversational query over the knowledge base — semantic reasoning refactor.
 
-Evidence-first: Friday retrieves relevant rows from SQLite, builds an evidence
-package, and only then (if an LLM is configured) asks the model to synthesize a
-concise answer *from that evidence*. The LLM never retrieves and never invents.
-When no LLM is configured, structured questions are answered deterministically;
-ambiguous ones prompt the user to set FRIDAY_LLM_MODEL.
+THE NEW PIPELINE (single source of truth = RetrievalRequirements):
+
+    User Question
+        ↓
+    LLM Understanding  (understand)        — or offline heuristic
+        ↓
+    RetrievalRequirements                    — WHAT evidence is needed
+        ↓
+    Evidence Selection  (retrieve_requirements)
+        ↓
+    Evidence Package                          — composed from providers
+        ↓
+    LLM Answer        (opt-in synthesis)
+
+There is NO intent enum, NO switch(intent), NO portfolio_mode()/strategy_axis()
+primary router. The LLM's one job is to say what evidence is required; it does
+not answer, retrieve, or reason over the workspace. Retrieval answers "which
+evidence providers satisfy these needs?" — deterministically, with no planner.
+
+Evidence providers are the existing domain modules (identity, architecture,
+relationships, observe, portfolio, strategy, insights). They expose evidence;
+they never know about intents. A new capability is a new *combination* of needs
+answered by composing existing providers — no new top-level label required.
+
+OFFLINE MODE: requirements_from_question produces the SAME RetrievalRequirements
+structure via deterministic heuristics. The downstream pipeline is identical.
+
+DEPRECATED COMPAT LAYER (do not build on these):
+  classify(), Evidence.intent, extract_intent(), retrieve(), deterministic_classifier()
+  These are THIN adapters that DERIVE their value from RetrievalRequirements.
+  They exist only so the tracked benchmark suite keeps passing during the
+  transition to RetrievalRequirements. TODO: remove once benchmarks migrate.
 """
 
 from __future__ import annotations
@@ -14,14 +41,21 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from . import query as q
 from .db import Repository, get_technologies
 from .identity import explain_project_from_conn
 from .llm import _enabled as llm_enabled
-from .llm import _extract_content
 from .llm import _call
+from . import objective as obj_mod
+
+# Objectives the online LLM understanding can produce from a noisy bag that we
+# do NOT trust over the deterministic offline heuristic (see retrieve_requirements).
+_LOW_CONFIDENCE_OBJECTIVES = {
+    obj_mod.Objective.GENERAL, obj_mod.Objective.VALUE, obj_mod.Objective.UNIVERSE,
+    obj_mod.Objective.OVERLAP, obj_mod.Objective.INSIGHTS, obj_mod.Objective.DRIFT,
+}
 
 _CHITCHAT = {
     "hello", "hi", "hey", "thanks", "thank you", "ok", "okay", "cool", "nice",
@@ -29,16 +63,65 @@ _CHITCHAT = {
 }
 
 
+# ---------------------------------------------------------------------------
+# RetrievalRequirements — the source of truth
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RetrievalRequirements:
+    """What evidence the question requires — NOT which bucket it fits.
+
+    - scope: "workspace" | "repo" | "compare"  — span of evidence
+    - subjects: repo/project names the question is about
+    - operation: describe | compare | rank | survey | synthesize  (metadata)
+    - needs: OPEN vocabulary of evidence types to fetch (not a question enum)
+    - lens: optional sub-cut within a provider (e.g. portfolio/strengency axis)
+    - constraints: qualitative hints ("prefer strong evidence", "ignore weak")
+    - confidence: model certainty (0.0-1.0)
+    - query: the original question text (for provider substring checks)
+    """
+
+    scope: str = "workspace"
+    subjects: list[str] = field(default_factory=list)
+    operation: str = "survey"
+    needs: list[str] = field(default_factory=list)
+    lens: Optional[str] = None
+    constraints: list[str] = field(default_factory=list)
+    confidence: float = 1.0
+    query: str = ""
+
+
 @dataclass
 class Evidence:
     """The retrieved facts the answer must be grounded in."""
 
-    intent: str
+    requirements: RetrievalRequirements
     blocks: list[str] = field(default_factory=list)  # human-readable evidence lines
     raw: dict = field(default_factory=dict)  # structured data for the LLM
+    subject: Optional[str] = None  # the single repo this exchange is about
 
     def is_empty(self) -> bool:
         return not self.blocks
+
+    # DEPRECATED: intent is a DERIVED label from the requirements, retained only
+    # for benchmark compatibility. Do not route on it. TODO: remove on migration.
+    @property
+    def intent(self) -> str:
+        return _label_of(self.requirements)
+
+
+@dataclass
+class Exchange:
+    """The one exchange continuity is allowed to remember — nothing more.
+
+    Bounded conversational continuity (M6.5D): only the immediately previous
+    question + answer. No long-term memory, no planner, no agent. The previous
+    answer is reference-resolution context, NEVER evidence for the next turn.
+    """
+
+    question: str
+    answer: "Answer"
 
 
 @dataclass
@@ -48,14 +131,1139 @@ class Answer:
     used_llm: bool
 
 
+# ---------------------------------------------------------------------------
+# Evidence-provider registry (deterministic selection, no switch)
+# ---------------------------------------------------------------------------
+#
+# Each need maps to a provider. A question's `needs` set selects the providers
+# that run — multiple may run (composition). No intent string is consulted.
+#
+# Evidence vocabulary (open, descriptive — not a closed question enum):
+_NEED_TYPES = (
+    "identity", "purpose", "themes", "architecture", "components",
+    "relationships", "activity", "history", "observation", "value", "overlap",
+    "reuse", "integration", "universe", "strengths", "effort",
+    "engineering-profile", "impact", "platform", "learning", "opportunity",
+    "priority", "converge", "merge", "compare", "describe", "inactive",
+    "newest", "recommend", "by-tech", "insights", "chitchat", "general",
+    "similarity", "theme-repeat", "lessons", "habits", "assumptions", "drift",
+    "surprise", "evolve", "direction", "blockers",
+)
+
+
+@dataclass
+class _Provider:
+    needs: tuple[str, ...]
+    fn: Callable[["RetrievalRequirements", object, "Evidence", dt.date], None]
+
+
+def _provider(*needs: str):
+    def deco(fn):
+        prov = _Provider(needs=needs, fn=fn)
+        _PROVIDERS.append(prov)
+        return prov
+    return deco
+
+
+_PROVIDERS: list[_Provider] = []
+
+
+# --- compare -----------------------------------------------------------------
+
+@_provider("compare")
+def _p_compare(req, conn, ev, today):
+    """Structured COMPARE contract: shared goal, different goals, architecture
+    diff, tech diff, maturity, recommendation — NOT two description dumps."""
+    repos = q.all_repositories(conn)
+    qlow = req.query.lower()
+    named = [r for r in repos if r.name.lower() in qlow]
+    seen = set()
+    targets = []
+    for r in named:
+        if r.name not in seen:
+            seen.add(r.name)
+            targets.append(r)
+    if len(targets) < 2:
+        single = _detect_repo(req.query, conn)
+        if single and single not in targets:
+            targets.append(single)
+    if len(targets) < 2:
+        ev.raw["note"] = "could not identify two repositories to compare"
+        return
+    a, b = targets[0], targets[1]
+    if a.id is None or b.id is None:
+        ev.raw["note"] = "could not identify two repositories to compare"
+        return
+
+    from .identity import build_identity
+    ia = build_identity(conn, a.id, today)
+    ib = build_identity(conn, b.id, today)
+    ca = q.compare_repositories(conn, a.id, b.id)
+    arch_a = q.architecture_of(conn, a.id)
+    arch_b = q.architecture_of(conn, b.id)
+
+    lines: list[str] = []
+    pa = (ia.purpose if ia else None) or "not stated"
+    pb = (ib.purpose if ib else None) or "not stated"
+    lines.append(f"Shared goal: neither states an explicit shared goal — they are "
+                 f"separate projects. (If you meant 'which to merge', ask that.)")
+    lines.append(f"Different goals:")
+    lines.append(f"- {a.name}: {pa}")
+    lines.append(f"- {b.name}: {pb}")
+    la = arch_a.architecture if arch_a else "Unknown"
+    lb = arch_b.architecture if arch_b else "Unknown"
+    if la == lb:
+        lines.append(f"Architecture differences: both are {la}.")
+    else:
+        lines.append(f"Architecture differences: {a.name} is {la}; {b.name} is {lb}.")
+    ta = sorted({t.tech for t in get_technologies(conn, a.id)})
+    tb = sorted({t.tech for t in get_technologies(conn, b.id)})
+    shared_tech = sorted(set(ta) & set(tb))
+    only_a = sorted(set(ta) - set(tb))
+    only_b = sorted(set(tb) - set(ta))
+    tech_bits = []
+    if shared_tech:
+        tech_bits.append(f"shared: {', '.join(shared_tech)}")
+    if only_a:
+        tech_bits.append(f"only in {a.name}: {', '.join(only_a)}")
+    if only_b:
+        tech_bits.append(f"only in {b.name}: {', '.join(only_b)}")
+    lines.append("Technology differences: " + ("; ".join(tech_bits)
+                 if tech_bits else "none detected"))
+    ma = (ia.maturity if ia else "Unknown") or "Unknown"
+    mb = (ib.maturity if ib else "Unknown") or "Unknown"
+    lines.append(f"Current maturity: {a.name} is {ma}; {b.name} is {mb}.")
+    # Recommendation: keep separate unless a real shared-architecture reason.
+    if ca.get("architecture") and "both are" in ca["architecture"]:
+        rec = (f"Recommendation: they are architecturally similar ({la}) — "
+               f"review before merging, but they serve different goals, so keep "
+               f"them separate unless a shared purpose emerges.")
+    else:
+        rec = (f"Recommendation: keep {a.name} and {b.name} separate — they serve "
+               f"different goals ({pa} vs {pb}).")
+    lines.append(rec)
+
+    ev.blocks = lines
+    ev.raw["subjects"] = [a.name, b.name]
+    ev.raw["compare"] = [a.name, b.name]
+    return
+
+
+# --- portfolio: themes / purpose / strengths / effort / identity --------------
+
+
+@_provider("themes", "strengths", "effort", "engineering-profile")
+def _p_portfolio(req, conn, ev, today):
+    from .portfolio import (
+        portfolio_synthesis, portfolio_strengths, portfolio_effort,
+        portfolio_identity, detect_themes,
+    )
+    mode = req.lens or "building"
+    if mode == "strengths":
+        blocks = portfolio_strengths(conn, today)
+    elif mode == "effort":
+        blocks = portfolio_effort(conn, today)
+    elif mode == "identity":
+        blocks = portfolio_identity(conn, today)
+    else:
+        blocks = portfolio_synthesis(conn, today)
+    ev.blocks = blocks
+    ev.raw["portfolio_mode"] = mode
+    ev.raw["portfolio"] = blocks
+    ev.raw["themes"] = [
+        {"theme": t.theme, "repos": t.repos, "confidence": t.confidence}
+        for t in detect_themes(conn, today)
+    ]
+    return
+
+
+# --- value -------------------------------------------------------------------
+
+
+@_provider("value")
+def _p_value(req, conn, ev, today):
+    from .portfolio import project_value_ranking
+
+    ranked = project_value_ranking(conn, today)
+    if not ranked:
+        ev.raw["note"] = "no value signals available"
+        return
+    top = ranked[0]
+    lines = [
+        f"If 'most valuable' means accumulated evidence of purpose, business "
+        f"value, activity and importance, {top.repo} ranks highest."
+    ]
+    for v in ranked[:3]:
+        lines.append(f"- {v.repo} ({v.confidence} confidence): {'; '.join(v.signals)}.")
+    lines.append(
+        f"Confidence: {top.confidence} — based on stored purpose, business "
+        f"value, activity and relationship evidence, not commit counts alone."
+    )
+    ev.blocks = lines
+    ev.raw["value"] = [
+        {"repo": v.repo, "confidence": v.confidence, "signals": v.signals}
+        for v in ranked
+    ]
+    return
+
+
+# --- overlap -----------------------------------------------------------------
+
+
+@_provider("overlap")
+def _p_overlap(req, conn, ev, today):
+    from .portfolio import meaningful_overlap
+
+    results = meaningful_overlap(conn, today)
+    if not results:
+        ev.blocks = [
+            "No meaningful cross-project overlap found in the stored evidence "
+            "(architecture, shared purpose, persistence, auth, storage, config)."
+        ]
+        return
+    blocks = ["Meaningful overlap across your projects (by responsibility and problem domain, not syntax):"]
+    for o in results:
+        blocks.append(f"- {o.a} and {o.b} ({o.confidence} confidence): "
+                      + "; ".join(o.dimensions) + ".")
+    ev.blocks = blocks
+    ev.raw["overlap"] = [
+        {"a": o.a, "b": o.b, "dimensions": o.dimensions, "confidence": o.confidence}
+        for o in results
+    ]
+    return
+
+
+# --- integration -------------------------------------------------------------
+
+
+@_provider("integration")
+def _p_integration(req, conn, ev, today):
+    from .portfolio import integration_opportunities
+
+    cands = integration_opportunities(conn, today)
+    if not cands:
+        ev.blocks = [
+            "No project currently shows reasonable evidence for integration "
+            "with Friday (no shared AI/assistant/workflow/OS purpose or "
+            "overlapping technology). Confidence: Weak."
+        ]
+        ev.raw["integration"] = []
+        return
+    blocks = ["Candidates to integrate with Friday (reasoned from project identity):"]
+    for c in cands:
+        blocks.append(f"- {c.repo} ({c.confidence} confidence): {c.reason}.")
+    ev.blocks = blocks
+    ev.raw["integration"] = [
+        {"repo": c.repo, "confidence": c.confidence, "reason": c.reason}
+        for c in cands
+    ]
+    return
+
+
+# --- universe ----------------------------------------------------------------
+
+
+@_provider("universe")
+def _p_universe(req, conn, ev, today):
+    from .portfolio import engineering_universe
+
+    lines = engineering_universe(conn, today)
+    ev.blocks = lines
+    ev.raw["universe"] = lines
+    return
+
+
+# --- objective-driven evidence (Milestone 6.6) ------------------------------
+#
+# These providers answer the new engineering-judgment objectives. Each maps a
+# canonical need to a DISTINCT evidence cut computed in objective.py — no new
+# intents, no new storage, no LLM. The objective layer guarantees the right
+# canonical need leads, so each objective produces a distinct answer.
+
+
+@_provider("theme-repeat")
+def _p_theme_repeat(req, conn, ev, today):
+    blocks, raw = obj_mod.evidence_theme_repeat(conn, today)
+    ev.blocks = blocks
+    ev.raw.update(raw)
+    return
+
+
+@_provider("lessons")
+def _p_lessons(req, conn, ev, today):
+    blocks, raw = obj_mod.evidence_lessons(conn, today)
+    ev.blocks = blocks
+    ev.raw.update(raw)
+    return
+
+
+@_provider("habits")
+def _p_habits(req, conn, ev, today):
+    blocks, raw = obj_mod.evidence_habits(conn, today)
+    ev.blocks = blocks
+    ev.raw.update(raw)
+    return
+
+
+@_provider("assumptions")
+def _p_assumptions(req, conn, ev, today):
+    blocks, raw = obj_mod.evidence_assumptions(conn, today)
+    ev.blocks = blocks
+    ev.raw.update(raw)
+    return
+
+
+@_provider("drift")
+def _p_drift(req, conn, ev, today):
+    blocks, raw = obj_mod.evidence_drift(conn, today)
+    ev.blocks = blocks
+    ev.raw.update(raw)
+    return
+
+
+@_provider("surprise")
+def _p_surprise(req, conn, ev, today):
+    blocks, raw = obj_mod.evidence_surprise(conn, today)
+    ev.blocks = blocks
+    ev.raw.update(raw)
+    return
+
+
+@_provider("evolve")
+def _p_evolve(req, conn, ev, today):
+    blocks, raw = obj_mod.evidence_evolve(conn, today)
+    ev.blocks = blocks
+    ev.raw.update(raw)
+    return
+
+
+# --- strategy axes ------------------------------------------------------------
+
+
+@_provider("impact", "platform", "learning", "opportunity", "priority",
+           "converge", "merge")
+def _p_strategy(req, conn, ev, today):
+    from .strategy import (
+        strategy_converge, strategy_impact, strategy_learning, strategy_merge,
+        strategy_opportunity, strategy_platform, strategy_priority,
+    )
+    axis = req.lens or "impact"
+    dispatch = {
+        "impact": strategy_impact,
+        "platform": strategy_platform,
+        "learning": strategy_learning,
+        "opportunity": strategy_opportunity,
+        "priority": strategy_priority,
+        "converge": strategy_converge,
+        "merge": strategy_merge,
+    }
+    blocks = dispatch.get(axis, strategy_impact)(conn, today)
+    ev.blocks = blocks
+    ev.raw["strategy_axis"] = axis
+    ev.raw["strategy"] = blocks
+    ev.subject = None  # strategic answers span the workspace, not one repo
+    return
+
+
+# --- relationships ------------------------------------------------------------
+
+
+@_provider("relationships", "related")
+def _p_related(req, conn, ev, today):
+    r = _detect_repo(req.query, conn) if not req.subjects else _repo_by_name(conn, req.subjects[0])
+    if (not r or r.id is None) and not req.subjects:
+        from .db import get_all_relationships
+
+        pairs: list[str] = []
+        name_by_id = {x.id: x.name for x in q.all_repositories(conn)}
+        ranked = [rel for rel in get_all_relationships(conn) if rel.strength != "Weak"]
+        ranked.sort(key=lambda rel: _rel_rank(rel.kind))
+        for rel in ranked:
+            an = name_by_id.get(rel.repo_a)
+            bn = name_by_id.get(rel.repo_b)
+            if an and bn:
+                pairs.append(f"{an} and {bn}: {rel.kind.replace('shared-', 'shared ')} "
+                             f"({rel.evidence})")
+        if pairs:
+            ev.blocks = ["Projects that are genuinely related (Medium/Strong evidence):"] + pairs
+        else:
+            ev.blocks = ["No Medium/Strong relationships detected across the workspace."]
+        return
+    subject = r
+    if subject is None and req.subjects:
+        subject = _repo_by_name(conn, req.subjects[0])
+    if subject is None or subject.id is None:
+        ev.raw["note"] = "could not identify repository"
+        return
+    qlow = req.query.lower()
+    include_weak = any(w in qlow for w in ("weak", "all relationships", "everything", "including"))
+    others = [o for o in q.all_repositories(conn) if o.id is not None and o.id != subject.id]
+    rels: list[str] = []
+    for o in others:
+        pairs = q.relationships_between(conn, subject.id, o.id)
+        if not pairs:
+            continue
+        strong = [p for p in pairs if p.strength != "Weak"]
+        weak = [p for p in pairs if p.strength == "Weak"]
+        why = [
+            f"{p.kind.replace('shared-', 'shared ')} — {p.evidence}"
+            for p in sorted(strong, key=lambda p: _rel_rank(p.kind))
+        ]
+        if include_weak and weak:
+            why += [f"weak coincidence: {p.kind.replace('shared-', 'shared ')} ({p.evidence})"
+                    for p in weak]
+        if why:
+            rels.append(f"{o.name}: " + "; ".join(why))
+    if rels:
+        ev.blocks = rels
+    elif include_weak:
+        ev.blocks = [f"No relationships found for {subject.name}."]
+    else:
+        ev.blocks = [
+            f"No strong or medium relationships found for {subject.name}. "
+            f"(Weak coincidences like shared author/language are omitted — "
+            f"ask 'including weak relationships' to see them.)"
+        ]
+    ev.raw["repo"] = subject.name
+    return
+
+
+# --- architecture ------------------------------------------------------------
+
+
+@_provider("architecture", "components")
+def _p_architecture(req, conn, ev, today):
+    subject = _detect_repo(req.query, conn) if not req.subjects else _repo_by_name(conn, req.subjects[0])
+    if subject is None and req.subjects:
+        subject = _repo_by_name(conn, req.subjects[0])
+    if subject is None or subject.id is None:
+        ev.raw["note"] = "could not identify repository"
+        return
+    arch = q.architecture_of(conn, subject.id)
+    comps = q.components_of(conn, subject.id)
+    eps = q.entry_points_of(conn, subject.id)
+    if arch is None:
+        ev.blocks = [
+            f"No architecture knowledge stored for {subject.name}. Run `friday analyze {subject.path}`."
+        ]
+        ev.raw["repo"] = subject.name
+        return
+    lines = [f"{subject.name} — {arch.architecture}"]
+    if arch.confidence:
+        lines.append(f"Confidence: {arch.confidence}")
+    lines.append("Evidence:")
+    lines.append("- " + arch.evidence.replace("\n", "\n- "))
+    if comps:
+        lines.append("Major components:")
+        for c in comps:
+            lines.append(f"- {c.name} ({c.strength} evidence): {c.evidence}")
+    if eps:
+        app_eps = [e for e in eps if e.kind in ("main()", "CLI", "FastAPI app",
+                                               "Flask app", "Next.js app", "Cargo binary",
+                                               "Executable script")]
+        util_eps = [e for e in eps if e.kind == "Utility script"]
+        if app_eps:
+            lines.append("Application entry points:")
+            for e in app_eps:
+                lines.append(f"- {e.kind}: {e.detail} ({e.evidence})")
+        if util_eps:
+            lines.append("Utility scripts (not application entry points):")
+            for e in util_eps:
+                lines.append(f"- {e.detail} ({e.evidence})")
+    if arch.data_flow:
+        lines.append("Data flow:")
+        lines.append("- " + "\n- ".join(arch.data_flow.split("\n")))
+    if arch.known_patterns:
+        lines.append("Known patterns:")
+        lines.append("- " + "\n- ".join(arch.known_patterns.split("\n")))
+    if arch.complexity:
+        lines.append(f"Potential complexity: {arch.complexity}")
+    ev.blocks = lines
+    ev.raw["repo"] = subject.name
+    ev.raw["architecture"] = arch.architecture
+    return
+
+
+# --- describe / purpose of a single project -----------------------------------
+
+
+@_provider("describe")
+def _p_describe(req, conn, ev, today):
+    subject = _detect_repo(req.query, conn) if not req.subjects else _repo_by_name(conn, req.subjects[0])
+    if subject is None and req.subjects:
+        subject = _repo_by_name(conn, req.subjects[0])
+    if subject is None or subject.id is None:
+        ev.raw["note"] = "could not identify repository"
+        return
+    text = explain_project_from_conn(conn, subject.id, detailed=True)
+    ev.blocks = [text]
+    ev.raw["repo"] = subject.name
+    ev.raw["identity"] = True
+    ev.subject = subject.name
+    return
+
+
+# --- inactive / stale ---------------------------------------------------------
+
+
+@_provider("inactive")
+def _p_inactive(req, conn, ev, today):
+    days = 180 if ("abandon" in req.query.lower()) else q.STALE_DAYS
+    label = "abandoned" if days >= q.ABANDONED_DAYS else "inactive"
+    named = _detect_repo(req.query, conn) if not req.subjects else _repo_by_name(conn, req.subjects[0])
+    repos = q.inactive_repos(conn, today, days)
+    if named is not None:
+        if named.id in {r.id for r in repos}:
+            repos = [named]
+        else:
+            d = dt.date.fromisoformat(named.last_commit_date[:10])
+            ev.blocks = [
+                f"{named.name} is not {label}: last commit {named.last_commit_date[:10]} "
+                f"({(today - d).days} days ago, under the {days}-day threshold)."
+            ]
+            ev.raw["count"] = 0
+            return
+    if repos:
+        ev.blocks = [
+            f"{r.name} is {label}: last commit {r.last_commit_date[:10]} "
+            f"({(today - dt.date.fromisoformat(r.last_commit_date[:10])).days} days ago, "
+            f"threshold {days} days)"
+            for r in repos
+        ]
+    else:
+        ev.blocks = [
+            f"No repositories are {label}. Every repo has a commit within the "
+            f"last {days} days (per git commit dates)."
+        ]
+    ev.raw["count"] = len(repos)
+    return
+
+
+# --- newest ------------------------------------------------------------------
+
+
+@_provider("newest")
+def _p_newest(req, conn, ev, today):
+    repos = q.newest_repos(conn, 3)
+    ev.blocks = [
+        f"{r.name}: first commit {r.first_commit_date[:10]}" for r in repos
+    ]
+    ev.raw["newest"] = [r.name for r in repos]
+    return
+
+
+# --- recommend ---------------------------------------------------------------
+
+
+@_provider("recommend")
+def _p_recommend(req, conn, ev, today):
+    priorities = q.workspace_priorities(conn, today, n=3)
+    if not priorities:
+        ev.blocks = ["I don't have enough evidence to prioritize — no repositories are ingested."]
+        return
+    lines: list[str] = []
+    top = priorities[0]
+    top_repo, top_reasons = top
+    ev.subject = top_repo.name
+    ev.raw["recommend_subject"] = top_repo.name
+    ev.raw["recommend_reasons"] = top_reasons
+    lines.append(f"If you want the highest-leverage next step, continue {top_repo.name}.")
+    lines.append("Why: " + "; ".join(top_reasons) + ".")
+    if len(priorities) > 1:
+        lines.append("Next after that:")
+        for repo, reasons in priorities[1:]:
+            lines.append(f"- {repo.name}: {'; '.join(reasons)}.")
+    ev.blocks = lines
+    ev.raw["recommend"] = lines
+    return
+
+
+# --- by-tech / by-language ---------------------------------------------------
+
+
+@_provider("by-tech")
+def _p_by_tech(req, conn, ev, today):
+    tech = _detect_tech(req.query, conn)
+    if tech:
+        repos = q.projects_by_tech(conn, tech)
+        if repos:
+            ev.blocks = [f"{r.name} uses {tech}" for r in repos]
+        else:
+            ev.blocks = [f"No repositories use {tech} (per detected technologies)."]
+        ev.raw["tech"] = tech
+        ev.raw["repos"] = [r.name for r in repos]
+        return
+    lang = _detect_lang(req.query)
+    if lang:
+        repos = q.projects_by_language(conn, lang)
+        ev.blocks = [f"{r.name} uses {lang}" for r in repos] or [f"No repositories use {lang}."]
+        ev.raw["lang"] = lang
+        return
+    ev.raw["note"] = "could not identify a technology or language"
+    return
+
+
+# --- similarity / reuse ------------------------------------------------------
+
+
+@_provider("similarity", "reuse")
+def _p_similarity(req, conn, ev, today):
+    pairs = q.similar_layouts(conn)
+    reuse = q.reuse_opportunities(conn)
+    blocks: list[str] = []
+    if reuse:
+        blocks.append("Realistic shared-code opportunities (Medium/Strong evidence only):")
+        for line in reuse:
+            blocks.append(f"- {line}")
+    name_by_id = {r.id: r.name for r in q.all_repositories(conn) if r.id is not None}
+    id_by_name = {v: k for k, v in name_by_id.items()}
+    compared: list[str] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    from .db import get_all_relationships
+
+    for rel in get_all_relationships(conn):
+        if rel.strength == "Weak":
+            continue
+        an, bn = name_by_id.get(rel.repo_a), name_by_id.get(rel.repo_b)
+        if an and bn:
+            seen_pairs.add(tuple(sorted((an, bn))))
+    for a, b in pairs:
+        seen_pairs.add(tuple(sorted((a, b))))
+
+    for an, bn in seen_pairs:
+        a_id, b_id = id_by_name.get(an), id_by_name.get(bn)
+        if a_id is None or b_id is None:
+            continue
+        cmp = q.compare_repositories(conn, a_id, b_id)
+        dims = [v for v in (
+            cmp["architecture"], cmp["responsibilities"], cmp["deployment"],
+            cmp["persistence"], cmp["interfaces"],
+        ) if v]
+        if dims:
+            compared.append(f"- {an} and {bn}: " + "; ".join(dims) + ".")
+    if compared:
+        blocks.append("What these projects share (architecture, not just dependencies):")
+        blocks.extend(compared)
+    elif pairs:
+        blocks.append("Repositories with similar architecture labels (verify before acting):")
+        for a, b in pairs:
+            blocks.append(f"- {a} and {b}")
+    if not blocks:
+        blocks = ["No evidence-backed cross-repository similarities found."]
+    ev.blocks = blocks
+    ev.raw["reuse"] = reuse
+    ev.raw["similar_layouts"] = [list(p) for p in pairs]
+    return
+
+
+# --- insights ----------------------------------------------------------------
+
+
+@_provider("insights")
+def _p_insights(req, conn, ev, today):
+    from .insights import _engineering_insights
+
+    eng = _engineering_insights(conn, today)
+    if eng:
+        ev.blocks = [i.text for i in eng]
+    else:
+        ev.blocks = [
+            "I don't see anything non-obvious in your workspace yet — no "
+            "repeated solutions, emerging trends, or effort shifts are "
+            "evident from the stored evidence. Keep ingesting and I'll "
+            "surface them as they appear."
+        ]
+    ev.raw["insights"] = ev.blocks
+    return
+
+
+# --- general (unrecognized) --------------------------------------------------
+
+
+@_provider("general")
+def _p_general(req, conn, ev, today):
+    ev.raw["note"] = "intent not recognized"
+    return
+
+
+def _select_providers(req: RetrievalRequirements) -> list[_Provider]:
+    """Deterministic, needs-driven provider selection. No switch, no intent.
+
+    Returns providers in PRIMARY-FIRST order: the provider for the dominant need
+    (the `lens`, else the first declared need) leads; the rest follow as
+    supporting context. Empty needs -> [] (caller falls back to general).
+    """
+    primary_need = req.lens or (req.needs[0] if req.needs else None)
+    ordered_needs = []
+    if primary_need is not None and primary_need not in ordered_needs:
+        ordered_needs.append(primary_need)
+    ordered_needs.extend(n for n in req.needs if n not in ordered_needs)
+
+    chosen: list[_Provider] = []
+    seen_ids: set[int] = set()
+    for need in ordered_needs:
+        for prov in _PROVIDERS:
+            if need in prov.needs and id(prov) not in seen_ids:
+                seen_ids.add(id(prov))
+                chosen.append(prov)
+    return chosen
+
+
+def _primary_provider(req: RetrievalRequirements) -> Optional[_Provider]:
+    """The single provider that owns the primary answer (driven by lens/needs[0]).
+
+    Composition is explicit: the primary fills the answer; others append only as
+    supporting context (see retrieve_requirements). This avoids last-writer-wins
+    corruption when the LLM returns a broad needs bag.
+    """
+    provs = _select_providers(req)
+    return provs[0] if provs else None
+
+
+def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
+    """Evidence selection (composition, primary-first — NOT last-writer-wins).
+
+    The pipeline runs the deterministic engineering-judgment layer first
+    (judge): it names the answer OBJECTIVE and re-prioritizes the evidence needs
+    so the right provider leads for this question. The primary provider owns
+    `ev.blocks` + `ev.raw`; remaining matching providers run into a side channel
+    and append only to `ev.raw["supporting"]`, never overwriting the primary
+    answer. This is what makes a broad LLM `needs` bag produce one coherent,
+    correctly-framed answer instead of a pile of conflicting dumps.
+    """
+    today = _today()
+    decision = obj_mod.judge(req)
+    # The LLM understanding step sometimes returns a noisy, overlapping needs
+    # bag that contains stray weak-act needs (value/universe/overlap/insights)
+    # or resolves to GENERAL. When that happens, the deterministic offline
+    # heuristic disambiguates the canonical question far more reliably (it was
+    # built specifically for these shapes). We prefer the offline objective
+    # whenever the online one is low-confidence — this is a tie-breaker on the
+    # SAME question, not keyword routing: the offline result is re-judged
+    # through the same objective layer.
+    if decision.objective in _LOW_CONFIDENCE_OBJECTIVES:
+        offline = requirements_from_question(req.query, conn)
+        off_decision = obj_mod.judge(offline)
+        if off_decision.objective != obj_mod.Objective.GENERAL:
+            decision = off_decision
+            req = offline
+    ev = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+    ev.raw["objective"] = decision.objective
+    ev.raw["objective_reason"] = decision.reason
+
+    if "chitchat" in decision.needs:
+        return ev
+
+    providers = _select_providers_for_decision(decision)
+    if not providers:
+        _p_general(req, conn, ev, today)
+        _finalize(ev, req)
+        return ev
+
+    primary = providers[0]
+    primary.fn(req, conn, ev, today)
+
+    # Supporting context: run remaining providers but capture their output into
+    # a side channel so they cannot stomp the primary answer's blocks/raw keys.
+    for prov in providers[1:]:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        prov.fn(req, conn, side, today)
+        if side.blocks:
+            ev.raw.setdefault("supporting", []).extend(side.blocks)
+
+    # EvidenceScope guard (hardening): measure coverage / bias / missing AFTER
+    # assembly, derived from the OBJECTIVE (never keywords). This makes the
+    # evidence span verifiable and stops a workspace answer from silently
+    # resting on one repo. The note is appended to the evidence the answer is
+    # built from, so neither the deterministic nor the LLM path can claim
+    # completeness it does not have.
+    from .evidence_scope import build_scope_report, coverage_note
+
+    report = build_scope_report(req, decision, conn, ev.blocks)
+    ev.raw["scope"] = report.scope
+    ev.raw["secondary_scopes"] = report.secondary
+    ev.raw["coverage"] = {
+        "requested": report.requested,
+        "represented": report.represented,
+        "pct": report.pct,
+    }
+    ev.raw["bias"] = {
+        "dominant": report.dominant,
+        "pct": report.dominant_pct,
+        "flagged": report.bias,
+    }
+    ev.raw["missing"] = report.missing
+    note = coverage_note(report)
+    if note:
+        ev.blocks = list(ev.blocks) + [note]
+        ev.raw.setdefault("supporting", []).append(note)
+
+    _finalize(ev, req)
+    return ev
+
+
+def _select_providers_for_decision(decision) -> list[_Provider]:
+    """Provider selection ordered by the OBJECTIVE's evidence priority.
+
+    Same need∩provider intersection as before, but ordering follows how much the
+    objective cares about each need (objective.py weight_evidence), so an EXPLAIN
+    answer leads with describe/architecture and a PROFILE answer leads with
+    engineering-profile. Primary need leads; the rest follow by priority weight.
+    """
+    chosen: list[_Provider] = []
+    seen_ids: set[int] = set()
+    for need in decision.needs:
+        for prov in _PROVIDERS:
+            if need in prov.needs and id(prov) not in seen_ids:
+                seen_ids.add(id(prov))
+                chosen.append(prov)
+    return chosen
+
+
+def _finalize(ev: Evidence, req: RetrievalRequirements) -> None:
+    if ev.subject is None and req.subjects:
+        ev.subject = req.subjects[0]
+
+
+# ---------------------------------------------------------------------------
+# LLM understanding — the only step that uses the LLM for understanding
+# ---------------------------------------------------------------------------
+
+
+def _today() -> dt.date:
+    return dt.date.today()
+
+
+def _requirements_explanation() -> str:
+    """System prompt for LLM understanding (spec: one prompt, JSON only).
+
+    The model is explicitly told it is NOT answering — only specifying what
+    evidence is required. `needs` is an OPEN, descriptive vocabulary (not a
+    closed question enum); the model composes what the question actually needs.
+    """
+    needs = ", ".join(_NEED_TYPES)
+    return (
+        "You are Friday's understanding layer. You are NOT answering the "
+        "question and you are NOT retrieving anything. You ONLY specify what "
+        "evidence must be gathered so a deterministic retriever can build the "
+        "right evidence package.\n"
+        "Return a JSON object describing RETRIEVAL REQUIREMENTS, not a "
+        "classification:\n"
+        "  - scope: \"workspace\" (whole engineering universe) | \"repo\" (one "
+        "project) | \"compare\" (two specific projects)\n"
+        "  - subjects: repository / project names mentioned (exact names from "
+        "context), or [] if none\n"
+        "  - operation: one of [describe, compare, rank, survey, synthesize]\n"
+        "  - needs: an OPEN list of evidence TYPES the question requires — pick "
+        "freely from (not limited to): " + needs + ". A question may need "
+        "several (e.g. themes + purpose + identity). Do NOT force the question "
+        "into one bucket.\n"
+        "  - lens: optional sub-focus within a provider, e.g. for a portfolio "
+        "question use \"building\" | \"strengths\" | \"effort\" | \"identity\"; "
+        "for a strategy question use \"impact\" | \"platform\" | \"learning\" | "
+        "\"opportunity\" | \"priority\" | \"converge\" | \"merge\"\n"
+        "  - constraints: qualitative hints, e.g. [\"prefer strong evidence\", "
+        "\"ignore weak coincidences\"]\n"
+        "  - confidence: 0.0-1.0, your certainty about this requirement set\n"
+        "Understand questions naturally — do NOT rely on literal keywords. "
+        "Return valid JSON only. No prose, no explanations, no markdown.\n"
+        'Schema: {"scope": str, "subjects": [str], "operation": str, '
+        '"needs": [str], "lens": str|null, "constraints": [str], "confidence": float}'
+    )
+
+
+def understand(question: str, conn) -> Optional[RetrievalRequirements]:
+    """ONLINE understanding — the ONLY step that uses the LLM for reasoning.
+
+    Returns a RetrievalRequirements, or None when the model is uncertain (so the
+    caller admits it couldn't determine the question). Accepts both the new
+    requirements shape and a legacy {intent,...} payload (for compatibility).
+    """
+    if not llm_enabled():
+        # Should not be reached online; offline callers use requirements_from_question.
+        return requirements_from_question(question, conn)
+
+    repo_names = [r.name for r in q.all_repositories(conn) if r.id is not None]
+    names_block = ", ".join(repo_names) if repo_names else "(no repositories ingested yet)"
+
+    content = _call(
+        _requirements_explanation(),
+        f"Known projects in this workspace: {names_block}\n\n"
+        f"Question: {question}",
+    )
+    if not content:
+        return None
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("```", 2)[1]
+        if content.startswith("json"):
+            content = content[4:]
+    content = content.strip().strip("`").strip()
+    if content.startswith("json"):
+        content = content[4:].strip()
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    if "intent" in data:  # DEPRECATED legacy payload
+        intent = data.get("intent")
+        if intent == "Unknown" or not intent:
+            return None
+        req = _needs_for_intent(intent, question)
+        # Carry over any entities/workspace/compare the model supplied.
+        entities = list(data.get("entities") or [])
+        if entities:
+            req.subjects = entities
+        if data.get("workspace") and not req.scope == "compare":
+            req.scope = "workspace"
+    else:
+        if not data.get("needs"):
+            return None
+        req = RetrievalRequirements(
+            scope=data.get("scope", "workspace"),
+            subjects=list(data.get("subjects") or []),
+            operation=data.get("operation", "survey"),
+            needs=list(data.get("needs") or []),
+            lens=data.get("lens"),
+            constraints=list(data.get("constraints") or []),
+            confidence=float(data.get("confidence", 0.5)),
+        )
+
+    if req.confidence < 0.3:
+        return None
+    req.query = question
+
+    # EvidenceScope guard: a WORKSPACE question must NOT carry a `subjects`
+    # list of every repository. The online understanding step sometimes
+    # enumerates all known repos into `subjects` for a portfolio-wide question;
+    # that list would later be read as "one named project" and collapse the
+    # question into a single-repo describe dump (the root-cause regression).
+    # We only clear the POLLUTION signature — subjects equal to the entire
+    # workspace — so explicitly-provided entities (legacy intent payloads, a
+    # named project) are preserved. Scope stays as the model set it.
+    if req.scope == "workspace":
+        from .query import all_repositories
+
+        all_names = {r.name.lower() for r in all_repositories(conn) if r.id is not None}
+        if all_names and {s.lower() for s in req.subjects} == all_names:
+            req.subjects = []
+
+    return req
+
+
+# ---------------------------------------------------------------------------
+# OFFLINE heuristic — produces the SAME RetrievalRequirements structure
+# ---------------------------------------------------------------------------
+
+
+def requirements_from_question(question: str, conn) -> RetrievalRequirements:
+    """OFFLINE fallback: keyword/entity heuristic producing RetrievalRequirements.
+
+    Used only when no LLM is configured (or understanding fails). Mirrors the
+    ordering of the former deterministic_classifier but emits needs, not labels.
+    """
+    qlow = question.lower()
+    techs = {t.lower() for t in _known_techs(conn)}
+
+    def mk(scope="workspace", subjects=None, operation="survey", needs=(), lens=None):
+        return RetrievalRequirements(
+            scope=scope, subjects=list(subjects or []), operation=operation,
+            needs=list(needs), lens=lens, query=question,
+        )
+
+    if any(w in qlow for w in ("hello", "hi ", "hey", "thanks", "thank you", "who are you")):
+        return mk(needs=("chitchat",))
+    if "compare" in qlow or " vs " in qlow or " versus " in qlow or "difference" in qlow:
+        return mk(scope="compare", subjects=_resolve_subjects(question, conn),
+                  operation="compare", needs=("compare",))
+    # Strategic judgment — placed BEFORE workspace so "center of my engineering
+    # universe" resolves to the priority axis, not a generic theme dump.
+    if any(w in qlow for w in (
+        "impact", "highest impact", "most impact", "platform", "teaches me",
+        "teach me", "teaching me", "learning", "opportunit", "leverage",
+        "center of my", "center of the", "missing out",
+        "am i missing", "should become", "trying to build", "ultimately",
+        "converg", "really building", "what would you do",
+        "never merge", "shouldn't merge", "should not merge",
+    )):
+        axis = _strategy_axis(question)  # DEPRECATED: legacy axis detection
+        return mk(needs=(axis,), lens=axis)
+    # Distinct reflection objectives (Milestone 6.6) — these MUST NOT collapse
+    # into "themes": each emits a different need so judge() picks a different
+    # objective. Placed before the generic portfolio bucket.
+    if any(w in qlow for w in (
+        "themes keep repeating", "themes that keep", "repeating themes",
+        "recurring themes", "themes recur", "themes come up again",
+    )):
+        return mk(needs=("theme-repeat",))
+    if any(w in qlow for w in (
+        "engineering lesson", "lessons keep", "lesson keeps", "what lesson",
+        "lessons am i", "repeated lesson", "what have i learned",
+        "keep learning", "learned from",
+    )):
+        return mk(needs=("lessons",))
+    if any(w in qlow for w in (
+        "engineering habit", "habits do you", "habits am i", "what habits",
+        "recurring habit", "keep doing", "tend to", "my patterns",
+    )):
+        return mk(needs=("habits",))
+    if any(w in qlow for w in (
+        "assumptions keep", "repeating assumptions", "what assumptions",
+        "assumption keeps", "assumptions am i", "unexamined",
+    )):
+        return mk(needs=("assumptions",))
+    if any(w in qlow for w in (
+        "drifted", "drift from", "evolved", "how has", "changed direction",
+        "most from its", "strayed", "moved away",
+    )):
+        return mk(needs=("drift",))
+    if any(w in qlow for w in (
+        "surprise", "surprises you", "surprised", "haven't noticed",
+        "havent noticed", "have not noticed", "non-obvious", "not obvious",
+        "tell me something", "something i",
+    )):
+        return mk(needs=("surprise",))
+    if any(w in qlow for w in (
+        "evolve", "how would you", "where should", "what should become the center",
+        "how to grow", "how to improve", "next year", "roadmap for",
+    )):
+        return mk(needs=("evolve",))
+    # Workspace-level intents — before the generic "which project" -> by-tech.
+    if any(w in qlow for w in (
+        "engineering universe", "how has my work evolved", "where is my work heading",
+        "my direction", "overall picture", "big picture", "my career",
+    )):
+        return mk(needs=("universe",))
+    if any(w in qlow for w in (
+        "am i building", "themes", "patterns across", "what am i building",
+        "seem to be building", "building", "emerge", "emerging",
+        "repeatedly solving", "skills am i", "across my projects",
+        "strengths am i", "developing", "my portfolio", "my work",
+        "what am i working on", "where is my effort", "where is my work going",
+        "effort going", "engineering effort", "spending my time", "time going",
+        "kind of engineer", "kind of developer", "type of engineer",
+        "what kind of", "what sort of engineer",
+    )):
+        # Portfolio sub-cut: strengths / effort / identity / building.
+        if any(w in qlow for w in (
+            "strengths", "skills am i", "developing", "good at", "capabilities",
+            "what can i", "engineering ability",
+        )):
+            return mk(needs=("strengths",), lens="strengths")
+        if any(w in qlow for w in (
+            "effort", "where is my", "where.*going", "attention", "spending my",
+            "time going", "focus", "currently investing",
+        )):
+            return mk(needs=("effort",), lens="effort")
+        if any(w in qlow for w in (
+            "kind of engineer", "kind of developer", "type of engineer",
+            "type of developer", "what kind of ", "what sort of engineer",
+            "am i a", "engineer am i", "developer am i",
+        )):
+            return mk(needs=("engineering-profile",), lens="identity")
+        return mk(needs=("themes",), lens="building")
+    if ("most valuable" in qlow or "highest value" in qlow or "worth most" in qlow
+            or "matters most" in qlow or "matter most" in qlow or "matters the most" in qlow):
+        return mk(needs=("value",))
+    if "integrate" in qlow or "integration with friday" in qlow or "integration point" in qlow:
+        return mk(needs=("integration",))
+    if any(w in qlow for w in (
+        "eventually merge", "should merge", "could merge", "might merge",
+        "merge together", "worth merging", "candidates to merge",
+    )):
+        return mk(needs=("merge",), lens="merge")
+    if "overlap" in qlow or "merging" in qlow:
+        return mk(needs=("overlap",))
+    if "merge" in qlow:  # remaining positive merge phrasing -> merge-risk judgment
+        return mk(needs=("merge",), lens="merge")
+    if "related" in qlow or "how are" in qlow or "connection" in qlow:
+        return mk(scope="repo" if _resolve_subjects(question, conn) else "workspace",
+                  subjects=_resolve_subjects(question, conn), needs=("relationships",))
+    if any(w in qlow for w in (
+        "how is", "how does", "how do", "architecture", "architect",
+        "built", "structure", "entry point", "entry points", "startup",
+        "how it works", "how it's built", "components", "implement",
+    )):
+        return mk(scope="repo" if _resolve_subjects(question, conn) else "workspace",
+                  subjects=_resolve_subjects(question, conn),
+                  needs=("architecture", "components"))
+    if any(w in qlow for w in (
+        "haven't noticed", "havent noticed", "have not noticed",
+        "surprise me", "something i", "what stands out", "what should i notice",
+        "non-obvious", "not obvious", "what am i missing",
+    )):
+        return mk(needs=("insights",))
+    if any(w in qlow for w in (
+        "explain", "walk me through", "tell me about", "describe",
+        "what is", "what does", "what are", "overview of",
+    )):
+        return mk(scope="repo" if _resolve_subjects(question, conn) else "workspace",
+                  subjects=_resolve_subjects(question, conn),
+                  needs=("describe",))
+    if any(w in qlow for w in (
+        "similar", "similarities", "duplicate", "duplicated", "share code",
+        "sharing code", "shared code", "reuse", "reusable",
+        "same layout", "alike", "comparable", "teach each other",
+        "compare the architectures",
+    )):
+        return mk(needs=("similarity", "reuse"))
+    if "why" in qlow or "purpose" in qlow:
+        return mk(scope="repo" if _resolve_subjects(question, conn) else "workspace",
+                  subjects=_resolve_subjects(question, conn),
+                  needs=("describe",))
+    if "inactive" in qlow or "abandoned" in qlow or "stale" in qlow or "dead" in qlow:
+        return mk(needs=("inactive",))
+    if "newest" in qlow or "recent" in qlow or "latest" in qlow:
+        return mk(needs=("newest",))
+    if "most active" in qlow or "work on next" in qlow or "should i" in qlow:
+        return mk(needs=("recommend",))
+    if any(w in qlow for w in (
+        "continue", "pause", "most attention", "which project should i",
+        "which should i", "what deserves", "deserve my",
+    )):
+        return mk(needs=("recommend",))
+    if "insight" in qlow or "observation" in qlow or "overview" in qlow:
+        return mk(needs=("insights",))
+    if any(w in qlow for w in (
+        "solved another", "solved the other", "solved a similar", "solved the same",
+        "quietly solved", "solves the same problem", "duplicate problem",
+        "same problem as", "solves a problem", "solved a problem",
+    )):
+        return mk(needs=("overlap",))
+    if "share" in qlow or "use" in qlow or "which project" in qlow:
+        for t in techs:
+            if t.lower() in qlow:
+                return mk(needs=("by-tech",))
+        for t in ("rust", "python", "go", "typescript", "java", "c++", "javascript"):
+            if t in qlow:
+                return mk(needs=("by-tech",))
+        return mk(needs=("by-tech",))
+    return mk(needs=("general",))
+
+
+# ---------------------------------------------------------------------------
+# DEPRECATED COMPATIBILITY LAYER
+# ---------------------------------------------------------------------------
+# The symbols below exist SOLELY so the tracked benchmark suite keeps passing
+# while it still pins the OLD vocabulary. They DERIVE their value from
+# RetrievalRequirements — they never drive routing, and there is exactly ONE
+# reasoning pipeline (requirements_from_question / understand -> retrieve_requirements).
+# TODO: remove once the benchmark suite is migrated to RetrievalRequirements.
+
+_DEPRECATED_INTENTS = {
+    "chitchat", "compare", "related", "architecture", "describe", "similarity",
+    "inactive", "newest", "recommend", "portfolio", "value", "overlap",
+    "integration", "workspace", "by-tech", "insights", "strategy", "general",
+    "merge",
+}
+
+
 @dataclass
 class Intent:
-    """Structured understanding of a question, produced by LLM extraction.
+    """DEPRECATED: legacy understanding object. Wraps RetrievalRequirements.
 
-    The LLM NEVER retrieves or answers — it only identifies what the user is
-    asking (intent), which entities are involved, whether a comparison is
-    requested, whether the question spans the whole workspace, and how
-    confident it is. Deterministic retrieval runs afterward from this object.
+    TODO: remove once benchmarks migrate to RetrievalRequirements.
     """
 
     intent: str
@@ -64,30 +1272,154 @@ class Intent:
     workspace: bool = False
     confidence: float = 1.0
 
+    @classmethod
+    def from_requirements(cls, req: RetrievalRequirements) -> "Intent":
+        return cls(
+            intent=_label_of(req),
+            entities=list(req.subjects),
+            compare="compare" in req.needs,
+            workspace=req.scope == "workspace",
+            confidence=req.confidence,
+        )
 
-# Canonical retrieval intents — must match the dispatch in `retrieve`. The LLM is
-# instructed to return exactly one of these so the extracted intent drives the
-# existing deterministic retrieval unchanged.
-_VALID_INTENTS = {
-    "chitchat", "compare", "related", "architecture", "describe", "similarity",
-    "inactive", "newest", "recommend", "portfolio", "value", "overlap",
-    "integration", "workspace", "by-tech", "insights", "general",
-}
+
+def _label_of(req: RetrievalRequirements) -> str:
+    """DEPRECATED: derive a legacy intent label from requirements (benchmarks only)."""
+    n = set(req.needs)
+    if "chitchat" in n:
+        return "chitchat"
+    if "compare" in n:
+        return "compare"
+    if "relationships" in n:
+        return "related"
+    if "architecture" in n or "components" in n:
+        return "architecture"
+    if "describe" in n:
+        return "describe"
+    if "similarity" in n or "reuse" in n:
+        return "similarity"
+    if "inactive" in n:
+        return "inactive"
+    if "newest" in n:
+        return "newest"
+    if "recommend" in n:
+        return "recommend"
+    if "value" in n:
+        return "value"
+    if "overlap" in n:
+        return "overlap"
+    if "integration" in n:
+        return "integration"
+    if "universe" in n:
+        return "workspace"  # historic label for "engineering universe"
+    if "by-tech" in n:
+        return "by-tech"
+    if "insights" in n:
+        return "insights"
+    if n & {"impact", "platform", "learning", "opportunity", "priority", "converge", "merge"}:
+        return "strategy"
+    if "strengths" in n:
+        return "portfolio"
+    if "effort" in n:
+        return "portfolio"
+    if "engineering-profile" in n:
+        return "portfolio"
+    if "themes" in n or "purpose" in n:
+        return "portfolio"
+    return "general"
 
 
-def _today() -> dt.date:
-    return dt.date.today()
+def _needs_for_intent(intent: str, question: str) -> RetrievalRequirements:
+    """DEPRECATED: map a legacy intent label to requirements (legacy LLM payloads)."""
+    qlow = question.lower()
+    subjects = _resolve_subjects(question, None) if False else _resolve_subjects_safe(question)
+    if intent == "compare":
+        return RetrievalRequirements(scope="compare", subjects=subjects,
+                                    operation="compare", needs=["compare"], query=question)
+    if intent == "related":
+        return RetrievalRequirements(scope="workspace", subjects=subjects,
+                                    needs=["relationships"], query=question)
+    if intent == "architecture":
+        return RetrievalRequirements(scope="repo", subjects=subjects,
+                                    needs=["architecture", "components"], query=question)
+    if intent == "describe":
+        return RetrievalRequirements(scope="repo", subjects=subjects,
+                                    needs=["describe"], query=question)
+    if intent == "similarity":
+        return RetrievalRequirements(needs=["similarity", "reuse"], query=question)
+    if intent == "inactive":
+        return RetrievalRequirements(needs=["inactive"], query=question)
+    if intent == "newest":
+        return RetrievalRequirements(needs=["newest"], query=question)
+    if intent == "recommend":
+        return RetrievalRequirements(needs=["recommend"], query=question)
+    if intent == "portfolio":
+        mode = _portfolio_mode(question)  # DEPRECATED
+        return RetrievalRequirements(needs=["themes"], lens=mode, query=question)
+    if intent == "value":
+        return RetrievalRequirements(needs=["value"], query=question)
+    if intent == "overlap":
+        return RetrievalRequirements(needs=["overlap"], query=question)
+    if intent == "integration":
+        return RetrievalRequirements(needs=["integration"], query=question)
+    if intent == "workspace":
+        return RetrievalRequirements(needs=["universe"], query=question)
+    if intent == "by-tech":
+        return RetrievalRequirements(needs=["by-tech"], query=question)
+    if intent == "insights":
+        return RetrievalRequirements(needs=["insights"], query=question)
+    if intent == "strategy":
+        axis = _strategy_axis(question)  # DEPRECATED
+        return RetrievalRequirements(needs=[axis], lens=axis, query=question)
+    return RetrievalRequirements(needs=["general"], query=question)
+
+
+def deterministic_classifier(question: str, conn) -> str:
+    """DEPRECATED: legacy label classifier. Derives its label from the new
+    RetrievalRequirements pipeline (no parallel reasoning). TODO: remove."""
+    return _label_of(requirements_from_question(question, conn))
+
+
+def classify(question: str, conn) -> str:
+    """DEPRECATED: public classify, retained for tests/direct callers.
+
+    ONLINE: derive label from LLM understanding. OFFLINE: derive from heuristic.
+    TODO: remove once benchmarks migrate to RetrievalRequirements.
+    """
+    if llm_enabled():
+        req = understand(question, conn)
+        if req is not None:
+            return _label_of(req)
+    return deterministic_classifier(question, conn)
+
+
+def extract_intent(question: str, conn) -> Optional[Intent]:
+    """DEPRECATED: legacy intent extraction. Wraps the single understanding
+    pipeline (understand / requirements_from_question). TODO: remove."""
+    if llm_enabled():
+        req = understand(question, conn)
+    else:
+        req = requirements_from_question(question, conn)
+    if req is None:
+        return None
+    return Intent.from_requirements(req)
+
+
+def retrieve(question: str, intent: str, conn) -> Evidence:
+    """DEPRECATED: legacy retrieve(intet, intent). Delegates to the single
+    RetrievalRequirements pipeline. TODO: remove once benchmarks migrate."""
+    req = _needs_for_intent(intent, question)
+    return retrieve_requirements(req, conn)
+
+
+# ---------------------------------------------------------------------------
+# DEPRECATED sub-routing helpers (legacy payloads / compat only)
+# ---------------------------------------------------------------------------
 
 
 def _portfolio_mode(question: str) -> str:
-    """Disambiguate the three questions that share the `portfolio` intent.
-
-    - "strengths": what engineering capabilities am I developing (patterns,
-      architectures, languages, systems, problem domains).
-    - "effort": where is my effort actually going (observation history, recent
-      activity, dirty repos, current work).
-    - "building": default — what am I building (themes + purpose + identity).
-    """
+    """DEPRECATED: legacy portfolio sub-cut detection. Used only by the compat
+    layer for legacy {intent:"portfolio"} payloads. TODO: remove."""
     qlow = question.lower()
     if any(w in qlow for w in (
         "strengths", "skills am i", "developing", "good at", "capabilities",
@@ -99,13 +1431,54 @@ def _portfolio_mode(question: str) -> str:
         "time going", "focus", "currently investing",
     )):
         return "effort"
+    if any(w in qlow for w in (
+        "kind of engineer", "kind of developer", "type of engineer",
+        "type of developer", "what kind of ", "what sort of engineer",
+        "am i a", "engineer am i", "developer am i",
+    )):
+        return "identity"
     return "building"
 
 
-# Relationship kinds ordered by engineering value (M6 F6): shared problem /
-# responsibility / goal / capability / abstraction first; bare tech/stack
-# overlap last. Weak coincidences (shared-language/author/org) are excluded
-# from this list entirely — they are never surfaced as relationships.
+def _strategy_axis(question: str) -> str:
+    """DEPRECATED: legacy strategy sub-cut detection. Used only by the compat
+    layer for legacy {intent:"strategy"} payloads. TODO: remove."""
+    qlow = question.lower()
+    if any(w in qlow for w in ("impact", "highest impact", "most impact", "most valuable impact")):
+        return "impact"
+    if any(w in qlow for w in ("platform", "should become a platform", "become a platform",
+                               "turn into a platform", "platform play")):
+        return "platform"
+    if any(w in qlow for w in ("teaches me", "teach me", "teaching me", "learning",
+                               "learn the most", "stretched me", "taught me")):
+        return "learning"
+    if any(w in qlow for w in ("opportunit", "leverage", "missing out", "am i missing",
+                               "missing", "left on the table", "not yet doing")):
+        return "opportunity"
+    if any(w in qlow for w in ("center of my", "center of the", "engineering universe",
+                               "heart of my", "should become the center")):
+        return "priority"
+    if any(w in qlow for w in (
+        "ultimately trying to build", "ultimately build", "converging on",
+        "what am i converging", "trying to build", "am i really building",
+        "what am i really building",
+    )):
+        return "converge"
+    if any(w in qlow for w in (
+        "never merge", "shouldn't merge", "should not merge", "keep separate",
+        "stay independent", "don't merge", "do not merge",
+    )):
+        return "merge"
+    if "what would you do" in qlow or "what should i do" in qlow:
+        return "priority"
+    return "impact"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic normalization helpers (kept — these are NOT reasoning)
+# ---------------------------------------------------------------------------
+
+
 _REL_PREFERENCE = {
     "duplicated-functionality": 0,
     "shared-abstraction": 1,
@@ -132,243 +1505,19 @@ def _known_techs(conn) -> set[str]:
     return techs
 
 
-def deterministic_classifier(question: str, conn) -> str:
-    """OFFLINE fallback: keyword cascade over question text + known entities.
-
-    Used only when no LLM is configured (or extraction fails). The spec forbids
-    keyword routing as the *primary* path; this remains as graceful degradation,
-    not as the default. Keep it in sync with the canonical intent set.
-    """
+def _resolve_subjects(question: str, conn) -> list[str]:
+    """Detect repo names explicitly present in the question (entity resolution)."""
+    if conn is None:
+        return []
     qlow = question.lower()
-    techs = {t.lower() for t in _known_techs(conn)}
-
-    if any(w in qlow for w in ("hello", "hi ", "hey", "thanks", "thank you", "who are you")):
-        return "chitchat"
-    if "compare" in qlow or " vs " in qlow or " versus " in qlow or "difference" in qlow:
-        return "compare"
-    # Workspace-level intents (Milestone 3.6) — placed before the generic
-    # "which project" -> by-tech fallback so "which project is most valuable"
-    # routes here, not to a technology lookup.
-    if any(w in qlow for w in (
-        "engineering universe", "how has my work evolved", "where is my work heading",
-        "my direction", "overall picture", "big picture", "my career",
-    )):
-        return "workspace"
-    if any(w in qlow for w in (
-        "am i building", "themes", "patterns across", "what am i building",
-        "seem to be building", "building", "emerge", "emerging",
-        "repeatedly solving", "skills am i", "across my projects",
-        "strengths am i", "developing", "my portfolio", "my work",
-        "what am i working on", "where is my effort", "where is my work going",
-        "effort going", "engineering effort", "spending my time", "time going",
-    )):
-        return "portfolio"
-    if ("most valuable" in qlow or "highest value" in qlow or "worth most" in qlow
-            or "matters most" in qlow or "matter most" in qlow or "matters the most" in qlow):
-        return "value"
-    if "integrate" in qlow or "integration with friday" in qlow or "integration point" in qlow:
-        return "integration"
-    # Meaningful overlap (Milestone 3.6): "how do my projects overlap", "what
-    # parts overlap" — compare along dimensions, not syntax. Placed before the
-    # architecture matcher so "how do my projects overlap" doesn't become an
-    # architecture deep-dive, and before similarity (shared code / reuse).
-    if "overlap" in qlow or "merge" in qlow or "merging" in qlow:
-        return "overlap"
-    # Relationship questions first (so "how is X related to Y" is not swallowed
-    # by the architecture matcher's "how is" rule). Audit §5: weak/strong
-    # relationships must be presented distinctly.
-    if "related" in qlow or "how are" in qlow or "connection" in qlow:
-        return "related"
-    # Architecture explanation / how-it-works (granular technical deep-dive).
-    # Placed BEFORE the human-explain matcher so "Explain X's architecture"
-    # routes here (data_flow / components), not to the onboarding summary.
-    if any(w in qlow for w in (
-        "how is", "how does", "how do", "architecture", "architect",
-        "built", "structure", "entry point", "entry points", "startup",
-        "how it works", "how it's built", "components", "implement",
-    )):
-        return "architecture"
-    # Surprising / non-obvious insight requests (M6 F2): "tell me something I
-    # haven't noticed", "what stands out", "surprise me". Route to the insights
-    # layer (engineering observations), NOT to a single-repo describe.
-    if any(w in qlow for w in (
-        "haven't noticed", "havent noticed", "have not noticed",
-        "surprise me", "something i", "what stands out", "what should i notice",
-        "non-obvious", "not obvious", "what am i missing",
-    )):
-        return "insights"
-    # Human explanations: purpose/identity first (Milestone 3.5 §2, §3).
-    # "explain"/"walk me through"/"tell me about" map here; "what is" too, so
-    # "Explain Vivaha." and "What is Aether?" produce the onboarding answer.
-    if any(w in qlow for w in (
-        "explain", "walk me through", "tell me about", "describe",
-        "what is", "what does", "what are", "overview of",
-    )):
-        return "describe"
-    # Cross-repo similarity / reuse / shared code.
-    if any(w in qlow for w in (
-        "similar", "similarities", "duplicate", "duplicated", "share code",
-        "sharing code", "shared code", "reuse", "reusable",
-        "same layout", "alike", "comparable", "teach each other",
-        "compare the architectures",
-    )):
-        return "similarity"
-    if "why" in qlow or "purpose" in qlow:
-        return "describe"
-    if "inactive" in qlow or "abandoned" in qlow or "stale" in qlow or "dead" in qlow:
-        return "inactive"
-    if "newest" in qlow or "recent" in qlow or "latest" in qlow:
-        return "newest"
-    if "most active" in qlow or "work on next" in qlow or "should i" in qlow:
-        return "recommend"
-    if any(w in qlow for w in (
-        "continue", "pause", "most attention", "which project should i",
-        "which should i", "what deserves", "deserve my",
-    )):
-        return "recommend"
-    if "insight" in qlow or "observation" in qlow or "overview" in qlow:
-        return "insights"
-    if "share" in qlow or "use" in qlow or "which project" in qlow:
-        for t in techs:
-            if t.lower() in qlow:
-                return "by-tech"
-        for t in ("rust", "python", "go", "typescript", "java", "c++", "javascript"):
-            if t in qlow:
-                return "by-tech"
-        return "by-tech"
-    return "general"
+    return [r.name for r in q.all_repositories(conn) if r.name.lower() in qlow]
 
 
-def _intent_explanation() -> str:
-    """System prompt for LLM intent extraction (spec: one prompt, JSON only).
-
-    The model is explicitly told it is NOT answering — only identifying intent,
-    entities, comparison, workspace scope, and confidence. No prose, no retrieval.
-    """
-    intents = ", ".join(sorted(_VALID_INTENTS))
-    return (
-        "You are Friday's intent extractor. You are NOT answering the question. "
-        "You are ONLY identifying what the user is asking so a deterministic "
-        "retriever can fetch the right evidence.\n"
-        "Identify:\n"
-        "  - intent: one of [" + intents + "]\n"
-        "      chitchat = greeting, thanks, 'who are you'\n"
-        "      compare = an explicit request to compare two repositories\n"
-        "      related = how one repo relates to another\n"
-        "      architecture = how a repo is built / its internals / components\n"
-        "      describe = explain a single project's purpose / identity\n"
-        "      similarity = shared code / reuse / similar layout across repos\n"
-        "      inactive = which repos are stale / abandoned / dead\n"
-        "      newest = which repos are newest / most recent\n"
-        "      recommend = what to continue / pause / work on next / prioritize\n"
-        "      portfolio = recurring themes / what the user is building / patterns\n"
-        "      value = which project is most valuable / worth most\n"
-        "      overlap = meaningful overlap BETWEEN projects (problem domain, "
-        "architecture, persistence, business goal) — NOT shared code\n"
-        "      integration = which project should integrate with Friday / merge into one system\n"
-        "      workspace = the whole engineering universe / direction / evolution\n"
-        "      by-tech = which projects use a technology or language\n"
-        "      insights = workspace observations / overview\n"
-        "      general = does not fit any other category\n"
-        "  - entities: repository / project names mentioned (exact names from context)\n"
-        "  - compare: true ONLY if the user explicitly wants two repos compared\n"
-        "  - workspace: true if the question spans the WHOLE workspace, not one repo\n"
-        "  - confidence: 0.0-1.0, your certainty about this classification\n"
-        "Understand questions naturally — do NOT rely on literal keywords. "
-        "e.g. 'What am I building?', 'What seems to connect my projects?', "
-        "'What direction is my work heading?', 'If someone saw my repositories what "
-        "would they think I build?' should all be portfolio. 'What overlaps?', "
-        "'What should integrate?', 'What should eventually become one system?' are "
-        "overlap / integration respectively.\n"
-        "Return valid JSON only. No prose, no explanations, no markdown. "
-        "If confidence is genuinely low (<0.3), return {\"intent\": \"Unknown\"}. "
-        'Schema: {"intent": str, "entities": [str], "compare": bool, "workspace": bool, "confidence": float}'
-    )
-
-
-def extract_intent(question: str, conn) -> Optional[Intent]:
-    """Structured intent extraction — the ONLY step that uses the LLM for
-    understanding.
-
-    OFFLINE (no LLM configured): returns the keyword classifier wrapped as an
-    Intent (graceful degradation).
-    ONLINE: calls the LLM. Returns the parsed Intent, or None when the model was
-    available but genuinely uncertain (returned "Unknown" / an invalid label) —
-    in which case the caller should admit it couldn't determine the question.
-    The LLM never retrieves and never answers here.
-    """
-    if not llm_enabled():
-        return Intent(intent=deterministic_classifier(question, conn))
-
-    # Give the model the vocabulary it can reason against (names only — no PII).
-    repo_names = [r.name for r in q.all_repositories(conn) if r.id is not None]
-    names_block = ", ".join(repo_names) if repo_names else "(no repositories ingested yet)"
-
-    # `_call` already returns the assistant message text (extracted from either a
-    # single JSON object or an SSE stream). That text is itself JSON we parse.
-    content = _call(
-        _intent_explanation(),
-        f"Known projects in this workspace: {names_block}\n\n"
-        f"Question: {question}",
-    )
-    if not content:
-        return None
-    # Strip a markdown ```json ... ``` fence if the model wrapped its answer.
-    content = content.strip()
-    if content.startswith("```"):
-        content = content.split("```", 2)[1]
-        if content.startswith("json"):
-            content = content[4:]
-    content = content.strip().strip("`").strip()
-    if content.startswith("json"):
-        content = content[4:].strip()
-    try:
-        data = json.loads(content)
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-    intent = data.get("intent")
-    if intent == "Unknown" or not intent:
-        # Honest uncertainty — signal the caller to say so plainly.
-        return None
-    if intent not in _VALID_INTENTS:
-        return None  # unknown label — degrade to keyword fallback
-    return Intent(
-        intent=intent,
-        entities=list(data.get("entities") or []),
-        compare=bool(data.get("compare", False)),
-        workspace=bool(data.get("workspace", False)),
-        confidence=float(data.get("confidence", 0.5)),
-    )
-
-
-def classify(question: str, conn) -> str:
-    """Public classify (kept for tests / direct callers).
-
-    ONLINE: LLM intent extraction. OFFLINE: keyword fallback. Returns the
-    canonical intent string consumed by `retrieve`.
-    """
-    intent = extract_intent(question, conn)
-    if intent is not None:
-        return intent.intent
-    return deterministic_classifier(question, conn)
-
-
-def _detect_repo(question: str, conn) -> Optional[Repository]:
-    # Try explicit names in the question.
-    qlow = question.lower()
-    repos = q.all_repositories(conn)
-    for r in repos:
-        if r.name.lower() in qlow:
-            return r
-    # Strip question words, look for token overlap.
-    cleaned = re.sub(r"[^a-z0-9 ]", " ", qlow)
-    toks = {t for t in cleaned.split() if len(t) > 2 and t not in _STOP}
-    for r in repos:
-        rlow = r.name.lower()
-        if any(t in rlow for t in toks):
-            return r
-    return None
+def _resolve_subjects_safe(question: str) -> list[str]:
+    """Like _resolve_subjects but conn-free (used by legacy intents offline)."""
+    # Without a conn we cannot enumerate repos; name resolution happens later
+    # in the provider via _detect_repo. Return empty; providers fall back.
+    return []
 
 
 _STOP = {
@@ -381,415 +1530,31 @@ _STOP = {
 }
 
 
-def retrieve(question: str, intent: str, conn) -> Evidence:
-    today = _today()
-    ev = Evidence(intent=intent)
+def _detect_repo(question: str, conn) -> Optional[Repository]:
+    qlow = question.lower()
+    repos = q.all_repositories(conn)
+    for r in repos:
+        if r.name.lower() in qlow:
+            return r
+    cleaned = re.sub(r"[^a-z0-9 ]", " ", qlow)
+    toks = {t for t in cleaned.split() if len(t) > 2 and t not in _STOP}
+    for r in repos:
+        rlow = r.name.lower()
+        if any(t in rlow for t in toks):
+            return r
+    return None
 
-    if intent == "chitchat":
-        return ev
 
-    if intent == "compare":
-        # Find all repositories explicitly named in the question (distinct).
-        repos = q.all_repositories(conn)
-        qlow = question.lower()
-        named = [r for r in repos if r.name.lower() in qlow]
-        # De-duplicate while preserving order.
-        seen = set()
-        targets = []
-        for r in named:
-            if r.name not in seen:
-                seen.add(r.name)
-                targets.append(r)
-        if len(targets) < 2:
-            # Fall back to the single detected repo if only one named.
-            single = _detect_repo(question, conn)
-            if single and single not in targets:
-                targets.append(single)
-        if len(targets) < 2:
-            ev.raw["note"] = "could not identify two repositories to compare"
-            return ev
-        cards = []
-        for r in targets[:2]:
-            if r.id is not None:
-                card = q.identity_card(conn, r.id, today)
-                cards.append(_card_text(card))
-                ev.raw.setdefault("compare", []).append(r.name)
-        ev.blocks = cards
-        return ev
-
-    if intent == "related":
-        qlow = question.lower()
-        r = _detect_repo(question, conn)
-        if not r or r.id is None:
-            # No single subject named — answer at workspace level (e.g. "which
-            # projects feel related?"). Surface Medium/Strong relationships only;
-            # weak coincidences are omitted (Part F: prefer meaningful links).
-            from .db import get_all_relationships
-
-            pairs: list[str] = []
-            name_by_id = {x.id: x.name for x in q.all_repositories(conn)}
-            ranked = [rel for rel in get_all_relationships(conn) if rel.strength != "Weak"]
-            ranked.sort(key=lambda rel: _rel_rank(rel.kind))
-            for rel in ranked:
-                an = name_by_id.get(rel.repo_a)
-                bn = name_by_id.get(rel.repo_b)
-                if an and bn:
-                    pairs.append(f"{an} and {bn}: {rel.kind.replace('shared-', 'shared ')} "
-                                 f"({rel.evidence})")
-            if pairs:
-                ev.blocks = ["Projects that are genuinely related (Medium/Strong evidence):"] + pairs
-            else:
-                ev.blocks = ["No Medium/Strong relationships detected across the workspace."]
-            return ev
-        # Weak relationships are coincidences (shared author/org/language), not
-        # insight. Hide them unless the user explicitly asks to include weak ones.
-        include_weak = any(w in qlow for w in ("weak", "all relationships", "everything", "including"))
-        others = [o for o in q.all_repositories(conn) if o.id is not None and o.id != r.id]
-        rels: list[str] = []
-        for o in others:
-            pairs = q.relationships_between(conn, r.id, o.id)
-            if not pairs:
-                continue
-            strong = [p for p in pairs if p.strength != "Weak"]
-            weak = [p for p in pairs if p.strength == "Weak"]
-            # Answer WHY they are related, not just WHAT they share. Prefer
-            # problem/responsibility/goal/abstraction over bare tech overlap.
-            why = [
-                f"{p.kind.replace('shared-', 'shared ')} — {p.evidence}"
-                for p in sorted(strong, key=lambda p: _rel_rank(p.kind))
-            ]
-            if include_weak and weak:
-                why += [f"weak coincidence: {p.kind.replace('shared-', 'shared ')} ({p.evidence})"
-                        for p in weak]
-            if why:
-                rels.append(f"{o.name}: " + "; ".join(why))
-        if rels:
-            ev.blocks = rels
-        elif include_weak:
-            ev.blocks = [f"No relationships found for {r.name}."]
-        else:
-            ev.blocks = [
-                f"No strong or medium relationships found for {r.name}. "
-                f"(Weak coincidences like shared author/language are omitted — "
-                f"ask 'including weak relationships' to see them.)"
-            ]
-        ev.raw["repo"] = r.name
-        return ev
-
-    if intent == "architecture":
-        r = _detect_repo(question, conn)
-        if not r or r.id is None:
-            ev.raw["note"] = "could not identify repository"
-            return ev
-        arch = q.architecture_of(conn, r.id)
-        comps = q.components_of(conn, r.id)
-        eps = q.entry_points_of(conn, r.id)
-        if arch is None:
-            ev.blocks = [
-                f"No architecture knowledge stored for {r.name}. Run `friday analyze {r.path}`."
-            ]
-            ev.raw["repo"] = r.name
-            return ev
-        lines = [f"{r.name} — {arch.architecture}"]
-        if arch.confidence:
-            lines.append(f"Confidence: {arch.confidence}")
-        lines.append("Evidence:")
-        lines.append("- " + arch.evidence.replace("\n", "\n- "))
-        if comps:
-            lines.append("Major components:")
-            for c in comps:
-                # Components are Weak concepts — say so, don't imply reusable code.
-                lines.append(f"- {c.name} ({c.strength} evidence): {c.evidence}")
-        if eps:
-            # Group entry points by role (Application / Framework root / Utility).
-            app_eps = [e for e in eps if e.kind in ("main()", "CLI", "FastAPI app",
-                                                   "Flask app", "Next.js app", "Cargo binary", "Executable script")]
-            util_eps = [e for e in eps if e.kind == "Utility script"]
-            if app_eps:
-                lines.append("Application entry points:")
-                for e in app_eps:
-                    lines.append(f"- {e.kind}: {e.detail} ({e.evidence})")
-            if util_eps:
-                lines.append("Utility scripts (not application entry points):")
-                for e in util_eps:
-                    lines.append(f"- {e.detail} ({e.evidence})")
-        if arch.data_flow:
-            lines.append("Data flow:")
-            lines.append("- " + "\n- ".join(arch.data_flow.split("\n")))
-        if arch.known_patterns:
-            lines.append("Known patterns:")
-            lines.append("- " + "\n- ".join(arch.known_patterns.split("\n")))
-        if arch.complexity:
-            lines.append(f"Potential complexity: {arch.complexity}")
-        ev.blocks = lines
-        ev.raw["repo"] = r.name
-        ev.raw["architecture"] = arch.architecture
-        return ev
-
-    if intent == "similarity":
-        pairs = q.similar_layouts(conn)
-        reuse = q.reuse_opportunities(conn)
-        blocks: list[str] = []
-        # Actionable shared-code candidates (Medium/Strong evidence only).
-        if reuse:
-            blocks.append("Realistic shared-code opportunities (Medium/Strong evidence only):")
-            for line in reuse:
-                blocks.append(f"- {line}")
-        # "Could these teach each other something?" — compare along dimensions,
-        # not a flat dependency list (audit §9). Compare any pair that shares a
-        # Medium/Strong relationship OR the same architecture label.
-        name_by_id = {r.id: r.name for r in q.all_repositories(conn) if r.id is not None}
-        id_by_name = {v: k for k, v in name_by_id.items()}
-        compared: list[str] = []
-        seen_pairs: set[tuple[str, str]] = set()
-        from .db import get_all_relationships
-
-        for rel in get_all_relationships(conn):
-            if rel.strength == "Weak":
-                continue
-            an, bn = name_by_id.get(rel.repo_a), name_by_id.get(rel.repo_b)
-            if an and bn:
-                seen_pairs.add(tuple(sorted((an, bn))))
-        # Also compare same-architecture label pairs (no relationship needed).
-        for a, b in pairs:
-            seen_pairs.add(tuple(sorted((a, b))))
-
-        for an, bn in seen_pairs:
-            a_id, b_id = id_by_name.get(an), id_by_name.get(bn)
-            if a_id is None or b_id is None:
-                continue
-            cmp = q.compare_repositories(conn, a_id, b_id)
-            dims = [v for v in (
-                cmp["architecture"], cmp["responsibilities"], cmp["deployment"],
-                cmp["persistence"], cmp["interfaces"],
-            ) if v]
-            if dims:
-                compared.append(f"- {an} and {bn}: " + "; ".join(dims) + ".")
-        if compared:
-            blocks.append("What these projects share (architecture, not just dependencies):")
-            blocks.extend(compared)
-        elif pairs:
-            blocks.append("Repositories with similar architecture labels (verify before acting):")
-            for a, b in pairs:
-                blocks.append(f"- {a} and {b}")
-        if not blocks:
-            blocks = ["No evidence-backed cross-repository similarities found."]
-        ev.blocks = blocks
-        ev.raw["reuse"] = reuse
-        ev.raw["similar_layouts"] = [list(p) for p in pairs]
-        return ev
-
-    if intent == "describe":
-        r = _detect_repo(question, conn)
-        if not r or r.id is None:
-            ev.raw["note"] = "could not identify repository"
-            return ev
-        # Human explanation: purpose/identity first, then architecture (§2/§3/§11).
-        text = explain_project_from_conn(conn, r.id, detailed=True)
-        ev.blocks = [text]
-        ev.raw["repo"] = r.name
-        ev.raw["identity"] = True
-        return ev
-
-    if intent == "inactive":
-        days = 180 if ("abandon" in question.lower()) else q.STALE_DAYS
-        repos = q.inactive_repos(conn, today, days)
-        label = "abandoned" if days >= q.ABANDONED_DAYS else "inactive"
-        if repos:
-            ev.blocks = [
-                f"{r.name} is {label}: last commit {r.last_commit_date[:10]} "
-                f"({(today - dt.date.fromisoformat(r.last_commit_date[:10])).days} days ago, "
-                f"threshold {days} days)"
-                for r in repos
-            ]
-        else:
-            ev.blocks = [
-                f"No repositories are {label}. Every repo has a commit within the "
-                f"last {days} days (per git commit dates)."
-            ]
-        ev.raw["count"] = len(repos)
-        return ev
-
-    if intent == "newest":
-        repos = q.newest_repos(conn, 3)
-        ev.blocks = [
-            f"{r.name}: first commit {r.first_commit_date[:10]}" for r in repos
-        ]
-        ev.raw["newest"] = [r.name for r in repos]
-        return ev
-
-    if intent == "recommend":
-        # "Which should I continue?" — combine activity, blockers, importance,
-        # business value, recent work, uncommitted changes, README maturity and
-        # purpose (audit §10). Not commit counts alone.
-        priorities = q.workspace_priorities(conn, today, n=3)
-        if not priorities:
-            ev.blocks = ["I don't have enough evidence to prioritize — no repositories are ingested."]
-            return ev
-        lines: list[str] = []
-        top = priorities[0]
-        top_repo, top_reasons = top
-        lines.append(f"If you want the highest-leverage next step, continue {top_repo.name}.")
-        lines.append("Why: " + "; ".join(top_reasons) + ".")
-        if len(priorities) > 1:
-            lines.append("Next after that:")
-            for repo, reasons in priorities[1:]:
-                lines.append(f"- {repo.name}: {'; '.join(reasons)}.")
-        ev.blocks = lines
-        ev.raw["recommend"] = lines
-        return ev
-
-    if intent == "portfolio":
-        from .portfolio import (
-            portfolio_synthesis,
-            portfolio_strengths,
-            portfolio_effort,
-            detect_themes,
-        )
-
-        # F1: the same "portfolio" bucket covers three different questions.
-        # Select the smallest evidence set that answers the actual question
-        # instead of always dumping the full theme summary.
-        mode = _portfolio_mode(question)
-        if mode == "strengths":
-            blocks = portfolio_strengths(conn, today)
-        elif mode == "effort":
-            blocks = portfolio_effort(conn, today)
-        else:
-            blocks = portfolio_synthesis(conn, today)
-        ev.blocks = blocks
-        ev.raw["portfolio_mode"] = mode
-        ev.raw["portfolio"] = blocks
-        ev.raw["themes"] = [
-            {"theme": t.theme, "repos": t.repos, "confidence": t.confidence}
-            for t in detect_themes(conn, today)
-        ]
-        return ev
-
-    if intent == "value":
-        from .portfolio import project_value_ranking
-
-        ranked = project_value_ranking(conn, today)
-        if not ranked:
-            ev.raw["note"] = "no value signals available"
-            return ev
-        top = ranked[0]
-        lines = [
-            f"If 'most valuable' means accumulated evidence of purpose, business "
-            f"value, activity and importance, {top.repo} ranks highest."
-        ]
-        for v in ranked[:3]:
-            lines.append(f"- {v.repo} ({v.confidence} confidence): {'; '.join(v.signals)}.")
-        lines.append(
-            f"Confidence: {top.confidence} — based on stored purpose, business "
-            f"value, activity and relationship evidence, not commit counts alone."
-        )
-        ev.blocks = lines
-        ev.raw["value"] = [
-            {"repo": v.repo, "confidence": v.confidence, "signals": v.signals}
-            for v in ranked
-        ]
-        return ev
-
-    if intent == "overlap":
-        from .portfolio import meaningful_overlap
-
-        results = meaningful_overlap(conn, today)
-        if not results:
-            ev.blocks = [
-                "No meaningful cross-project overlap found in the stored evidence "
-                "(architecture, shared purpose, persistence, auth, storage, config)."
-            ]
-            return ev
-        blocks = ["Meaningful overlap across your projects (by responsibility and problem domain, not syntax):"]
-        for o in results:
-            blocks.append(f"- {o.a} and {o.b} ({o.confidence} confidence): "
-                          + "; ".join(o.dimensions) + ".")
-        ev.blocks = blocks
-        ev.raw["overlap"] = [
-            {"a": o.a, "b": o.b, "dimensions": o.dimensions, "confidence": o.confidence}
-            for o in results
-        ]
-        return ev
-
-    if intent == "integration":
-        from .portfolio import integration_opportunities
-
-        cands = integration_opportunities(conn, today)
-        if not cands:
-            ev.blocks = [
-                "No project currently shows reasonable evidence for integration "
-                "with Friday (no shared AI/assistant/workflow/OS purpose or "
-                "overlapping technology). Confidence: Weak."
-            ]
-            ev.raw["integration"] = []
-            return ev
-        blocks = ["Candidates to integrate with Friday (reasoned from project identity):"]
-        for c in cands:
-            blocks.append(f"- {c.repo} ({c.confidence} confidence): {c.reason}.")
-        ev.blocks = blocks
-        ev.raw["integration"] = [
-            {"repo": c.repo, "confidence": c.confidence, "reason": c.reason}
-            for c in cands
-        ]
-        return ev
-
-    if intent == "workspace":
-        from .portfolio import engineering_universe
-
-        lines = engineering_universe(conn, today)
-        ev.blocks = lines
-        ev.raw["universe"] = lines
-        return ev
-
-    if intent == "by-tech":
-        tech = _detect_tech(question, conn)
-        if tech:
-            repos = q.projects_by_tech(conn, tech)
-            if repos:
-                ev.blocks = [f"{r.name} uses {tech}" for r in repos]
-            else:
-                ev.blocks = [f"No repositories use {tech} (per detected technologies)."]
-            ev.raw["tech"] = tech
-            ev.raw["repos"] = [r.name for r in repos]
-            return ev
-        lang = _detect_lang(question)
-        if lang:
-            repos = q.projects_by_language(conn, lang)
-            ev.blocks = [f"{r.name} uses {lang}" for r in repos] or [f"No repositories use {lang}."]
-            ev.raw["lang"] = lang
-            return ev
-        ev.raw["note"] = "could not identify a technology or language"
-        return ev
-
-    if intent == "insights":
-        # F2: prefer the surprising engineering-observation layer over raw fact
-        # dumps. If nothing non-obvious is supported by evidence, say so plainly
-        # rather than falling back to "newest repository" filler.
-        from .insights import generate_insights, _engineering_insights
-
-        eng = _engineering_insights(conn, today)
-        if eng:
-            ev.blocks = [i.text for i in eng]
-        else:
-            ev.blocks = [
-                "I don't see anything non-obvious in your workspace yet — no "
-                "repeated solutions, emerging trends, or effort shifts are "
-                "evident from the stored evidence. Keep ingesting and I'll "
-                "surface them as they appear."
-            ]
-        ev.raw["insights"] = ev.blocks
-        return ev
-
-    # general
-    ev.raw["note"] = "intent not recognized"
-    return ev
+def _repo_by_name(conn, name: str) -> Optional[Repository]:
+    for r in q.all_repositories(conn):
+        if r.name.lower() == (name or "").lower():
+            return r
+    return None
 
 
 def _detect_tech(question: str, conn) -> Optional[str]:
     qlow = question.lower()
     techs = _known_techs(conn)
-    # Exact (case-insensitive) then substring.
     for t in techs:
         if t.lower() in qlow:
             return t
@@ -843,6 +1608,7 @@ def _card_text(card) -> str:
 # Synthesis
 # ---------------------------------------------------------------------------
 
+
 _SYSTEM = (
     "You are Friday, an operating partner that answers questions about the user's "
     "software projects using ONLY the provided Evidence. Rules:\n"
@@ -864,67 +1630,239 @@ _SYSTEM = (
     "integration, themes), state Confidence: Strong / Medium / Weak and the basis. "
     "Prefer context, purpose and engineering meaning; reserve architecture detail "
     "for the final part of the answer.\n"
+    "8. ANSWER OBJECTIVE: the Engineering Objective below names the KIND of "
+    "judgment being requested (explain / compare / profile / platform / merge / "
+    "themes / direction / lessons / habits / assumptions / drift / etc.). Answer "
+    "THAT judgment, not a generic evidence summary. Follow the Answer Contract "
+    "section order when it is given — it tells you how the answer must be "
+    "structured (e.g. a compare must cover shared goal, different goals, "
+    "architecture, technology, maturity, recommendation — NOT two description "
+    "dumps). Do NOT collapse distinct objectives into the same answer shape.\n"
     "Do not role-play or add commentary beyond the answer."
 )
 
 
-def _synthesize(question: str, ev: Evidence) -> Optional[str]:
+def _synthesize(question: str, ev: Evidence, prev: Optional["Exchange"] = None,
+                decision: Optional[object] = None) -> Optional[str]:
     """Call the LLM to produce an answer from the evidence. Returns None on any
-    failure (caller falls back)."""
+    failure (caller falls back).
+
+    `prev` is supplied ONLY as disambiguation context (pronouns, ellipsis,
+    follow-ups like "why not X?"). It is never placed in the Evidence block and
+    must never be treated by the model as a fact to cite. `decision` carries the
+    engineering objective + answer contract so the model frames the answer to the
+    judgment being requested.
+    """
     if not llm_enabled():
         return None
     evidence_str = "\n".join(ev.blocks) if ev.blocks else json.dumps(ev.raw, indent=2)
     if not evidence_str.strip():
         evidence_str = "(no retrieved evidence)"
+    ctx = ""
+    if prev is not None:
+        ctx = (
+            "\n\nPREVIOUS EXCHANGE (disambiguation context ONLY — resolve pronouns "
+            "and follow-ups against it, but NEVER treat its answer as evidence or "
+            "cite it as a fact; the Evidence block below is the only source):\n"
+            f"Q: {prev.question}\nA: {prev.answer.text}\n"
+        )
+    objective_line = ""
+    if decision is not None:
+        objective_line = f"\n\nEngineering Objective: {decision.objective}\n"
+        if decision.contract:
+            objective_line += (
+                "Answer Contract (follow this section order): "
+                + " > ".join(decision.contract) + ".\n"
+            )
     user = (
         f"Question: {question}\n\n"
         f"Evidence:\n{evidence_str}\n\n"
-        f"Answer (grounded only in Evidence):"
+        f"Answer (grounded only in Evidence):{ctx}{objective_line}"
     )
     return _call(_SYSTEM, user)
 
 
-def _deterministic_answer(question: str, ev: Evidence, intent: str) -> str:
-    if intent == "chitchat":
+def _deterministic_answer(question: str, ev: Evidence, label: str,
+                           decision: Optional[object] = None) -> str:
+    if label == "chitchat":
         return ("I'm Friday, your workspace operating partner. Ask me about your "
                 "projects — which use a technology, what a project is for, how two "
                 "repos relate, or which look abandoned.")
     if not ev.blocks:
         return ("I don't have enough evidence to answer that. Try rephrasing, or set "
                 "FRIDAY_LLM_MODEL to let me handle open-ended questions.")
-    # General fallback: just present the evidence plainly.
+    if decision is not None and decision.contract:
+        # Honor the answer contract: lead with the blocks that answer the first
+        # contract sections. The primary provider already emits the right content
+        # in the right order; this keeps any supporting evidence from jumping the
+        # primary answer when it happens to be a single prose block.
+        return "\n".join(ev.blocks)
     return "\n".join(ev.blocks)
 
 
-def ask(question: str, conn, verbose: bool = False) -> Answer:
-    # ONLINE: LLM understands intent. OFFLINE / failure: keyword fallback.
-    extracted = extract_intent(question, conn)
-    if extracted is None:
-        # Could not confidently determine intent (LLM unavailable, or it returned
-        # "Unknown" / an invalid label). Honest, extremely-rare degradation.
+# ---------------------------------------------------------------------------
+# Bounded conversational continuity (M6.5D)
+# ---------------------------------------------------------------------------
+# Only the immediately previous exchange is ever remembered. No long-term
+# memory, no planner, no agent. The previous answer is reference-resolution
+# context — it is NEVER treated as evidence for the next turn (a fresh
+# retrieval always runs after a follow-up is rewritten).
+
+_RESTATE = ("how so", "why is that", "why's that", "convince me",
+            "explain more", "elaborate", "tell me more", "more detail",
+            "go on", "clarify that")
+_CONTRAST_PREFIX = ("why not", "what about", "how about", "and not", "but not")
+_NEXT_PREFIX = ("what next", "and then", "after that", "then what", "what should i do next",
+                "what do i do next", "next step", "next steps")
+_AGE_PREFIX = ("how long", "how old", "since when", "age of", "how stale", "how stale")
+
+
+def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
+    """Resolve a follow-up against the previous exchange, deterministically.
+
+    Returns one of:
+      ("rewrite", new_question) -> a fresh retrieval should run for new_question
+      ("restate", text)         -> re-present previous reasoning, no new evidence
+      ("clarify", text)         -> ambiguous; ask which antecedent
+      None                      -> not a follow-up; ask() proceeds normally
+    """
+    qlow = question.lower().strip()
+    ev = prev.answer.evidence
+    subj = ev.subject
+    subjects = ev.raw.get("subjects") or ([subj] if subj else [])
+
+    if len(subjects) >= 2 and not _named_repo_in(qlow, conn):
+        a, b = subjects[0], subjects[1]
+        return ("clarify",
+                f"Did you mean {a} or {b}? Say which one and I'll explain.")
+
+    if re.match(r"why\b(?!\s*not)", qlow) or any(
+        qlow == w or qlow.startswith(w + " ") or (" " + w) in qlow for w in _RESTATE
+    ):
+        return ("restate", _restate_text(prev, conn))
+
+    for p in _CONTRAST_PREFIX:
+        if qlow.startswith(p + " ") or qlow == p:
+            tail = qlow[len(p):].strip(" ?.")
+            cand = _named_repo_in(tail, conn)
+            if cand and cand.lower() != (subj or "").lower():
+                if subj:
+                    return ("restate", _contrast_text(subj, cand, conn, ev))
+                return ("clarify",
+                        f"Not sure what to compare {cand} against — "
+                        f"ask about a specific project first.")
+            if cand and subj and cand.lower() == subj.lower():
+                return ("restate", _restate_text(prev, conn))
+            return ("clarify",
+                    f"I'm not sure which project '{tail}' refers to. "
+                    f"Name it exactly and I'll compare.")
+
+    for p in _NEXT_PREFIX:
+        if qlow.startswith(p) or qlow == p:
+            return ("rewrite", "What should I work on next?")
+    for p in _AGE_PREFIX:
+        if qlow.startswith(p) or qlow == p:
+            if subj:
+                return ("rewrite", f"How stale is {subj}?")
+            return ("clarify",
+                    "Stale compared to what? Ask about a specific project first.")
+    return None
+
+
+def _named_repo_in(text: str, conn) -> Optional[str]:
+    for r in q.all_repositories(conn):
+        if r.name.lower() in text:
+            return r.name
+    return None
+
+
+def _restate_text(prev: "Exchange", conn) -> str:
+    ev = prev.answer.evidence
+    if ev.intent == "recommend" and ev.raw.get("recommend_subject"):
+        reasons = ev.raw.get("recommend_reasons") or []
+        subj = ev.raw["recommend_subject"]
+        body = "; ".join(reasons) if reasons else "it shows the strongest continue-signal in the stored evidence"
+        return (f"Because {body}. I recommended {subj} as the highest-leverage "
+                f"next step from activity, blockers, importance and recent work "
+                f"across your projects — not commit counts alone.")
+    if ev.subject:
+        return (f"To expand on {ev.subject}: " + prev.answer.text.strip())
+    return prev.answer.text.strip()
+
+
+def _continue_reasons(conn, repo_name: str, today) -> list[str]:
+    for repo, reasons in q.workspace_priorities(conn, today, n=5):
+        if repo.name.lower() == repo_name.lower():
+            return reasons
+    return []
+
+
+def _contrast_text(subj: str, other: str, conn, ev: Evidence) -> str:
+    subj_reasons = _continue_reasons(conn, subj, _today())
+    other_reasons = _continue_reasons(conn, other, _today())
+    bits = [f"continue {subj}: " + ("; ".join(subj_reasons)
+            if subj_reasons else "it carried the strongest continue-signal")]
+    bits.append(f"{other}: " + ("; ".join(other_reasons)
+                if other_reasons else "no strong continue-signal in the stored evidence"))
+    return ("Not " + other + " right now — here is the evidence: "
+            + "; ".join(bits) + ". "
+            "Both are read from activity, blockers, importance and recent work, "
+            "not commit counts.")
+
+
+def ask(question: str, conn, prev: Optional["Exchange"] = None,
+        verbose: bool = False) -> Answer:
+    # Single reasoning pipeline: understand (online) / requirements_from_question
+    # (offline) -> RetrievalRequirements -> retrieve_requirements -> answer.
+    # Bounded continuity: resolve a follow-up first; restate/clarify short-circuit
+    # (no new retrieval); rewrite yields a new question flowing through retrieval.
+    if prev is not None:
+        res = resolve_followup(question, prev, conn)
+        if res is not None:
+            kind, payload = res
+            if kind == "restate":
+                return Answer(text=payload, evidence=prev.answer.evidence, used_llm=False)
+            if kind == "clarify":
+                return Answer(text=payload,
+                              evidence=Evidence(requirements=RetrievalRequirements(needs=["clarify"])),
+                              used_llm=False)
+            if kind == "rewrite":
+                question = payload
+
+    if llm_enabled():
+        req = understand(question, conn)
+    else:
+        req = requirements_from_question(question, conn)
+
+    if req is None:
+        # Could not confidently determine the question (LLM unavailable or it
+        # returned "Unknown" / an invalid label). Honest, extremely-rare case.
         return Answer(
             text=("I couldn't confidently determine what you are asking. "
                   "Try rephrasing, or set FRIDAY_LLM_MODEL so I can interpret "
                   "open-ended questions."),
-            evidence=Evidence(intent="general"),
+            evidence=Evidence(requirements=RetrievalRequirements(needs=["general"])),
             used_llm=False,
         )
-    intent = extracted.intent
 
-    ev = retrieve(question, intent, conn)
+    ev = retrieve_requirements(req, conn)
+    decision = obj_mod.ObjectiveDecision(
+        objective=ev.raw.get("objective", "general"),
+        needs=list(req.needs),
+        lens=req.lens,
+        contract=obj_mod.contract_for(ev.raw.get("objective", "general")),
+        reason=ev.raw.get("objective_reason", ""),
+    )
 
     text: Optional[str] = None
     used_llm = False
-    if intent == "chitchat":
-        text = _deterministic_answer(question, ev, intent)
+    if "chitchat" in ev.requirements.needs:
+        text = _deterministic_answer(question, ev, "chitchat", decision)
     elif llm_enabled() and os.environ.get("FRIDAY_ANSWER_LLM") == "1":
-        # Opt-in: only with a strong model. The free/default model compresses
-        # evidence into terse "Next:" bullets, so deterministic rendering is the
-        # default (clean, fast, fully evidence-backed). Set FRIDAY_ANSWER_LLM=1
-        # to let the LLM rephrase the evidence into prose.
-        text = _synthesize(question, ev)
+        text = _synthesize(question, ev, prev=prev, decision=decision)
         used_llm = text is not None
     if text is None:
-        text = _deterministic_answer(question, ev, intent)
+        text = _deterministic_answer(
+            question, ev, _label_of(ev.requirements), decision)
 
     return Answer(text=text, evidence=ev, used_llm=used_llm)
