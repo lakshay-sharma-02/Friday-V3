@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS entry_points (
     evidence  TEXT NOT NULL,
     PRIMARY KEY (repo_id, kind, detail)
 );
+
+CREATE TABLE IF NOT EXISTS snapshots (
+    id               INTEGER PRIMARY KEY,
+    observed_at      TEXT NOT NULL,
+    repo_path        TEXT NOT NULL,
+    repo_name        TEXT,
+    default_branch   TEXT,
+    commit_count     INTEGER,
+    last_commit_date TEXT,
+    is_dirty         INTEGER NOT NULL DEFAULT 0,
+    readme_hash      TEXT,
+    architecture_hash TEXT,
+    identity_hash    TEXT
+);
 """
 
 
@@ -525,6 +539,80 @@ def entry_points_by_kind(conn: sqlite3.Connection, kind: str) -> list[EntryPoint
     return [
         EntryPointRow(
             repo_id=r["repo_id"], kind=r["kind"], detail=r["detail"], evidence=r["evidence"]
+        )
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Observation snapshots (Milestone 5) — append-only, facts only.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SnapshotRow:
+    observed_at: str
+    repo_path: str
+    repo_name: Optional[str]
+    default_branch: Optional[str]
+    commit_count: Optional[int]
+    last_commit_date: Optional[str]
+    is_dirty: bool
+    readme_hash: Optional[str]
+    architecture_hash: Optional[str]
+    identity_hash: Optional[str]
+
+
+def insert_snapshot(conn: sqlite3.Connection, snap: SnapshotRow) -> None:
+    """Append one observation row. Snapshots are never updated or deleted."""
+    conn.execute(
+        """
+        INSERT INTO snapshots
+            (observed_at, repo_path, repo_name, default_branch, commit_count,
+             last_commit_date, is_dirty, readme_hash, architecture_hash, identity_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            snap.observed_at,
+            snap.repo_path,
+            snap.repo_name,
+            snap.default_branch,
+            snap.commit_count,
+            snap.last_commit_date,
+            int(snap.is_dirty),
+            snap.readme_hash,
+            snap.architecture_hash,
+            snap.identity_hash,
+        ),
+    )
+    conn.commit()
+
+
+def latest_observation(conn: sqlite3.Connection) -> list[SnapshotRow]:
+    """All snapshot rows from the single most recent prior observation run.
+
+    Call BEFORE writing the current run so a run never diffs against itself.
+    Returns [] when no observations exist yet.
+    """
+    row = conn.execute("SELECT MAX(observed_at) AS t FROM snapshots").fetchone()
+    if row is None or row["t"] is None:
+        return []
+    latest = row["t"]
+    rows = conn.execute(
+        "SELECT * FROM snapshots WHERE observed_at = ? ORDER BY repo_path", (latest,)
+    ).fetchall()
+    return [
+        SnapshotRow(
+            observed_at=r["observed_at"],
+            repo_path=r["repo_path"],
+            repo_name=r["repo_name"],
+            default_branch=r["default_branch"],
+            commit_count=r["commit_count"],
+            last_commit_date=r["last_commit_date"],
+            is_dirty=bool(r["is_dirty"]),
+            readme_hash=r["readme_hash"],
+            architecture_hash=r["architecture_hash"],
+            identity_hash=r["identity_hash"],
         )
         for r in rows
     ]

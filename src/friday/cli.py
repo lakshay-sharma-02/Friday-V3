@@ -10,6 +10,7 @@ from .ask import ask
 from .architecture import analyze_and_store
 from .db import connect
 from .knowledge import ingest_paths
+from .observe import format_report, observe
 from .summary import generate_summary
 
 
@@ -75,6 +76,15 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_observe(args: argparse.Namespace) -> int:
+    """Record the workspace and report changes since the previous observation."""
+    conn = connect()
+    prev_time, changes = observe(conn)
+    conn.close()
+    print(format_report(prev_time, changes), end="")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="friday",
@@ -103,6 +113,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_analyze.add_argument("repository", help="Path to a git repository.")
     p_analyze.set_defaults(func=cmd_analyze)
+
+    p_observe = sub.add_parser(
+        "observe", help="Record the workspace and report changes since last time."
+    )
+    p_observe.set_defaults(func=cmd_observe)
 
     args = parser.parse_args(argv)
     return args.func(args)
