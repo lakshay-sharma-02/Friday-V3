@@ -249,9 +249,6 @@ def extract_intent(question: str, conn) -> Optional[Intent]:
     repo_names = [r.name for r in q.all_repositories(conn) if r.id is not None]
     names_block = ", ".join(repo_names) if repo_names else "(no repositories ingested yet)"
 
-    base = os.environ.get("FRIDAY_LLM_BASE_URL", "http://localhost:20128/v1").rstrip("/")
-    model = os.environ["FRIDAY_LLM_MODEL"]
-    api_key = os.environ["FRIDAY_LLM_API_KEY"]
     # `_call` already returns the assistant message text (extracted from either a
     # single JSON object or an SSE stream). That text is itself JSON we parse.
     content = _call(
