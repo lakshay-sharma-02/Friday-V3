@@ -150,7 +150,7 @@ def recover_purpose(
             if "CLI" in label:
                 return "A command-line tool.", sources + ["architecture"], "Medium"
             if "Library" in label:
-                return "A software library / package.", sources + ["Medium"]
+                return "A software library / package.", sources + ["architecture"], "Medium"
             if "Cargo" in label:
                 return "A Rust application or workspace.", sources + ["architecture"], "Medium"
         return purpose, sources, confidence

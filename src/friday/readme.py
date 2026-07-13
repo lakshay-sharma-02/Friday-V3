@@ -302,7 +302,7 @@ _BOILERPLATE_MARKERS = (
     "boilerplate",
     "todo: add",
     "this project is a",
-    "Getting Started",
+    "getting started",
     "welcome to your",
     "your new",
 )

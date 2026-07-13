@@ -138,6 +138,38 @@ def test_similar_layouts_query(conn):
     assert frozenset({"A", "C"}) not in pair_names
 
 
+def test_analyze_then_explain_library_bare_repo_no_crash(conn, tmp_path):
+    # Regression: `friday analyze` upserts a repo row with readme_summary=None,
+    # so build_identity -> recover_purpose hits its OWN fallback chain (not the
+    # ingest path). A bare repo classified "Library" with a descriptive name and
+    # no README must not crash on a 2-tuple return (was: "Medium" appended into
+    # sources instead of returned as confidence). Reproduces the standalone
+    # `friday analyze <path>` CLI path, which never populates readme_summary.
+    repo_dir = tmp_path / "finance-tracker"
+    repo_dir.mkdir()
+    (repo_dir / ".git").mkdir()
+    # A [project] pyproject with source modules but NO [project.scripts] and no
+    # `description` -> classifies as "Library" architecture, yet purpose recovery
+    # finds no README and no manifest description, so it falls back to the layout
+    # hint (Low) and then the architecture-hint lift to "Library"/Medium.
+    (repo_dir / "pyproject.toml").write_text(
+        "[project]\nname='finance-tracker'\nversion='0.1.0'\n"
+    )
+    (repo_dir / "__init__.py").write_text("")
+    (repo_dir / "core.py").write_text("def run(): pass\n")
+    analyze_and_store(conn, Repo(path=repo_dir))
+    rid = conn.execute(
+        "SELECT id FROM repositories WHERE path=?", (str(repo_dir),)
+    ).fetchone()["id"]
+    from friday.identity import build_identity, explain_project_from_conn
+
+    ident = build_identity(conn, rid)  # must not raise the 2-tuple ValueError
+    assert ident is not None
+    assert ident.purpose_confidence in ("Low", "Medium", "None")
+    text = explain_project_from_conn(conn, rid)  # and this must render
+    assert text.strip()
+
+
 def test_reuse_opportunities_excludes_concept_components(conn):
     # Two repos both having a db.py/Configuration must NOT become a reuse rec.
     _seed_repo(conn, "A", "/a", "CLI tool", ["Configuration"], [("CLI", "x")])

@@ -1,8 +1,8 @@
 """Discover Git repositories under one or more root folders.
 
-A directory containing a `.git` entry is treated as a repository: we analyze it
-and do not descend into it (nested repos inside are ignored). Hidden caches and
-build outputs are skipped.
+A directory containing a `.git` entry is treated as a repository. Discovery
+recurses into a repository's working tree so nested repositories are found (the
+repo's own `.git` and other hidden/cache dirs are skipped, not analyzed).
 """
 
 from __future__ import annotations
