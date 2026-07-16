@@ -1,0 +1,9 @@
+The strongest pattern is **AI infrastructure as a first-class systems concern**. Aether, MindWell, and vivaha all engage with AI—Aether embeds it directly into the kernel as a primary subsystem rather than as an application layer, while MindWell likely uses it for features like mood tracking or resource recommendation, and vivaha's purpose is unstated but appears in the same cluster.
+
+The second pattern is **developer capability and tooling**. Friday V2 exists explicitly to make engineers more capable; Friday V3 and finance-tracker both appear in the developer tooling cluster. This suggests a theme around reducing friction and extending what engineers can accomplish.
+
+A weaker pattern surfaces around **research and exploration**. Six of your seven projects carry research signals, which may indicate you're using projects as vehicles to validate ideas or learn new domains rather than shipping only mature products.
+
+**Relationship to platforms**: Aether (an operating system) and MindWell (a mental health platform) are the only stated products. Aether's OS-level AI integration could potentially underpin developer tooling like Friday V2, though the Evidence doesn't confirm that connection. MindWell sits in a different domain entirely.
+
+Confidence: Strong for AI infrastructure and developer tooling themes; Medium for research as a pattern; Weak on whether these projects are intended to integrate.

@@ -1,0 +1,13 @@
+You're becoming a generalist infrastructure engineer with a deepening focus on AI systems.
+
+Your primary strength is building foundational tools—libraries and platforms that enable other work. You reach for library architecture repeatedly, suggesting you think in terms of reusable abstractions rather than one-off solutions. You operate with real breadth across 9 languages and move fluidly between domains, which is the mark of someone comfortable in unfamiliar territory.
+
+Your recurring domains cluster around AI infrastructure (Aether, MindWell, vivaha with strong confidence), developer tooling (Friday V2, Friday V3), and operating systems—a tighter focus than the surface-level count of 9 projects suggests. You're not scattered; you're exploring the intersection of tooling and AI.
+
+Technology-wise, you've settled on a repeating stack: React and Supabase appear in both MindWell and vivaha. This isn't accidental—it signals you're building conviction around a particular way of moving quickly in these domains rather than experimenting with every new framework.
+
+Your working style appears to be: start something, learn what matters, then iterate on the architecture. Your three most recent starts (Friday V3, vivaha, Aether) suggest you're actively refining how you build in these spaces rather than maintaining a static approach.
+
+The blind spot: research appears weakly across most projects but is never the stated primary goal. You may be doing research-inflected work without naming it as such, or building tools that *enable* research without treating research itself as a deliverable. That's worth noticing.
+
+Confidence: Medium—derived from engineering domains, repeated decisions, and portfolio direction, not current activity velocity.

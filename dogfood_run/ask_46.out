@@ -1,0 +1,9 @@
+Friday and Friday V3 serve different purposes and should remain separate.
+
+Friday is a guidelines project for project task completion, testing, and code style practices. Friday V3 is a CLI tool. Beyond their shared Python foundation, they differ fundamentally in architecture (REST API vs command-line interface) and intent.
+
+Friday V3 has no stated goal in the evidence, making it difficult to assess whether there's genuine overlap or a case for consolidation. Without clarity on what Friday V3 is meant to accomplish, keeping them separate is the safer choice. If Friday V3 eventually aims to enforce or automate the guidelines that Friday documents, that relationship could shift the recommendation—but that's not evident here.
+
+Current maturity is unknown for both projects, so there's no signal from stability or completeness that would argue for merging.
+
+**Recommendation: keep them separate** until Friday V3's purpose becomes clear.

@@ -1,0 +1,11 @@
+You've been working on AI infrastructure as a primary focus, with strong emphasis on building developer tooling around it.
+
+**Primary strengths.** Aether stands out as your most ambitious project—an AI-native operating system in Rust where AI is a first-class kernel subsystem with direct hardware access. This signals deep work on systems integration and OS-level design. MindWell shows you're also shipping applied products: a mental health platform with anonymous storytelling, mood tracking, and community features, suggesting you can move from infrastructure into user-facing products.
+
+**Recurring domains.** You're consistently drawn to three areas: AI infrastructure (Aether, MindWell, vivaha), developer tooling (Friday V2 and V3—both aimed at making engineers more capable—plus finance-tracker), and mental health (MindWell). The Friday projects suggest you're thinking hard about engineering effectiveness itself, not just building systems.
+
+**Technologies.** Rust appears prominently (Aether). Beyond that, I don't have detected technology data for Friday V2, demo-observe, or observation history that would show your full stack.
+
+**Working style.** You iterate on concepts—Friday has V2 and V3 iterations, suggesting refinement cycles. You're mixing research (flagged across multiple projects) with product work, which indicates you're exploring ideas before committing to scale.
+
+**Blind spots.** I can't assess whether these projects are active, abandoned, or on pause—just that they exist. I also can't see your latest commits or uncommitted changes that might signal what's actually urgent right now.

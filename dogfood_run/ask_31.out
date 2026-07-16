@@ -1,0 +1,9 @@
+You consistently reach for React and Supabase as your default stack. Both MindWell and vivaha are built on this combination, suggesting you've found confidence in this pairing and are willing to repeat it.
+
+You also have a structural habit of building libraries. You've created library abstractions in Friday V2 and finance-tracker, indicating you think in terms of reusable components early.
+
+Your working style appears to favor full-stack JavaScript/TypeScript environments where you can move between frontend and backend without context switching.
+
+A potential blind spot: the evidence doesn't show you experimenting with different architectural patterns or technology choices across projects. You may be optimizing for consistency and speed to delivery, but this could mean you're not stress-testing whether React/Supabase is the right fit for every problem you encounter.
+
+Confidence: Medium — this is based on repeated engineering decisions across 5 of 8 repositories. The missing technology detections for Friday V2 and demo-observe mean I can't confirm whether this pattern holds across your full portfolio.

@@ -1,0 +1,3 @@
+I don't have enough evidence to answer what project relationships have *become* stronger. The Evidence shows current overlaps (Friday V2 and finance-tracker as Libraries; MindWell and vivaha sharing configuration approaches), but contains no temporal data—no git history, commit patterns, or prior relationship snapshots—needed to establish that relationships have *strengthened*.
+
+To answer this properly, I'd need observation history showing how these overlaps have evolved over time. You can generate that by running `friday observe` to capture current state and compare against prior snapshots.

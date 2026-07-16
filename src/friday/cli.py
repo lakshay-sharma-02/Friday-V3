@@ -3,14 +3,40 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+
+def _load_dotenv() -> None:
+    """Load KEY=VALUE lines from a `.env` (cwd, else package root) into the
+    environment without overriding already-set vars. No dependency — the spec
+    forbids adding one. Silent on any error so the CLI never breaks on config."""
+    for path in (Path.cwd() / ".env", Path(__file__).resolve().parents[2] / ".env"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip().strip("'\""))
+        return
+
+
 from .ask import Exchange, ask
 from .architecture import analyze_and_store
+from .cli_knowledge import cmd_knowledge
+from .cli_understanding import cmd_understanding
+from .cli_initiative import cmd_initiatives
+from .cli_insight import cmd_insights
+from .context import ContextEngine, TimelineEntry, summarize_day
 from .db import connect
-from .knowledge import ingest_paths
-from .observe import format_report, observe
+from .ingest import ingest_paths
+from .observe import format_report, observe, observe_via_engine
+from .observation import default_registry, format_run
 from .summary import generate_summary
 
 
@@ -54,6 +80,16 @@ def cmd_ask(args: argparse.Namespace) -> int:
         if cov:
             from .evidence_scope import format_coverage_report
             print("\n" + format_coverage_report(cov))
+        audit = answer.evidence.raw.get("retrieval_audit")
+        if audit:
+            print("Retrieval audit:")
+            print(f"  Objective: {audit['objective']}")
+            print(f"  Providers requested: {', '.join(audit['providers_requested'])}")
+            print(f"  Providers returned:  {', '.join(audit['providers_returned'])}")
+            print(f"  Knowledge used:      {'yes' if audit['knowledge_used'] else 'no'}")
+            print(f"  Confidence:          {audit['confidence']}")
+            if answer.evidence.raw.get("widened"):
+                print("  Coverage widened:    yes (adaptive expansion, once)")
         print(f"\n[synthesized via LLM: {answer.used_llm}]\n")
     print(answer.text)
     return 0
@@ -110,9 +146,146 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 def cmd_observe(args: argparse.Namespace) -> int:
     """Record the workspace and report changes since the previous observation."""
     conn = connect()
-    prev_time, changes = observe(conn)
+    prev_time, changes = observe_via_engine(conn)
     conn.close()
     print(format_report(prev_time, changes), end="")
+    return 0
+
+
+def cmd_observers(args: argparse.Namespace) -> int:
+    """List every registered observer and its health/summary."""
+    conn = connect()
+    reg = default_registry()
+    print(f"Registered observers ({len(reg)}):\n")
+    for obs in reg.all():
+        h = obs.health(conn)
+        state = h.status.value
+        mark = "ok" if h.healthy else "!"
+        print(f"  [{mark}] {obs.name}  ({state})")
+        if h.detail and not h.healthy:
+            print(f"       {h.detail}")
+        try:
+            print(f"       {obs.summarize(conn)}")
+        except Exception as exc:
+            print(f"       (summary unavailable: {exc})")
+    conn.close()
+    return 0
+
+
+def _context_engine():
+    conn = connect()
+    return conn, ContextEngine(conn)
+
+
+def cmd_context_build(args: argparse.Namespace) -> int:
+    """WRITE: build engineering sessions from stored observations and persist."""
+    conn, eng = _context_engine()
+    result = eng.build()
+    conn.close()
+    print(result.to_text(), end="")
+    return 0
+
+
+def cmd_context(args: argparse.Namespace) -> int:
+    """Dispatch friday context [build|today]."""
+    if getattr(args, "action", None) == "build":
+        return cmd_context_build(args)
+    conn, eng = _context_engine()
+    sessions = eng.sessions()
+    if not sessions:
+        conn.close()
+        print("Engineering context has not been built.\n")
+        print("Run:\n")
+        print("  friday context build\n")
+        return 0
+    if eng.is_stale():
+        print("Engineering context is out of date.")
+        print("Latest observations are newer than the current context.\n")
+        print("Run:\n")
+        print("  friday context build\n")
+        print()
+    from datetime import datetime, timezone
+    if getattr(args, "action", None) == "today":
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        summ = eng.summary(day)
+    else:
+        summ = eng.summary()
+    conn.close()
+
+    # Format context summary
+    print(f"Engineering Context — {summ.day}\n")
+    print(f"Sessions: {summ.session_count}")
+    print(f"Active time: {summ.estimated_active_min:.1f} min")
+    print(f"Context switches: {summ.context_switches}")
+    if summ.most_active_repo:
+        print(f"Most active: {summ.most_active_repo}")
+    if summ.current_focus:
+        print(f"Current focus: {summ.current_focus}")
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    """READ-ONLY: list all engineering sessions (newest first)."""
+    conn, eng = _context_engine()
+    sessions = eng.sessions()
+    conn.close()
+
+    if not sessions:
+        print("No sessions found.\n")
+        print("Run:\n")
+        print("  friday context build\n")
+        return 0
+
+    for s in sessions:
+        print(f"{s.start_time[:16]} | {s.duration_min:>5.0f}m | {s.activity.value:20s} | {s.primary_repo or 'multiple'}")
+
+    print(f"\nTotal: {len(sessions)} sessions")
+    return 0
+
+
+def cmd_timeline(args: argparse.Namespace) -> int:
+    """READ-ONLY: show the chronological engineering timeline."""
+    conn, eng = _context_engine()
+    timeline = eng.timeline()
+    conn.close()
+
+    if not timeline:
+        print("No timeline entries.\n")
+        print("Run:\n")
+        print("  friday context build\n")
+        return 0
+
+    for entry in timeline:
+        if entry.kind == "session":
+            print(f"[{entry.start_time[:16]}] {entry.duration_min:>5.0f}m | {entry.label} | {entry.detail or ''}")
+        else:
+            print(f"[{entry.start_time[:16]}] {entry.duration_min:>5.0f}m | {entry.label}")
+
+    return 0
+
+
+def cmd_observer(args: argparse.Namespace) -> int:
+    """Show one observer's health, summary, and live facts."""
+    conn = connect()
+    reg = default_registry()
+    if args.name not in reg:
+        print(f"error: no such observer: {args.name}", file=sys.stderr)
+        print(f"available: {', '.join(reg.names())}", file=sys.stderr)
+        conn.close()
+        return 2
+    obs = reg.get(args.name)
+    h = obs.health(conn)
+    print(f"Observer: {obs.name}")
+    print(f"Health:   {h.status.value}" + (f" — {h.detail}" if h.detail else "") + (f"  [{h.method}]" if h.method else ""))
+    if h.healthy:
+        print(f"Summary:  {obs.summarize(conn)}")
+        if not args.summary_only:
+            from .observation import ObservationEngine, ObserverRegistry
+            reg_single = ObserverRegistry()
+            reg_single.register(obs)
+            run = ObservationEngine(reg_single, conn).run()
+            print("\n" + format_run(run), end="")
+    conn.close()
     return 0
 
 
@@ -130,6 +303,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_dotenv()
     parser = argparse.ArgumentParser(
         prog="friday",
         description="Friday V3 — workspace understanding operating partner.",
@@ -177,6 +351,112 @@ def main(argv: list[str] | None = None) -> int:
         "audit", help="Show exactly why each repository contributes weak evidence."
     )
     p_audit.set_defaults(func=cmd_audit)
+
+    p_observers = sub.add_parser(
+        "observers", help="List all registered observers and their health."
+    )
+    p_observers.set_defaults(func=cmd_observers)
+
+    p_context = sub.add_parser(
+        "context", help="Show engineering context. Add 'build' to (re)build it."
+    )
+    p_context.add_argument(
+        "action", nargs="?", default=None,
+        choices=["build", "today"],
+        help="'build' to derive+persist sessions (WRITE); 'today' for today only; omit to show current context.",
+    )
+    p_context.set_defaults(func=cmd_context)
+
+    p_sessions = sub.add_parser(
+        "sessions", help="List all engineering sessions (newest first)."
+    )
+    p_sessions.set_defaults(func=cmd_sessions)
+
+    p_timeline = sub.add_parser(
+        "timeline", help="Show the chronological engineering timeline."
+    )
+    p_timeline.set_defaults(func=cmd_timeline)
+
+    p_observer = sub.add_parser(
+        "observer", help="Show one observer's health, summary, and live facts."
+    )
+    p_observer.add_argument("name", help="Observer name (see `friday observers`).")
+    p_observer.add_argument(
+        "--summary-only", action="store_true",
+        help="Print health + summary only; skip a fresh observation run.",
+    )
+    p_observer.set_defaults(func=cmd_observer)
+
+    p_knowledge = sub.add_parser(
+        "knowledge", help="Accumulated engineering knowledge (WRITE: 'build')."
+    )
+    p_knowledge.add_argument(
+        "action", nargs="?", default=None,
+        help="Action: 'build' (WRITE), 'list', 'explain', 'history', 'evolution', 'verify'; omit to list.",
+    )
+    p_knowledge.add_argument(
+        "knowledge_id", nargs="?", default=None,
+        help="Knowledge ID for 'explain' action (can also use --id)."
+    )
+    p_knowledge.add_argument(
+        "--id", help="Knowledge ID for 'explain' action."
+    )
+    p_knowledge.add_argument(
+        "--verbose", action="store_true",
+        help="Show full evidence IDs when explaining."
+    )
+    p_knowledge.set_defaults(func=cmd_knowledge)
+
+    p_understanding = sub.add_parser(
+        "understanding", help="Derive and show engineering understanding (WRITE: 'build')."
+    )
+    p_understanding.add_argument(
+        "action", nargs="?", default=None,
+        choices=["build", "explain", "evolution"],
+        help="'build' (WRITE), 'explain <id>', 'evolution'; omit to list.",
+    )
+    p_understanding.add_argument(
+        "understanding_id", nargs="?", default=None,
+        help="Understanding ID for 'explain' (can also use --id)."
+    )
+    p_understanding.add_argument(
+        "--id", help="Understanding ID for 'explain' action."
+    )
+    p_understanding.set_defaults(func=cmd_understanding)
+
+    p_initiatives = sub.add_parser(
+        "initiatives", help="Derive and show engineering initiatives (WRITE: 'build')."
+    )
+    p_initiatives.add_argument(
+        "action", nargs="?", default=None,
+        choices=["build", "explain", "timeline"],
+        help="'build' (WRITE), 'explain <id>', 'timeline'; omit to list.",
+    )
+    p_initiatives.add_argument(
+        "initiative_id", nargs="?", default=None,
+        help="Initiative ID for 'explain' (can also use --id)."
+    )
+    p_initiatives.add_argument(
+        "--id", help="Initiative ID for 'explain' action."
+    )
+    p_initiatives.set_defaults(func=cmd_initiatives)
+
+    p_insights = sub.add_parser(
+        "insights", help="Derive and show engineering insights (WRITE: 'build')."
+    )
+    p_insights.add_argument(
+        "action", nargs="?", default=None,
+        choices=["build", "explain", "evolution"],
+        help="'build' (WRITE), 'explain <id>', 'evolution'; omit to list.",
+    )
+    p_insights.add_argument(
+        "insight_id", nargs="?", default=None,
+        help="Insight ID for 'explain' (can also use --id)."
+    )
+    p_insights.add_argument(
+        "--id", help="Insight ID for 'explain' action."
+    )
+    p_insights.set_defaults(func=cmd_insights)
 
     args = parser.parse_args(argv)
     return args.func(args)

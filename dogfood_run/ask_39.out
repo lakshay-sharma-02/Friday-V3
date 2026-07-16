@@ -1,0 +1,5 @@
+I don't have enough evidence to answer that.
+
+The Evidence includes current project states but explicitly lacks observation history — the record of direction over time needed to measure drift or identify what changed your mind. Without a before-and-after view, I can only see where projects stand now (several marked "unknown," a few with active uncommitted work), not how they evolved or why priorities shifted.
+
+To surface drift, run `friday observe` to build that history, then I can compare original direction against current state across your projects.

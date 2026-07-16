@@ -1,13 +1,14 @@
-"""Milestone 5 — continuous observation.
+"""Milestone 5/7 — continuous observation.
 
-Friday records the current engineering workspace as an append-only snapshot and
-reports only the *meaningful differences* since the previous observation. This
-is observation only: it reads git facts and stored knowledge, stores the
-snapshot, and diffs — it never interprets, advises, or re-analyzes. No LLM, no
-architecture/relationship mutation. Running `friday observe` is the sole
-trigger (no daemon, scheduler, or watcher).
+Milestone 5 snapshot machinery (append-only `snapshots` table, `diff_snapshots`,
+`format_report`, `observe`) is preserved in full so existing benchmarks keep
+passing. Milestone 7 routes the live `friday observe` command through the
+generic Observation Engine: `GitObserver` supplies deterministically-read git
+facts, the engine persists and diffs them, and `observe_via_engine` translates
+the engine's Change records into the same engineering-language vocabulary.
 
-Storage lives in db.py (snapshots table, insert_snapshot, latest_observation).
+No LLM, no daemon, no planner. Observation is pull-based: `friday observe` is
+the sole trigger.
 """
 
 from __future__ import annotations
@@ -22,6 +23,12 @@ from .db import SnapshotRow, insert_snapshot, latest_observation, now_iso
 from .discovery import Repo
 from .gitmeta import collect
 from .readme import _find_readme
+from .observation import (
+    Change as EngineChange,
+    ObservationEngine,
+    default_registry,
+    format_run,
+)
 
 
 @dataclass
@@ -303,3 +310,103 @@ def format_report(prev_time: Optional[str], changes: list[Change]) -> str:
         return header + "\n• Baseline observation recorded.\n"
     bullets = "\n".join(f"• {_render_change(c)}" for c in changes)
     return header + "\n" + bullets + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Milestone 7 — Observation Engine route for `friday observe`.
+# ---------------------------------------------------------------------------
+
+
+def observe_via_engine(conn) -> tuple[Optional[str], list[Change]]:
+    """Run the live observation through the generic Observation Engine.
+
+    Returns (previous observed_at, M5-compatible Change records) so the CLI can
+    share `format_report`. GitObserver supplies the facts; the engine persists
+    and diffs them. We translate the engine's Change records into the same
+    vocabulary `format_report` understands (dirty, commits gained/lost, branch
+    changed/switch, dormant repo, repeated reverts, merge events).
+    """
+    run = ObservationEngine(default_registry(), conn).run()
+    prev = _prior_observed_at(conn)
+    changes = _translate_run(run)
+    return prev, changes
+
+
+def _prior_observed_at(conn) -> Optional[str]:
+    from .db import latest_observations
+    rows = latest_observations(conn)
+    return rows[0].observed_at if rows else None
+
+
+# Map engine Change.kind -> M5-compatible Change record. Only *meaningful*
+# changes are surfaced; first-sighting facts ("... observed") and "... removed"
+# are baseline noise for the engineering report and are dropped.
+_ASPECT_LABEL = {
+    "dirty changed": "became dirty",
+    "branch changed": "branch changed",
+    "branch_switch": "branch changed",
+    "commit_count changed": "commits gained",
+    "dormant": "became dormant",
+    "repeated_reverts": "repeated reverts",
+    "merge_events": "merge activity",
+}
+
+
+def _translate_run(run) -> list[Change]:
+    out: list[Change] = []
+    for ores in run.observers:
+        for ec in ores.changes:
+            # Skip first-sighting and removal noise; only map meaningful diffs.
+            if ec.kind.endswith(" observed") or ec.kind.endswith(" removed"):
+                continue
+            kind = _ASPECT_LABEL.get(ec.kind)
+            if kind is None:
+                continue
+            if kind == "became dirty":
+                if ec.new == "true":
+                    out.append(Change(
+                        repo=ec.subject, kind="became dirty",
+                        cause=ec.cause or "uncommitted changes in the working tree."))
+                else:
+                    out.append(Change(
+                        repo=ec.subject, kind="became clean",
+                        cause=ec.cause or "uncommitted changes were committed."))
+            elif kind == "branch changed":
+                if ec.old and ec.new:
+                    out.append(Change(
+                        repo=ec.subject, kind="branch changed", old=ec.old,
+                        new=ec.new,
+                        cause=ec.cause or f"branch moved from {ec.old} to {ec.new}."))
+            elif kind == "commits gained":
+                try:
+                    delta = int(ec.new) - int(ec.old or 0)
+                except (TypeError, ValueError):
+                    delta = 0
+                if delta > 0:
+                    out.append(Change(
+                        repo=ec.subject, kind="commits gained", new=delta,
+                        cause=ec.cause or f"you added {delta} commit(s)."))
+                elif delta < 0:
+                    out.append(Change(
+                        repo=ec.subject, kind="commits lost", new=-delta,
+                        cause=ec.cause or f"history lost {-delta} commit(s)."))
+            elif kind == "became dormant":
+                out.append(Change(
+                    repo=ec.subject, kind="became dormant",
+                    cause=ec.cause or "repository idle for 30+ days."))
+            elif kind == "repeated reverts":
+                out.append(Change(
+                    repo=ec.subject, kind="repeated reverts",
+                    cause=ec.cause))
+            elif kind == "merge activity":
+                if ec.new and ec.new != "0":
+                    out.append(Change(
+                        repo=ec.subject, kind="merge activity", new=ec.new,
+                        cause=ec.cause))
+    if not out:
+        return [Change(repo="", kind="no changes")]
+    return out
+
+
+# Re-export engine formatter for the new CLI commands.
+format_engine_report = format_run

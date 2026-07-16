@@ -1,0 +1,5 @@
+I don't have enough evidence to answer that.
+
+The Evidence shows current direction labels for each project (unknown, beta, etc.) but no observation history to measure drift against. Without prior snapshots of technology choices, focus areas, or architectural decisions, I can't identify which trends are fading.
+
+To establish this, run `friday observe` to build an observation history. That will let me compare current state against past patterns and surface what's being deprioritized or abandoned.

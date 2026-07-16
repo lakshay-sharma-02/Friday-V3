@@ -73,6 +73,7 @@ class Objective:
     UNIVERSE = "universe"          # engineering-universe overview
     SURPRISE = "surprise"          # what surprises you
     EVOLVE = "evolve"              # how would you evolve the portfolio
+    KNOWLEDGE = "knowledge"        # accumulated engineering knowledge
     CHITCHAT = "chitchat"
     GENERAL = "general"
 
@@ -203,6 +204,11 @@ _PRIORITY: dict[str, dict[str, int]] = {
         "opportunity": 7, "merge": 6, "themes": 5, "impact": 5,
         "effort": 4, "direction": 6,
     },
+    Objective.KNOWLEDGE: {
+        "knowledge": 10, "describe": 6, "identity": 6, "purpose": 6,
+        "architecture": 5, "themes": 4, "relationships": 4, "components": 4,
+        "value": 3, "universe": 3, "insights": 2,
+    },
 }
 
 
@@ -294,6 +300,10 @@ _CONTRACTS: dict[str, list[str]] = {
         "Where to invest", "What to consolidate", "What to let go",
         "Recommendation",
     ],
+    Objective.KNOWLEDGE: [
+        "Accumulated knowledge", "What each project is (current state)",
+        "Long-term patterns", "What is not yet determined",
+    ],
 }
 
 
@@ -332,6 +342,7 @@ _OBJECTIVE_CANONICAL_NEED: dict[str, str] = {
     Objective.UNIVERSE: "universe",
     Objective.SURPRISE: "surprise",
     Objective.EVOLVE: "evolve",
+    Objective.KNOWLEDGE: "knowledge",
     Objective.CHITCHAT: "chitchat",
     Objective.GENERAL: "general",
 }
@@ -412,6 +423,7 @@ _LENS_OBJECTIVE: dict[tuple[str, Optional[str]], str] = {
     ("drift", None): Objective.DRIFT,
     ("surprise", None): Objective.SURPRISE,
     ("evolve", None): Objective.EVOLVE,
+    ("knowledge", None): Objective.KNOWLEDGE,
     ("chitchat", None): Objective.CHITCHAT,
     ("general", None): Objective.GENERAL,
 }
@@ -443,6 +455,7 @@ _SINGLE_NEED_OBJECTIVE: dict[str, str] = {
     "insights": Objective.INSIGHTS,
     "compare": Objective.COMPARE,
     "describe": Objective.EXPLAIN,
+    "knowledge": Objective.KNOWLEDGE,
     "chitchat": Objective.CHITCHAT,
     "general": Objective.GENERAL,
 }
@@ -507,6 +520,11 @@ def _rank_objective(needs: set[str], lens: Optional[str], req=None) -> str:
         return Objective.BY_TECH
     if "universe" in n:
         return Objective.UNIVERSE
+    if "understanding" in n:
+        # Durable engineering meaning (M8.3) is a workspace-spanning reflection;
+        # UNIVERSE already widens to include the understanding provider, so the
+        # understanding need leads with it as primary evidence.
+        return Objective.UNIVERSE
     # --- Reflection / theme logic: explicit reflective acts win over the
     #     generic `insights` catch-all below, so a bag that contains
     #     `theme-repeat` (or assumptions/lessons/habits) resolves to that act,
@@ -518,6 +536,8 @@ def _rank_objective(needs: set[str], lens: Optional[str], req=None) -> str:
         return Objective.LESSONS
     if "habits" in n:
         return Objective.HABITS
+    if "knowledge" in n:
+        return Objective.KNOWLEDGE
     if "theme-repeat" in n:
         return Objective.THEME_REPEAT
     # `themes` + (insights|converge) means "themes that keep repeating" — a
@@ -716,6 +736,7 @@ _SCOPE_FOR_OBJECTIVE: dict[str, str] = {
     Objective.EVOLVE: EvidenceScope.PORTFOLIO,
     Objective.INSIGHTS: EvidenceScope.PORTFOLIO,
     Objective.SURPRISE: EvidenceScope.PORTFOLIO,
+    Objective.KNOWLEDGE: EvidenceScope.WORKSPACE,
     Objective.DRIFT: EvidenceScope.TIMELINE,
     Objective.GENERAL: EvidenceScope.WORKSPACE,
     Objective.CHITCHAT: EvidenceScope.PROJECT,

@@ -1,0 +1,12 @@
+I don't have enough evidence to answer that.
+
+The question asks what engineering *habits* you've learned—patterns of behavior, decision-making, or practice that recur across your work. The Evidence provides project purposes, technology themes, and confidence levels, but it doesn't contain information about *how* you work, *what practices* you've adopted, *mistakes you've repeated*, or *lessons you've internalized* from building these systems.
+
+To answer this properly, I'd need evidence like:
+- Git commit history and code review patterns
+- Documentation or retrospectives on past decisions
+- Test coverage and deployment practices across projects
+- How you've handled similar problems differently (or the same way) across Aether, MindWell, and Friday
+- Trade-offs you've made repeatedly and why
+
+The Evidence shows *what* you've built (AI infrastructure, developer tooling, mental health platforms), but not *how* you build or *what you've learned from building*.

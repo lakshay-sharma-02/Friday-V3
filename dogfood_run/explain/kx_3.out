@@ -1,0 +1,11 @@
+Knowledge: 2026-07-14T13:58:31.066771+00:00:project_stack:Aether
+
+Type:       project_stack
+Subject:    Aether
+Statement:  Aether uses languages: HTML, Markdown, Rust, Shell; technologies: Cargo, Rust.
+Confidence: medium
+Status:     observed
+Evidence:   1 observation(s)
+Verified:   0 time(s)
+Created:    2026-07-14T13:58:31.066771+00:00
+Updated:    2026-07-14T13:58:31.066777+00:00

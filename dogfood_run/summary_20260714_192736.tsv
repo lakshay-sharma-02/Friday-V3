@@ -1,0 +1,75 @@
+00_reset	0	0.01	rm -f /home/lakshay/.friday/friday.db
+01_ingest	0	46.60	friday ingest /home/lakshay/Projects
+02_observe	0	5.53	friday observe
+03_context_show	0	0.27	friday context
+04_context_build	0	0.62	friday context build
+05_context_show2	0	0.28	friday context
+06_sessions	0	0.30	friday sessions
+07_timeline	0	0.31	friday timeline
+08_knowledge_show	0	0.31	friday knowledge
+09_knowledge_build	0	0.65	friday knowledge build
+10_knowledge_show2	0	0.27	friday knowledge
+11_knowledge_verify	0	0.33	friday knowledge verify
+12_kx_BAD1	2	0.35	friday knowledge explain 1
+13_kx_BAD2	2	0.41	friday knowledge explain 2
+14_kx_BAD3	2	0.33	friday knowledge explain 3
+15_kx_BAD4	2	0.30	friday knowledge explain 4
+16_kx_BAD5	2	0.32	friday knowledge explain 5
+12b_kx1	2	0.31	friday knowledge explain 2026-07-14T13:45:34.455036+00:00:project_identity:Aether
+13b_kx2	2	0.30	friday knowledge explain 2026-07-14T13:45:34.455078+00:00:project_architecture:Aether
+14b_kx3	2	0.31	friday knowledge explain 2026-07-14T13:45:34.455181+00:00:project_stack:Aether
+15b_kx4	2	0.30	friday knowledge explain 2026-07-14T13:45:34.455189+00:00:project_identity:Friday
+16b_kx5	2	0.35	friday knowledge explain 2026-07-14T13:45:34.455198+00:00:project_architecture:Friday
+ask_01	0	18.38	friday ask What engineering knowledge have you accumulated?
+ask_02	0	8.05	friday ask What stable engineering knowledge do you have?
+ask_03	0	9.13	friday ask What have you learned about my engineering?
+ask_04	0	5.73	friday ask What do you know about my projects now?
+ask_05	0	7.46	friday ask What long-term engineering trends have you observed?
+ask_06	0	5.74	friday ask What recurring engineering habits have you learned?
+ask_07	0	5.61	friday ask Which technologies am I consistently investing in?
+ask_00	0	5.23	friday ask How has my engineering direction evolved?
+ask_00	0	20.99	friday ask What project relationships have become stronger?
+ask_10	0	6.55	friday ask Which knowledge is weakly supported?
+ask_11	0	7.06	friday ask What am I working on?
+ask_12	0	8.19	friday ask What have I been working on?
+ask_13	0	6.00	friday ask What have I been building?
+ask_14	0	7.24	friday ask What do you know about what I'm building?
+ask_15	0	7.02	friday ask What engineering knowledge do you have?
+ask_16	0	8.90	friday ask How has my engineering changed?
+ask_17	0	8.07	friday ask How have my interests evolved?
+ask_18	0	5.55	friday ask Which technologies are becoming more important?
+ask_19	0	4.48	friday ask Which technologies are becoming less important?
+ask_20	0	4.94	friday ask What trends are strengthening?
+ask_21	0	4.35	friday ask What trends are fading?
+ask_22	0	6.14	friday ask What has remained stable?
+ask_23	0	4.47	friday ask Which projects reinforce each other?
+ask_24	0	5.75	friday ask Which projects depend on each other?
+ask_25	0	6.45	friday ask Which projects influence each other?
+ask_26	0	8.50	friday ask Which project has become infrastructure?
+ask_27	0	14.21	friday ask Which projects are converging?
+ask_28	0	4.73	friday ask Which projects are diverging?
+ask_29	0	7.42	friday ask What engineering habits have you learned?
+ask_30	0	5.65	friday ask What engineering patterns repeat?
+ask_31	0	4.78	friday ask What do I consistently do?
+ask_32	0	5.86	friday ask What workflow keeps repeating?
+ask_33	0	5.80	friday ask What bottlenecks have become recurring?
+ask_34	0	9.13	friday ask What engineering strengths keep appearing?
+ask_35	0	5.22	friday ask What engineering belief have I abandoned?
+ask_36	0	6.12	friday ask What mistake do I keep making?
+ask_37	0	5.43	friday ask What am I avoiding?
+ask_38	0	5.24	friday ask What surprised you?
+ask_39	0	4.46	friday ask What changed my mind?
+ask_40	0	6.96	friday ask What did I learn this month?
+ask_41	0	10.25	friday ask What engineering philosophy do I follow?
+ask_42	0	9.91	friday ask Who am I becoming as an engineer?
+43_chat	0	41.26	bash -c friday chat < 'dogfood_run/chat_in.txt'
+ask_44	0	5.84	friday ask Explain Friday
+ask_45	0	4.99	friday ask Explain Friday V3
+ask_46	0	4.71	friday ask Compare Friday and Friday V3
+ask_47	0	6.43	friday ask Which project should I continue?
+ask_48	0	5.60	friday ask What should I work on today?
+ask_49	0	5.77	friday ask Where is my engineering effort going?
+ask_50	0	7.27	friday ask What kind of engineer do I seem to be?
+ask_51	0	14.64	friday ask Tell me something I haven't noticed.
+ask_52	0	6.42	friday ask Which project should become a platform?
+ask_53	0	5.75	friday ask Which projects should eventually merge?

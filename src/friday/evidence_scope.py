@@ -300,7 +300,7 @@ def format_coverage_report(report: dict) -> str:
     return "\n".join(lines)
 
 
-def coverage_note(report: ScopeReport) -> str:
+def coverage_note(report: ScopeReport, knowledge_total: int = 0) -> str:
     """Human line stating how many repos the answer actually rests on.
 
     Returned (possibly empty) so the deterministic answer / synthesizer can
@@ -311,10 +311,23 @@ def coverage_note(report: ScopeReport) -> str:
     PROJECT / RELATIONSHIP / BY_TECH answer is self-contained (about one or two
     named repos), so a coverage note would be noise and could mask a complete
     "no match" answer. Bias is also only meaningful for workspace-wide answers.
+
+    KNOWLEDGE answers: when accumulated knowledge exists, the provider has
+    already stated what is known (static) and what cannot yet be determined
+    (temporal). A "based on 0 of N repositories" line would be misleading
+    because the answer DOES rest on static evidence per project — so we suppress
+    the numeric note and let the knowledge provider's own honest framing stand.
     """
     if report.scope not in (obj_mod.EvidenceScope.WORKSPACE,
                             obj_mod.EvidenceScope.PORTFOLIO,
                             obj_mod.EvidenceScope.TIMELINE):
+        return ""
+    if knowledge_total > 0:
+        # Accumulated knowledge underpins the answer; do not emit a misleading
+        # "0 of N" note. The provider already explains static vs temporal, and
+        # the workspace is represented by the knowledge items themselves.
+        # (Gated on knowledge_total, not on the missing-evidence list, so a
+        # genuine THEMES/UNIVERSE answer with thin evidence still warns.)
         return ""
     if report.requested >= 2 and report.represented < report.requested:
         line = (f"This answer is based on {report.represented} of "

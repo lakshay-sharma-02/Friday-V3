@@ -147,7 +147,8 @@ _NEED_TYPES = (
     "priority", "converge", "merge", "compare", "describe", "inactive",
     "newest", "recommend", "by-tech", "insights", "chitchat", "general",
     "similarity", "theme-repeat", "lessons", "habits", "assumptions", "drift",
-    "surprise", "evolve", "direction", "blockers",
+    "surprise", "evolve", "direction", "blockers", "knowledge", "understanding",
+    "initiative", "insight",
 )
 
 
@@ -777,12 +778,224 @@ def _p_insights(req, conn, ev, today):
     return
 
 
+# --- knowledge (accumulated understanding) -----------------------------------
+#
+# First-class evidence source. Knowledge is the BRAIN's accumulated understanding
+# (static identity/architecture/stack + temporal trends/habits/relationships). On
+# a fresh ingest, STATIC knowledge already exists, so this provider never returns
+# "0 of N repositories". When accumulated knowledge is thin, it augments with the
+# existing portfolio / identity / architecture providers (which read ingest-time
+# evidence directly) instead of failing the whole answer.
+
+
+@_provider("knowledge")
+def _p_knowledge(req, conn, ev, today):
+    from .knowledge import KnowledgeEngine
+
+    eng = KnowledgeEngine(conn)
+    all_k = eng.all_knowledge()
+    static = eng.static_knowledge()
+    temporal = eng.temporal_knowledge()
+
+    blocks: list[str] = []
+
+    # Honest, evidence-grounded header (never the misleading "0 of N").
+    if all_k:
+        blocks.append(
+            f"Accumulated engineering knowledge: {len(all_k)} item(s) "
+            f"({len(static)} from the current project state, "
+            f"{len(temporal)} from observation history)."
+        )
+    elif static:
+        blocks.append(
+            f"Accumulated engineering knowledge: {len(static)} item(s) from the "
+            f"current project state. No long-term trend knowledge yet — only one "
+            f"observation exists, so trends cannot be determined yet."
+        )
+    else:
+        blocks.append(
+            "No accumulated engineering knowledge yet. Run `friday ingest` and "
+            "`friday knowledge build` first."
+        )
+
+    # Static knowledge — always available after ingest.
+    if static:
+        blocks.append("What your projects are (from the current state):")
+        for k in static:
+            blocks.append(f"- {k.subject}: {k.statement}")
+
+    # Temporal knowledge — only when history exists.
+    if temporal:
+        blocks.append("Long-term engineering patterns (from observation history):")
+        for k in temporal:
+            blocks.append(f"- {k.statement}")
+    elif all_k:
+        blocks.append(
+            "Long-term engineering trends cannot yet be determined because only "
+            "one observation exists. They will appear after more `friday observe` "
+            "runs."
+        )
+
+    ev.blocks = blocks
+    ev.raw["knowledge_total"] = len(all_k)
+    ev.raw["knowledge_static"] = len(static)
+    ev.raw["knowledge_temporal"] = len(temporal)
+    ev.raw["knowledge"] = [
+        {"type": k.type.value, "subject": k.subject, "statement": k.statement,
+         "static": k.is_static} for k in all_k
+    ]
+    return
+
+
+# --- understanding (durable engineering meaning, derived from knowledge) ------
+#
+# Another evidence source for the Brain. Write-only layer above Knowledge; this
+# provider only READS the understanding table. Same pattern as _p_knowledge.
+# No routing change: questions that already resolve to KNOWLEDGE / THEMES /
+# ENGINEERING-PROFILE now also receive understanding as supporting context.
+
+
+@_provider("understanding")
+def _p_understanding(req, conn, ev, today):
+    from .understanding import UnderstandingEngine
+
+    eng = UnderstandingEngine(conn)
+    items = eng.all_understanding()
+
+    blocks: list[str] = []
+    if not items:
+        blocks.append(
+            "No durable engineering understanding derived yet. Run "
+            "`friday understanding build` (and `friday knowledge build` first)."
+        )
+    else:
+        blocks.append(
+            f"Durable engineering understanding ({len(items)} item(s), derived "
+            f"from accumulated knowledge):"
+        )
+        by_type: dict = {}
+        for u in items:
+            by_type.setdefault(u.type.value, []).append(u)
+        for utype, its in sorted(by_type.items()):
+            blocks.append(f"  {utype.replace('_', ' ').title()}:")
+            for u in its:
+                blocks.append(
+                    f"    - [{u.confidence.value}] {u.statement} "
+                    f"(cited: {u.knowledge_count} knowledge)"
+                )
+
+    ev.blocks = blocks
+    ev.raw["understanding_total"] = len(items)
+    ev.raw["understanding"] = [
+        {"type": u.type.value, "subject": u.subject, "statement": u.statement,
+         "confidence": u.confidence.value, "status": u.status.value,
+         "knowledge_count": u.knowledge_count} for u in items
+    ]
+    return
+
+
+# --- initiative (long-running engineering work, derived from understanding) ----
+#
+# Another evidence source for the Brain. Write-only layer above Understanding;
+# this provider only READS the initiatives table. Same pattern as _p_understanding.
+# No routing change: questions that already resolve to UNIVERSE / DIRECTION /
+# PRIORITIZE / KNOWLEDGE now also receive initiatives as supporting context.
+
+@_provider("initiative")
+def _p_initiative(req, conn, ev, today):
+    from .initiative import InitiativeEngine
+
+    eng = InitiativeEngine(conn)
+    items = eng.all_initiatives()
+
+    blocks: list[str] = []
+    if not items:
+        blocks.append(
+            "No engineering initiatives derived yet. Run "
+            "`friday initiatives build` (after `friday understanding build`)."
+        )
+    else:
+        by_status: dict = {}
+        for i in items:
+            by_status.setdefault(i.status.value, []).append(i)
+        blocks.append(
+            f"Engineering initiatives ({len(items)} item(s), derived from "
+            f"understanding):"
+        )
+        for st in ("active", "review", "started", "candidate", "blocked",
+                   "completed", "dormant", "archived"):
+            its = by_status.get(st)
+            if not its:
+                continue
+            blocks.append(f"  {st.title()}:")
+            for i in its:
+                blocks.append(
+                    f"    - [{i.confidence.value}] {i.title} "
+                    f"({i.type.value}; repos: {i.repo_count}, "
+                    f"understanding: {i.understanding_count})"
+                )
+
+    ev.blocks = blocks
+    ev.raw["initiative_total"] = len(items)
+    ev.raw["initiatives"] = [
+        {"title": i.title, "type": i.type.value, "status": i.status.value,
+         "confidence": i.confidence.value,
+         "repos": i.participating_repositories,
+         "understanding_count": i.understanding_count} for i in items
+    ]
+    return
+
+
 # --- general (unrecognized) --------------------------------------------------
 
 
 @_provider("general")
 def _p_general(req, conn, ev, today):
     ev.raw["note"] = "intent not recognized"
+    return
+
+
+# --- insight (what deserves attention now, derived from understanding/ ---- ---
+# initiatives/knowledge) — see engine.insert/_p_initiative above for the M8.4
+# pattern. Insights are EPHEMERAL: a build retires those whose triggering
+# conditions no longer hold, so this provider surfaces only live insights.
+# No routing change: reflective/workspace objectives receive insights as
+# supporting context alongside understanding and initiatives.
+
+
+@_provider("insight")
+def _p_insight(req, conn, ev, today):
+    from .insight import InsightEngine
+
+    eng = InsightEngine(conn)
+    items = eng.active_insights()
+
+    blocks: list[str] = []
+    if not items:
+        blocks.append(
+            "No active engineering insights right now. Run "
+            "`friday insights build` (after `friday initiatives build`)."
+        )
+    else:
+        blocks.append(
+            f"Engineering insights ({len(items)} active, derived from "
+            f"understanding + initiatives + knowledge):"
+        )
+        for i in items:
+            blocks.append(
+                f"- [{i.confidence.value}] {i.title} "
+                f"({i.type.value.replace('engineering_', '')}): {i.statement}"
+            )
+
+    ev.blocks = blocks
+    ev.raw["insight_total"] = len(items)
+    ev.raw["insights"] = [
+        {"id": i.id, "title": i.title, "type": i.type.value,
+         "status": i.status.value, "confidence": i.confidence.value,
+         "understanding_count": i.understanding_count,
+         "initiative_count": i.initiative_count,
+         "knowledge_count": i.knowledge_count} for i in items
+    ]
     return
 
 
@@ -865,11 +1078,114 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
 
     # Supporting context: run remaining providers but capture their output into
     # a side channel so they cannot stomp the primary answer's blocks/raw keys.
+    audit_requested = [p.fn.__name__ for p in providers]
+    audit_returned = [providers[0].fn.__name__] if ev.blocks else []
     for prov in providers[1:]:
         side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
         prov.fn(req, conn, side, today)
         if side.blocks:
             ev.raw.setdefault("supporting", []).extend(side.blocks)
+            audit_returned.append(prov.fn.__name__)
+            # Understanding (M8.3) is a first-class meaning layer: when it is
+            # among the requested needs, surface its lines in the visible
+            # evidence so the answer references understanding, not just the raw.
+            if prov.fn is _p_understanding.fn:
+                for b in side.blocks:
+                    if b not in ev.blocks:
+                        ev.blocks.append(b)
+                # The provider wrote understanding_total/understanding into its
+                # own side.raw; fold them into ev.raw so the audit/verbose see it.
+                for key in ("understanding_total", "understanding"):
+                    if key in side.raw:
+                        ev.raw[key] = side.raw[key]
+
+    # Guarantee understanding (M8.3) surfaces for reflective/workspace objectives
+    # even when the offline route did not name the `understanding` need explicitly
+    # (e.g. "what projects are converging" -> DIRECTION/PRIORITIZE). Understanding
+    # is a first-class meaning layer built only from accumulated knowledge, so it
+    # belongs in any long-term-direction answer. No judgment/retrieval change —
+    # this just ensures the provider's lines are present in the evidence.
+    _REFLECTIVE = {
+        obj_mod.Objective.UNIVERSE, obj_mod.Objective.DIRECTION,
+        obj_mod.Objective.EVOLVE, obj_mod.Objective.PROFILE,
+        obj_mod.Objective.STRENGTHS, obj_mod.Objective.THEMES,
+        obj_mod.Objective.PRIORITIZE, obj_mod.Objective.KNOWLEDGE,
+    }
+    # Prose-answer objectives (DIRECTION/PRIORITIZE/STRENGTHS) reject bullet dumps;
+    # there, understanding stays in `supporting`/raw only so the synthesized prose
+    # is not contaminated. Bullet-emitting objectives may show it in ev.blocks.
+    _PROSE_OBJECTIVES = {
+        obj_mod.Objective.DIRECTION, obj_mod.Objective.PRIORITIZE,
+        obj_mod.Objective.STRENGTHS, obj_mod.Objective.EVOLVE,
+    }
+    if decision.objective in _REFLECTIVE and "understanding" not in decision.needs:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_understanding.fn(req, conn, side, today)
+        if side.blocks:
+            ev.raw.setdefault("supporting", []).extend(side.blocks)
+            if decision.objective not in _PROSE_OBJECTIVES:
+                for b in side.blocks:
+                    if b not in ev.blocks:
+                        ev.blocks.append(b)
+            for key in ("understanding_total", "understanding"):
+                if key in side.raw:
+                    ev.raw[key] = side.raw[key]
+            if "_p_understanding" not in audit_returned:
+                audit_returned.append("_p_understanding")
+
+    # Guarantee initiatives (M8.4) surface for reflective/workspace objectives
+    # even when the offline route did not name the `initiative` need explicitly
+    # (e.g. "what am I really building" -> UNIVERSE/PRIORITIZE). Initiatives
+    # are a first-class work-abstraction layer built only from understanding, so
+    # they belong in any long-term-direction answer. No judgment/retrieval change
+    # — this just ensures the provider's lines are present in the evidence.
+    if decision.objective in _REFLECTIVE and "initiative" not in decision.needs:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_initiative.fn(req, conn, side, today)
+        if side.blocks:
+            ev.raw.setdefault("supporting", []).extend(side.blocks)
+            if decision.objective not in _PROSE_OBJECTIVES:
+                for b in side.blocks:
+                    if b not in ev.blocks:
+                        ev.blocks.append(b)
+            for key in ("initiative_total", "initiatives"):
+                if key in side.raw:
+                    ev.raw[key] = side.raw[key]
+            if "_p_initiative" not in audit_returned:
+                audit_returned.append("_p_initiative")
+
+    # Guarantee insights (M8.5) surface for reflective/workspace objectives even
+    # when the offline route did not name the `insight` need explicitly (e.g.
+    # "what opportunities am I missing" -> RISK/OPPORTUNITY). Insights are a
+    # first-class attention layer built only from understanding/initiatives/
+    # knowledge, so they belong in any "what deserves my attention" answer. No
+    # judgment/retrieval change — this just ensures the provider's lines are
+    # present in the evidence.
+    if decision.objective in _REFLECTIVE and "insight" not in decision.needs:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_insight.fn(req, conn, side, today)
+        if side.blocks:
+            ev.raw.setdefault("supporting", []).extend(side.blocks)
+            if decision.objective not in _PROSE_OBJECTIVES:
+                for b in side.blocks:
+                    if b not in ev.blocks:
+                        ev.blocks.append(b)
+            for key in ("insight_total", "insights"):
+                if key in side.raw:
+                    ev.raw[key] = side.raw[key]
+            if "_p_insight" not in audit_returned:
+                audit_returned.append("_p_insight")
+
+    # Retrieval audit (Part H) — providers requested vs returned, surfaced via
+    # `ask --verbose` only. Never affects the normal answer.
+    ev.raw["retrieval_audit"] = {
+        "objective": decision.objective,
+        "providers_requested": audit_requested,
+        "providers_returned": audit_returned,
+        "knowledge_used": ev.raw.get("knowledge_total", 0) > 0
+        or "knowledge" in decision.needs,
+        "confidence": _confidence_from_report(decision, ev),
+    }
 
     # EvidenceScope guard (hardening): measure coverage / bias / missing AFTER
     # assembly, derived from the OBJECTIVE (never keywords). This makes the
@@ -895,13 +1211,104 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
     ev.raw["missing"] = report.missing
     # Full auditable coverage picture (Part C) — surfaced via --verbose only.
     ev.raw["coverage_report"] = build_coverage_report(req, decision, conn, ev.blocks)
-    note = coverage_note(report)
+
+    # --- Adaptive coverage widening (Part C) ---------------------------------
+    # If a workspace-wide answer rests on too few repositories (e.g. the primary
+    # provider only summarized a subset), widen evidence collection ONCE by
+    # appending the accumulated knowledge + portfolio + identity cuts (which span
+    # every repository from ingest-time evidence). Never recurse, never loop,
+    # never fetch unrelated evidence. Re-measure so the coverage note and the
+    # --verbose audit reflect the widened package. Low-confidence objectives
+    # (GENERAL/VALUE/UNIVERSE/...) already pull broad providers, so we don't
+    # double-fetch them.
+    widened = False
+    if (report.scope in (obj_mod.EvidenceScope.WORKSPACE, obj_mod.EvidenceScope.PORTFOLIO)
+            and report.requested >= 2
+            and report.pct < _COVERAGE_WIDEN_THRESHOLD
+            and decision.objective in _WIDEN_OBJECTIVES):
+        extra = _widen_evidence(req, conn, today, exclude=set(decision.needs))
+        if extra:
+            ev.blocks = list(ev.blocks) + extra
+            ev.raw.setdefault("supporting", []).extend(extra)
+            ev.raw["widened"] = True
+            widened = True
+            report = build_scope_report(req, decision, conn, ev.blocks)
+            ev.raw["coverage"] = {
+                "requested": report.requested,
+                "represented": report.represented,
+                "pct": report.pct,
+                "widened": True,
+            }
+            ev.raw["coverage_report"] = build_coverage_report(req, decision, conn, ev.blocks)
+            ev.raw["missing"] = report.missing
+
+    note = coverage_note(report, knowledge_total=ev.raw.get("knowledge_total", 0))
     if note:
         ev.blocks = list(ev.blocks) + [note]
         ev.raw.setdefault("supporting", []).append(note)
 
     _finalize(ev, req)
     return ev
+
+
+# Below this represented/requested fraction, a workspace/portfolio answer is
+# considered too narrow and the retriever widens ONCE (Part C). Set high enough
+# to catch the "2 of 8 repositories" dogfood failures, low enough that a real
+# one-or-two-repo answer (EXPLAIN/COMPARE) is never forced to widen.
+_COVERAGE_WIDEN_THRESHOLD = 0.6
+
+# Objectives whose answer is a BROAD workspace/portfolio synthesis and therefore
+# benefits from widening when the primary provider under-fetches. Objectives with
+# a dedicated, specific provider (SURPRISE, INSIGHTS, THEME_REPEAT, LESSONS,
+# HABITS, ASSUMPTIONS, DRIFT, COMPARE, EXPLAIN, ARCHITECTURE, RELATIONSHIPS,
+# BY_TECH, and the advice/recommendation objectives EVOLVE/PRIORITIZE/DIRECTION/
+# MERGE/PLATFORM) are NOT widened — widening would pollute their specific,
+# self-contained answer (and break the advice-prose contract).
+_WIDEN_OBJECTIVES = {
+    obj_mod.Objective.THEMES,
+    obj_mod.Objective.PROFILE,
+    obj_mod.Objective.STRENGTHS,
+    obj_mod.Objective.EFFORT,
+}
+
+
+def _widen_evidence(req, conn, today, exclude: set[str]) -> list[str]:
+    """Adaptive coverage widening (Part C / Part B / Part D).
+
+    Returns extra evidence blocks spanning the workspace, drawn from the
+    accumulated KNOWLEDGE engine (primary, per Part D) plus the portfolio
+    identity/theme cuts and relationships — all of which read ingest-time
+    evidence across EVERY repository. Deterministic; never invents or fetches
+    unrelated evidence. Called at most once per answer.
+
+    `exclude` holds the needs already satisfied by the primary answer, so we
+    don't duplicate what the question already assembled.
+    """
+    extra: list[str] = []
+    if "understanding" not in exclude:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_understanding.fn(req, conn, side, today)
+        extra.extend(side.blocks)
+    if "knowledge" not in exclude:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_knowledge.fn(req, conn, side, today)
+        extra.extend(side.blocks)
+    if "themes" not in exclude and "identity" not in exclude:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_portfolio.fn(req, conn, side, today)
+        extra.extend(side.blocks)
+    if "relationships" not in exclude:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_related.fn(req, conn, side, today)
+        extra.extend(side.blocks)
+    # De-duplicate exact lines (providers may overlap) without losing order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for b in extra:
+        if b not in seen:
+            seen.add(b)
+            out.append(b)
+    return out
 
 
 def _select_providers_for_decision(decision) -> list[_Provider]:
@@ -925,6 +1332,24 @@ def _select_providers_for_decision(decision) -> list[_Provider]:
 def _finalize(ev: Evidence, req: RetrievalRequirements) -> None:
     if ev.subject is None and req.subjects:
         ev.subject = req.subjects[0]
+
+
+def _confidence_from_report(decision, ev: Evidence) -> str:
+    """Derive a plain confidence label for the retrieval audit (Part H).
+
+    Workspace-wide answers with thin coverage are Weak; broad coverage or an
+    explicit knowledge package is Strong/Medium. Deterministic, from the
+    already-computed coverage + knowledge presence — never the LLM's mood.
+    """
+    cov = ev.raw.get("coverage", {})
+    pct = cov.get("pct", 1.0)
+    if cov.get("requested", 0) >= 2 and pct < 0.6:
+        return "Weak"
+    if ev.raw.get("knowledge_total", 0) > 0:
+        return "Medium"
+    if cov.get("requested", 0) >= 2 and pct >= 0.8:
+        return "Strong"
+    return "Medium"
 
 
 # ---------------------------------------------------------------------------
@@ -1099,6 +1524,52 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
         "recurring themes", "themes recur", "themes come up again",
     )):
         return mk(needs=("theme-repeat",))
+    # Durable engineering UNDERSTANDING (M8.3) — distinct from live trends/themes.
+    # These questions ask what Friday has *come to understand* about the
+    # engineer's long-term direction/philosophy/effort. MUST be placed BEFORE the
+    # generic "themes"/"emerging" bucket so "becoming"/"emerging direction"/"what
+    # am i becoming" do not collapse into a portfolio themes answer. Route to the
+    # UNDERSTANDING need (universe objective) so the understanding provider leads;
+    # understanding is built only from accumulated knowledge.
+    if any(w in qlow for w in (
+        "what am i becoming", "what i am becoming", "am i becoming",
+        "what am i turning into", "turning into", "what am i converging toward",
+        "converging toward", "what have i come to understand",
+        "what do you understand about my", "what does my engineering mean",
+        "how has my engineering changed", "has my engineering changed",
+        "what engineering direction is emerging", "engineering direction is emerging",
+        "emerging engineering direction", "what philosophy is emerging",
+        "philosophy is emerging", "emerging philosophy",
+        "where is my effort converging", "effort converging", "effort is converging",
+        "what technologies are becoming central", "becoming central",
+        "which technologies are becoming central", "technologies becoming central",
+        "what projects are converging", "projects are converging",
+        "what strengths are becoming obvious", "strengths are becoming obvious",
+        "where is my engineering going", "what direction is my engineering taking",
+        "direction is my engineering",
+    )):
+        return mk(needs=("understanding",))
+    # Accumulated ENGINEERING KNOWLEDGE (M8.1.5) — distinct from live portfolio
+    # themes. These questions ask about what Friday has *learned/accumulated*,
+    # not "what am I building" right now. Must resolve to the KNOWLEDGE
+    # objective (which reads the knowledge table), never to a bare portfolio dump.
+    if any(w in qlow for w in (
+        "engineering knowledge", "engineering knowledge do you have",
+        "stable engineering knowledge", "knowledge have you accumulated",
+        "knowledge do you have", "what have you learned about my engineering",
+        "engineering knowledge do i have", "what do you know",
+        "accumulated knowledge", "what stable knowledge",
+        "knowledge have you learned", "what knowledge",
+        "long-term engineering trends", "engineering trends have you observed",
+        "stable engineering patterns", "what have you learned",
+    )):
+        return mk(needs=("knowledge",))
+    # Engineering BELIEF must NOT collapse to an "abandoned repository" answer
+    # (the 'abandon'/'belief' substring proximity in some models). A belief about
+    # engineering is a recurring-theme / portfolio-identity question, not an
+    # inactive-repo question. Route it to THEMES explicitly.
+    if "belief" in qlow and "abandon" not in qlow:
+        return mk(needs=("themes",), lens="building")
     if any(w in qlow for w in (
         "engineering lesson", "lessons keep", "lesson keeps", "what lesson",
         "lessons am i", "repeated lesson", "what have i learned",
@@ -1136,7 +1607,7 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
         "engineering universe", "how has my work evolved", "where is my work heading",
         "my direction", "overall picture", "big picture", "my career",
     )):
-        return mk(needs=("universe",))
+        return mk(needs=("universe", "understanding"))
     if any(w in qlow for w in (
         "am i building", "themes", "patterns across", "what am i building",
         "seem to be building", "building", "emerge", "emerging",
@@ -1147,6 +1618,7 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
         "kind of engineer", "kind of developer", "type of engineer",
         "what kind of", "what sort of engineer",
     )):
+        # Portfolio sub-cut: strengths / effort / identity / building.
         # Portfolio sub-cut: strengths / effort / identity / building.
         if any(w in qlow for w in (
             "strengths", "skills am i", "developing", "good at", "capabilities",
@@ -1508,11 +1980,26 @@ def _known_techs(conn) -> set[str]:
 
 
 def _resolve_subjects(question: str, conn) -> list[str]:
-    """Detect repo names explicitly present in the question (entity resolution)."""
+    """Detect repo names explicitly present in the question (entity resolution).
+
+    LONGEST-MATCH FIRST: "Explain Friday V3" must resolve to "Friday V3", not
+    "Friday" (the shorter name is a prefix of the longer one). Prefix matches are
+    therefore ordered by name length descending, so disambiguation is by maximum
+    specificity rather than row order. Fixes the dogfood "Explain Friday V3"
+    regression where the wrong project was explained.
+    """
     if conn is None:
         return []
     qlow = question.lower()
-    return [r.name for r in q.all_repositories(conn) if r.name.lower() in qlow]
+    matches = [r.name for r in q.all_repositories(conn) if r.name.lower() in qlow]
+    # Dedupe, longest name first so "Friday V3" wins over "Friday".
+    seen = set()
+    ordered = []
+    for name in sorted(set(matches), key=lambda n: -len(n)):
+        if name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    return ordered
 
 
 def _resolve_subjects_safe(question: str) -> list[str]:
@@ -1703,12 +2190,27 @@ def _deterministic_answer(question: str, ev: Evidence, label: str,
 
 
 # ---------------------------------------------------------------------------
-# Bounded conversational continuity (M6.5D)
+# Bounded conversational continuity (M6.5D — M8.1.6 integration fix)
 # ---------------------------------------------------------------------------
 # Only the immediately previous exchange is ever remembered. No long-term
-# memory, no planner, no agent. The previous answer is reference-resolution
-# context — it is NEVER treated as evidence for the next turn (a fresh
-# retrieval always runs after a follow-up is rewritten).
+# memory, no planner, no agent.
+#
+# M8.1.6 ROOT CAUSE: the old resolver keyed every follow-up off `ev.subject`
+# (the single repo a question was about) and only handled a narrow pattern set.
+# Workspace/portfolio/knowledge questions have `subject = None`, so meta
+# follow-ups ("How confident are you?", "What evidence supports that?",
+# "Summarize it.") fell through to `None` -> a FRESH retrieval of the bare
+# fragment ("why?", "confidence?") -> the understanding step cannot parse it ->
+# empty evidence -> "I don't have enough evidence". Context was lost.
+#
+# FIX (integration only — no layer redesigned): the previous exchange already
+# carries its full Evidence package (blocks + raw + objective + coverage). A
+# meta-follow-up about the PREVIOUS answer should be answered from that package,
+# not by re-fetching. We add a `("followup", prev_exchange)` result: ask() reuses
+# the previous Evidence as the answer basis and re-synthesizes (LLM grounded in
+# the previous evidence) or restates deterministically — threading `prev` as
+# disambiguation context, never inventing new evidence. The subject is carried
+# implicitly (the previous answer); we never force the user to repeat it.
 
 _RESTATE = ("how so", "why is that", "why's that", "convince me",
             "explain more", "elaborate", "tell me more", "more detail",
@@ -1718,13 +2220,37 @@ _NEXT_PREFIX = ("what next", "and then", "after that", "then what", "what should
                 "what do i do next", "next step", "next steps")
 _AGE_PREFIX = ("how long", "how old", "since when", "age of", "how stale", "how stale")
 
+# Meta-follow-ups that are ABOUT the previous answer, not new questions. These
+# are answered from the previous Evidence package (no fresh retrieval).
+_META_CONFIDENCE = ("how confident", "confidence", "how sure", "how certain",
+                    "sure are you", "certain are you")
+_META_EVIDENCE = ("what evidence", "which evidence", "what supports", "evidence for",
+                  "based on what", "how do you know", "where did you", "sources",
+                  "what backs this")
+_META_SUMMARIZE = ("summarize", "sum it up", "summarise", "tl;dr", "in short",
+                   "recap", "wrap up", "give me the gist")
+_META_EXPAND = ("explain further", "expand", "more on that", "tell me everything",
+                "go deeper", "dive deeper", "more about that", "elaborate further",
+                "what else", "anything else")
+_META_CHANGED = ("what changed", "has it changed", "what's changed", "what is changed",
+                 "recent change", "what's new", "anything changed")
+_COMPARE_PREFIX = ("compare", "contrast", "versus", "vs")
+
+
+def _is_meta(qlow: str, phrases: tuple) -> bool:
+    qlow = qlow.rstrip(".?!").strip()
+    return any(qlow == p or qlow.startswith(p + " ") or (" " + p) in qlow
+               for p in phrases)
+
 
 def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
     """Resolve a follow-up against the previous exchange, deterministically.
 
     Returns one of:
-      ("rewrite", new_question) -> a fresh retrieval should run for new_question
+      ("rewrite", new_question) -> a fresh retrieval runs for new_question
       ("restate", text)         -> re-present previous reasoning, no new evidence
+      ("followup", exchange)    -> answer from the PREVIOUS Evidence package
+                                   (meta-question about the prior answer)
       ("clarify", text)         -> ambiguous; ask which antecedent
       None                      -> not a follow-up; ask() proceeds normally
     """
@@ -1738,10 +2264,30 @@ def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
         return ("clarify",
                 f"Did you mean {a} or {b}? Say which one and I'll explain.")
 
-    if re.match(r"why\b(?!\s*not)", qlow) or any(
-        qlow == w or qlow.startswith(w + " ") or (" " + w) in qlow for w in _RESTATE
-    ):
-        return ("restate", _restate_text(prev, conn))
+    # --- Meta follow-ups: answered from the previous Evidence package ---------
+    # These are questions ABOUT the prior answer. A fresh retrieval of the bare
+    # fragment loses all context (the M8.1.6 bug), so we reuse the previous
+    # evidence and re-synthesize / restate. Order: most specific first.
+    if _is_meta(qlow, _META_EVIDENCE):
+        return ("followup", prev)
+    if _is_meta(qlow, _META_CONFIDENCE):
+        return ("followup", prev)
+    if _is_meta(qlow, _META_SUMMARIZE):
+        return ("followup", prev)
+    if _is_meta(qlow, _META_EXPAND):
+        return ("followup", prev)
+
+    if qlow in ("why", "why?") or re.match(r"why\b(?!\s*not)", qlow):
+        # "Why?" about the previous answer: synthesize a grounded rationale from
+        # the previous Evidence (not a verbatim dump). Falls back to restate if
+        # synthesis is unavailable.
+        return ("followup", prev)
+
+    # "What changed?" about the prior subject — drift if we have a subject.
+    if _is_meta(qlow, _META_CHANGED):
+        if subj:
+            return ("rewrite", f"How has {subj} changed?")
+        return ("followup", prev)
 
     for p in _CONTRAST_PREFIX:
         if qlow.startswith(p + " ") or qlow == p:
@@ -1759,16 +2305,15 @@ def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
                     f"I'm not sure which project '{tail}' refers to. "
                     f"Name it exactly and I'll compare.")
 
-    # "Compare that to X" / "contrast with X" — a follow-up contrast. Resolve a
-    # pronoun subject ("that"/"this"/"it") to the previous subject so the contrast
-    # carries context instead of falling through to a no-subject generic fallback.
-    _COMPARE_PREFIX = ("compare", "contrast", "versus", "vs")
+    # "Compare that to X" / "contrast with X" — resolve the pronoun subject
+    # ("that"/"this"/"it") to the previous subject so the contrast carries
+    # context. When the previous subject is None (workspace question), we cannot
+    # anchor "that", so we clarify rather than guess.
     _PRONOUNS = ("that", "this", "it", "them")
     _STOPWORDS = ("to", "with", "against", "and", "the")
     for p in _COMPARE_PREFIX:
         if qlow.startswith(p + " ") or qlow == p:
             tail = qlow[len(p):].strip()
-            # Drop leading stopwords/pronouns (word-based, never char-based).
             toks = tail.split()
             while toks and (toks[0] in _STOPWORDS or toks[0] in _PRONOUNS):
                 toks.pop(0)
@@ -1779,9 +2324,13 @@ def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
             if cand and subj and cand.lower() == subj.lower():
                 return ("restate", _restate_text(prev, conn))
             if subj and not cand:
-                # "Compare that" with no second name -> contrast prev subject
-                # against the most-related repo, or clarify.
                 return ("restate", _contrast_text(subj, subj, conn, ev))
+            if cand and not subj:
+                # Previous answer was workspace-wide; "that" has no single anchor,
+                # but the user named a concrete project X. Answer as a follow-up
+                # that compares the previous (workspace) answer's themes/evidence
+                # to X — never a fresh bare retrieval (M8.1.6 fix).
+                return ("followup", prev)
             return ("clarify",
                     "Compare against what? Name the other project.")
 
@@ -1838,6 +2387,98 @@ def _contrast_text(subj: str, other: str, conn, ev: Evidence) -> str:
             "not commit counts.")
 
 
+def _answer_followup(question: str, prev: "Exchange", conn) -> "Answer":
+    """Answer a meta-follow-up (confidence / evidence / summarize / expand)
+    from the PREVIOUS exchange's Evidence package — no fresh retrieval.
+
+    The previous Evidence (blocks + raw + coverage + objective) is the only
+    basis. We re-synthesize with the LLM, threading the previous answer + a
+    precise instruction as disambiguation context. Never invents evidence; if
+    synthesis is unavailable, deterministically restates the prior answer.
+    """
+    ev = prev.answer.evidence
+    # Reuse the prior evidence verbatim; it already carries coverage + objective.
+    qlow = question.lower().strip()
+    if _is_meta(qlow, _META_CONFIDENCE):
+        meta_instruction = (
+            "The user is asking about your CONFIDENCE in the previous answer. "
+            "State the confidence level and its basis using ONLY the previous "
+            "Evidence (coverage, objective, and the strength of the facts). If "
+            "the evidence was thin or covered few repositories, say so plainly.")
+    elif _is_meta(qlow, _META_EVIDENCE):
+        meta_instruction = (
+            "The user is asking WHAT EVIDENCE supports the previous answer. "
+            "List the specific facts/repositories/relationships from the "
+            "previous Evidence that the answer rested on. Do not add new facts.")
+    elif _is_meta(qlow, _META_SUMMARIZE):
+        meta_instruction = (
+            "The user wants a concise SUMMARY of the previous answer. Compress "
+            "it to the key points only, using ONLY the previous Evidence.")
+    elif _is_meta(qlow, _META_EXPAND):
+        meta_instruction = (
+            "The user wants you to EXPAND on the previous answer. Elaborate on "
+            "the points already made, drawing ONLY on the previous Evidence — "
+            "do not introduce new claims the evidence does not support.")
+    elif any(qlow.startswith(p) or qlow == p for p in _COMPARE_PREFIX):
+        # "Compare that to X" with no single prior subject: compare the previous
+        # (workspace) answer's themes/evidence to the named project X.
+        meta_instruction = (
+            "The user wants you to COMPARE the previous answer to a specific "
+            "project named in their follow-up. Use ONLY the previous Evidence as "
+            "the basis for what 'that' refers to, and compare it concretely "
+            "against the named project — purpose, technology, maturity, fit.")
+    else:
+        meta_instruction = (
+            "Answer this follow-up using ONLY the previous Evidence.")
+
+    if llm_enabled() and os.environ.get("FRIDAY_ANSWER_LLM") == "1":
+        decision = obj_mod.ObjectiveDecision(
+            objective=ev.raw.get("objective", "general"),
+            needs=list(ev.requirements.needs),
+            lens=ev.requirements.lens,
+            contract=obj_mod.contract_for(ev.raw.get("objective", "general")),
+            reason=ev.raw.get("objective_reason", ""),
+        )
+        # For a compare follow-up, enrich with the named project's own evidence
+        # (relationships + identity) so synthesis can contrast concretely. Pure
+        # deterministic pull; never invents.
+        extra_evidence: list[str] = []
+        if any(qlow.startswith(p) or qlow == p for p in _COMPARE_PREFIX):
+            cand = _named_repo_in(qlow, conn)
+            if cand:
+                side = Evidence(requirements=ev.requirements, blocks=[], raw={}, subject=None)
+                _p_related.fn(ev.requirements, conn, side, _today())
+                if side.blocks:
+                    extra_evidence.extend(side.blocks)
+                side2 = Evidence(requirements=ev.requirements, blocks=[], raw={}, subject=None)
+                _p_describe.fn(ev.requirements, conn, side2, _today())
+                if side2.blocks:
+                    extra_evidence.extend(side2.blocks)
+        text = _synthesize_followup(question, ev, prev, meta_instruction, decision, extra_evidence)
+        if text:
+            return Answer(text=text, evidence=ev, used_llm=True)
+    # Deterministic fallback: restate the prior answer (never loses context).
+    return Answer(text=prev.answer.text, evidence=ev, used_llm=False)
+
+
+def _synthesize_followup(question: str, ev: Evidence, prev: "Exchange",
+                         meta_instruction: str, decision,
+                         extra_evidence: Optional[list[str]] = None) -> Optional[str]:
+    """Synthesize a follow-up answer grounded ONLY in the previous Evidence."""
+    evidence_str = "\n".join(ev.blocks) if ev.blocks else json.dumps(ev.raw, indent=2)
+    extra_str = ""
+    if extra_evidence:
+        extra_str = "\n\nADDITIONAL EVIDENCE for the named project (the only extra source):\n" + "\n".join(extra_evidence)
+    user = (
+        f"Follow-up question: {question}\n\n"
+        f"{meta_instruction}\n\n"
+        f"PREVIOUS ANSWER (context only):\n{prev.answer.text}\n\n"
+        f"PREVIOUS EVIDENCE (the ONLY source you may cite):\n{evidence_str}{extra_str}\n\n"
+        f"Answer the follow-up grounded only in the PREVIOUS EVIDENCE."
+    )
+    return _call(_SYSTEM, user)
+
+
 def ask(question: str, conn, prev: Optional["Exchange"] = None,
         verbose: bool = False) -> Answer:
     # Single reasoning pipeline: understand (online) / requirements_from_question
@@ -1854,6 +2495,12 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
                 return Answer(text=payload,
                               evidence=Evidence(requirements=RetrievalRequirements(needs=["clarify"])),
                               used_llm=False)
+            if kind == "followup":
+                # Meta-question about the PREVIOUS answer. Reuse the previous
+                # Evidence package (it IS the evidence the answer rests on) and
+                # re-synthesize, threading `prev` as disambiguation context only.
+                # No fresh retrieval, so context is never lost (M8.1.6 fix).
+                return _answer_followup(question, payload, conn)
             if kind == "rewrite":
                 question = payload
 

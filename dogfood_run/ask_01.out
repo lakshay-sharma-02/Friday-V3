@@ -1,0 +1,21 @@
+Based on the Evidence, here's the engineering knowledge you've accumulated:
+
+**Systems and architectures built**
+
+You've tackled AI infrastructure at the kernel level. Aether is an OS written in Rust where AI is a first-class kernel subsystem with direct hardware access and system telemetry integration—this is a significant architectural undertaking that sits at the intersection of systems programming, AI integration, and OS design.
+
+You've also built mental health platforms (MindWell) with user-facing and admin-facing interfaces, and financial applications (finance-tracker), indicating experience with full-stack product work.
+
+**Repeated patterns**
+
+Your work shows consistent focus on infrastructure for developer capability. Friday (V2, V3) are explicitly framed around making software engineers more capable—whether through task completion guidelines, testing practices, or tooling. This pattern appears across multiple iterations, suggesting you've refined an approach to developer productivity.
+
+AI systems recur across your portfolio (Aether, MindWell, vivaha), indicating sustained engagement with integrating AI into infrastructure and products rather than treating it as a peripheral concern.
+
+**Language breadth**
+
+Rust appears as a primary language choice for systems work (Aether). The Evidence doesn't fully specify technology stacks across all projects, so I can't map your full language breadth, but the OS-level work signals comfort with low-level systems thinking.
+
+**Complex systems taken on**
+
+You've engaged with mental health as a domain (MindWell, research threads), which requires handling sensitive user data, community dynamics, and resource curation alongside mood tracking. OS kernel design with AI as a first-class subsystem is also genuinely complex—it requires understanding both hardware interaction and AI model integration at a deep architectural level.

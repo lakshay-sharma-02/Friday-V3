@@ -1,0 +1,24 @@
+00_reset	0	0.01	rm -f /home/lakshay/.friday/friday.db
+01_ingest	0	174.68	friday ingest /home/lakshay/Projects
+02_observe	0	6.97	friday observe
+03_context_show	0	0.34	friday context
+04_context_build	0	0.66	friday context build
+05_context_show2	0	0.54	friday context
+06_sessions	0	0.63	friday sessions
+07_timeline	0	0.35	friday timeline
+08_knowledge_show	0	0.35	friday knowledge
+09_knowledge_build	0	0.92	friday knowledge build
+10_knowledge_show2	0	0.37	friday knowledge
+11_knowledge_verify	0	0.34	friday knowledge verify
+12_kx1	2	0.56	friday knowledge explain 1
+13_kx2	2	0.39	friday knowledge explain 2
+14_kx3	2	0.41	friday knowledge explain 3
+15_kx4	2	0.44	friday knowledge explain 4
+16_kx5	2	0.41	friday knowledge explain 5
+ask_01	0	117.41	friday ask What engineering knowledge have you accumulated?
+ask_02	0	40.01	friday ask What stable engineering knowledge do you have?
+ask_03	0	59.36	friday ask What have you learned about my engineering?
+ask_04	0	60.79	friday ask What do you know about my projects now?
+ask_05	0	55.18	friday ask What long-term engineering trends have you observed?
+ask_06	0	51.20	friday ask What recurring engineering habits have you learned?
+ask_07	0	74.57	friday ask Which technologies am I consistently investing in?

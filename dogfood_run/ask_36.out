@@ -1,0 +1,12 @@
+I don't have enough evidence to answer that clearly.
+
+The data shows you're choosing React/Supabase repeatedly (MindWell and vivaha both use this stack) and gravitating toward library structures (Friday V2, finance-tracker). But that's architectural consistency, not necessarily a mistake — it could be deliberate pattern-matching that works for you.
+
+To identify a *mistake* — something that costs you time, blocks progress, or creates rework — I'd need to see:
+- Uncommitted changes or abandoned branches that signal incomplete work
+- Git history showing reversions or refactors within the same project
+- Explicit friction signals (TODOs, tech debt markers, incomplete features across projects)
+
+The Evidence is also incomplete: Friday V2, demo-observe, and your observation history are missing technology detection and commit patterns, which would show whether you're starting things and not finishing them, or cycling back to rework the same problems.
+
+Run `friday observe` to capture that history, and I can give you a grounded answer on what patterns are actually costing you.

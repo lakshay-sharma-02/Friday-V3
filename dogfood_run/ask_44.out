@@ -1,0 +1,10 @@
+I don't have enough evidence to answer that.
+
+The Evidence provided is heavily contaminated with pip internals and system package paths (&&/lib/python3.14/site-packages/pip/...), which obscure the actual Friday codebase. The only reliable signals are:
+
+- FastAPI is imported and instantiated in test_http_tools.py
+- uvicorn is used for startup
+- A circular dependency exists between core/pipeline.py and core/executor.py
+- Numerous test and demo scripts are present (suggesting an evolving project with multiple phases)
+
+Beyond those fragments, I cannot determine Friday's actual architecture, which components are core to the application versus testing infrastructure, or what the real entry points are. The Evidence would need to be re-gathered without the system package clutter to give you a meaningful answer about Friday's design.

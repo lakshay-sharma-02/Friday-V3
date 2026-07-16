@@ -1,0 +1,11 @@
+You've been building three converging systems:
+
+**AI infrastructure** (strongest signal). Aether is your core commitment here—an AI-native operating system written in Rust where AI is a first-class kernel subsystem with direct hardware access, not a bolted-on application. MindWell and vivaha also sit in this space, though their specific purposes aren't fully stated.
+
+**Developer capability and tooling** (medium signal). Friday, Friday V2, and Friday V3 form a progression toward making software engineers dramatically more capable. Friday V2 explicitly states this as its purpose; Friday itself codified guidelines for task completion, testing, and code style.
+
+**Mental health as a domain** (emerging). MindWell is a platform offering anonymous storytelling, resource access, mood tracking, and community support with separate user and admin interfaces. It's the only stated commercial product in your portfolio.
+
+The threads connect: you're building AI infrastructure that could power developer tools at scale, while exploring mental health as a high-stakes, human-centered domain where AI infrastructure might matter most. The research signal across all projects (weak confidence) suggests these aren't production-only efforts—you're exploring the space.
+
+**Stated intent:** MindWell is positioned as both a product and commercial application; Friday V2's intent is explicit (engineer capability); Aether's vision is architectural (AI as kernel subsystem). Friday V3, vivaha, demo-observe, and finance-tracker lack stated purposes in the evidence.
