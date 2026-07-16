@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 
 CREATE TABLE IF NOT EXISTS observations (
-    id          TEXT NOT NULL,
+    id          TEXT NOT NULL PRIMARY KEY,
     observed_at TEXT NOT NULL,
     source      TEXT NOT NULL,
     subject     TEXT NOT NULL,
@@ -141,14 +141,15 @@ CREATE TABLE IF NOT EXISTS knowledge (
     updated_at          TEXT NOT NULL,
     last_verified       TEXT,
     verification_count  INTEGER NOT NULL DEFAULT 0,
-    is_static           INTEGER NOT NULL DEFAULT 0
+    is_static           INTEGER NOT NULL DEFAULT 0,
+    schema_version      TEXT NOT NULL DEFAULT '1.0'
 );
 
 -- M8.2: Knowledge Evolution. Append-only. History is never mutated.
 -- One full snapshot of every knowledge entry as it stood after a build.
 CREATE TABLE IF NOT EXISTS knowledge_history (
     build_at            TEXT NOT NULL,
-    knowledge_id        TEXT NOT NULL,
+    knowledge_id        TEXT NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
     type                TEXT NOT NULL,
     subject             TEXT NOT NULL,
     statement           TEXT NOT NULL,
@@ -196,13 +197,14 @@ CREATE TABLE IF NOT EXISTS understanding (
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     build_at            TEXT NOT NULL,
-    retired_at          TEXT
+    retired_at          TEXT,
+    schema_version      TEXT NOT NULL DEFAULT '1.0'
 );
 
 -- One append-only snapshot of every understanding per build. Never mutated.
 CREATE TABLE IF NOT EXISTS understanding_history (
     build_at            TEXT NOT NULL,
-    understanding_id    TEXT NOT NULL,
+    understanding_id    TEXT NOT NULL REFERENCES understanding(id) ON DELETE CASCADE,
     type                TEXT NOT NULL,
     subject             TEXT NOT NULL,
     statement           TEXT NOT NULL,
@@ -220,7 +222,7 @@ CREATE TABLE IF NOT EXISTS understanding_evolution (
     id                  TEXT PRIMARY KEY,
     build_at            TEXT NOT NULL,
     event_type          TEXT NOT NULL,
-    understanding_id    TEXT NOT NULL,
+    understanding_id    TEXT NOT NULL REFERENCES understanding(id) ON DELETE CASCADE,
     previous_confidence TEXT,
     new_confidence      TEXT,
     previous_status     TEXT,
@@ -250,13 +252,14 @@ CREATE TABLE IF NOT EXISTS initiatives (
     understanding_ids           TEXT NOT NULL DEFAULT '',
     knowledge_ids               TEXT NOT NULL DEFAULT '',
     build_at                    TEXT NOT NULL,
-    created_at                  TEXT NOT NULL DEFAULT ''
+    created_at                  TEXT NOT NULL DEFAULT '',
+    schema_version              TEXT NOT NULL DEFAULT '1.0'
 );
 
 -- One append-only snapshot of every initiative per build. Never mutated.
 CREATE TABLE IF NOT EXISTS initiative_history (
     build_at               TEXT NOT NULL,
-    initiative_id          TEXT NOT NULL,
+    initiative_id          TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
     title                  TEXT NOT NULL,
     initiative_type        TEXT NOT NULL,
     status                 TEXT NOT NULL,
@@ -274,7 +277,7 @@ CREATE TABLE IF NOT EXISTS initiative_evolution (
     id                  TEXT PRIMARY KEY,
     build_at            TEXT NOT NULL,
     event_type          TEXT NOT NULL,
-    initiative_id       TEXT NOT NULL,
+    initiative_id       TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
     parent_ids          TEXT NOT NULL DEFAULT '',
     child_ids           TEXT NOT NULL DEFAULT '',
     previous_status     TEXT,
@@ -320,13 +323,14 @@ CREATE TABLE IF NOT EXISTS insights (
     initiative_ids          TEXT NOT NULL DEFAULT '',
     knowledge_ids           TEXT NOT NULL DEFAULT '',
     build_at                TEXT NOT NULL,
-    created_at              TEXT NOT NULL DEFAULT ''
+    created_at              TEXT NOT NULL DEFAULT '',
+    schema_version          TEXT NOT NULL DEFAULT '1.0'
 );
 
 -- One append-only snapshot of every insight per build. Never mutated.
 CREATE TABLE IF NOT EXISTS insight_history (
     build_at                TEXT NOT NULL,
-    insight_id              TEXT NOT NULL,
+    insight_id              TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE,
     title                   TEXT NOT NULL,
     insight_type            TEXT NOT NULL,
     statement               TEXT NOT NULL,
@@ -344,7 +348,7 @@ CREATE TABLE IF NOT EXISTS insight_evolution (
     id                      TEXT PRIMARY KEY,
     build_at                TEXT NOT NULL,
     event_type              TEXT NOT NULL,
-    insight_id              TEXT NOT NULL,
+    insight_id              TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE,
     previous_status         TEXT,
     new_status              TEXT,
     previous_confidence     TEXT,
@@ -356,6 +360,223 @@ CREATE TABLE IF NOT EXISTS insight_evolution (
     initiative_ids          TEXT NOT NULL DEFAULT '',
     knowledge_ids           TEXT NOT NULL DEFAULT '',
     timestamp               TEXT NOT NULL
+);
+
+-- M9.0: Planning Engine. Write-only layer on TOP of Insights/Initiatives/
+-- Understanding/Knowledge. NEVER reads observations/context/repositories/git
+-- directly. NEVER executes, edits files, or calls workers. Every plan cites
+-- initiative ids (and/or insight ids and/or understanding ids and/or knowledge
+-- ids). Append-only history + evolution, mirroring the insight tables. Plans
+-- are structured (milestones/dependencies/risks/verification/rollback/evidence
+-- references); only then rendered into human text. NEVER overloads initiatives.
+
+CREATE TABLE IF NOT EXISTS plans (
+    id                      TEXT PRIMARY KEY,
+    goal                    TEXT NOT NULL,
+    plan_type              TEXT NOT NULL,
+    confidence              TEXT NOT NULL,
+    status                  TEXT NOT NULL DEFAULT 'planned',
+    affected_initiative_ids TEXT NOT NULL DEFAULT '',
+    affected_insight_ids   TEXT NOT NULL DEFAULT '',
+    affected_understanding_ids TEXT NOT NULL DEFAULT '',
+    affected_knowledge_ids TEXT NOT NULL DEFAULT '',
+    milestones              TEXT NOT NULL DEFAULT '',
+    dependencies            TEXT NOT NULL DEFAULT '',
+    risks                   TEXT NOT NULL DEFAULT '',
+    verification            TEXT NOT NULL DEFAULT '',
+    rollback                TEXT NOT NULL DEFAULT '',
+    estimated_complexity    TEXT NOT NULL DEFAULT '',
+    estimated_effort        TEXT NOT NULL DEFAULT '',
+    plan_text               TEXT NOT NULL DEFAULT '',
+    schema_version          TEXT NOT NULL DEFAULT '1.0',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+
+-- One append-only snapshot of every plan per generation. Never mutated.
+CREATE TABLE IF NOT EXISTS plan_history (
+    generated_at           TEXT NOT NULL,
+    plan_id                TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    goal                   TEXT NOT NULL,
+    plan_type              TEXT NOT NULL,
+    confidence             TEXT NOT NULL,
+    status                 TEXT NOT NULL,
+    affected_initiative_ids TEXT NOT NULL DEFAULT '',
+    affected_insight_ids   TEXT NOT NULL DEFAULT '',
+    affected_understanding_ids TEXT NOT NULL DEFAULT '',
+    affected_knowledge_ids TEXT NOT NULL DEFAULT '',
+    milestones              TEXT NOT NULL DEFAULT '',
+    dependencies            TEXT NOT NULL DEFAULT '',
+    risks                   TEXT NOT NULL DEFAULT '',
+    verification            TEXT NOT NULL DEFAULT '',
+    rollback                TEXT NOT NULL DEFAULT '',
+    estimated_complexity    TEXT NOT NULL DEFAULT '',
+    estimated_effort        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (generated_at, plan_id)
+);
+
+-- Deterministic lifecycle (Planned->Refined->Approved->Superseded) and
+-- supersession events derived from plan diffs. Append-only.
+CREATE TABLE IF NOT EXISTS plan_evolution (
+    id                      TEXT PRIMARY KEY,
+    generated_at            TEXT NOT NULL,
+    event_type              TEXT NOT NULL,
+    plan_id                 TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    previous_status         TEXT,
+    new_status              TEXT,
+    previous_confidence     TEXT,
+    new_confidence          TEXT,
+    reason                  TEXT NOT NULL,
+    affected_initiative_ids TEXT NOT NULL DEFAULT '',
+    affected_insight_ids    TEXT NOT NULL DEFAULT '',
+    affected_understanding_ids TEXT NOT NULL DEFAULT '',
+    affected_knowledge_ids  TEXT NOT NULL DEFAULT '',
+    timestamp               TEXT NOT NULL
+);
+
+-- M9.1: Task Graph Compiler. Write-only layer on TOP of the Planning Engine.
+-- Compiles a structured Plan (milestones/dependencies/verification/rollback)
+-- into a deterministic, acyclic task DAG that future Workers consume. NEVER
+-- executes, edits files, or calls workers. NEVER reads observations/context/
+-- git/repositories directly — input is a Plan object only. Append-only history
+-- + evolution per graph, mirroring the plan tables. NEVER overloads plans.
+
+CREATE TABLE IF NOT EXISTS task_graphs (
+    id                      TEXT PRIMARY KEY,
+    goal                    TEXT NOT NULL,
+    plan_id                 TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    plan_type               TEXT NOT NULL,
+    task_count              INTEGER NOT NULL DEFAULT 0,
+    edge_count              INTEGER NOT NULL DEFAULT 0,
+    critical_path_length    INTEGER NOT NULL DEFAULT 0,
+    parallel_groups         INTEGER NOT NULL DEFAULT 0,
+    status                  TEXT NOT NULL DEFAULT 'compiled',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id                      TEXT PRIMARY KEY,
+    graph_id                TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    plan_id                 TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    milestone_order         INTEGER NOT NULL DEFAULT 0,
+    title                   TEXT NOT NULL,
+    description             TEXT NOT NULL DEFAULT '',
+    task_type               TEXT NOT NULL,
+    required_capabilities   TEXT NOT NULL DEFAULT '',
+    complexity              TEXT NOT NULL DEFAULT 'medium',
+    priority                TEXT NOT NULL DEFAULT 'medium',
+    estimated_effort        TEXT NOT NULL DEFAULT 'medium',
+    dependencies            TEXT NOT NULL DEFAULT '',
+    inputs                  TEXT NOT NULL DEFAULT '[]',
+    outputs                 TEXT NOT NULL DEFAULT '[]',
+    acceptance_criteria     TEXT NOT NULL DEFAULT '[]',
+    verification            TEXT NOT NULL DEFAULT '[]',
+    rollback                TEXT NOT NULL DEFAULT '[]',
+    evidence                TEXT NOT NULL DEFAULT '[]',
+    status                  TEXT NOT NULL DEFAULT 'pending',
+    confidence              TEXT NOT NULL DEFAULT 'medium',
+    sequence                INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS task_edges (
+    id                      TEXT PRIMARY KEY,
+    graph_id                TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    from_task               TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    to_task                 TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    kind                    TEXT NOT NULL DEFAULT 'depends_on'
+);
+
+CREATE TABLE IF NOT EXISTS task_history (
+    generated_at           TEXT NOT NULL,
+    graph_id               TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    goal                   TEXT NOT NULL,
+    task_count             INTEGER NOT NULL DEFAULT 0,
+    edge_count             INTEGER NOT NULL DEFAULT 0,
+    critical_path_length   INTEGER NOT NULL DEFAULT 0,
+    parallel_groups        INTEGER NOT NULL DEFAULT 0,
+    tasks_json             TEXT NOT NULL DEFAULT '',
+    edges_json             TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (generated_at, graph_id)
+);
+
+CREATE TABLE IF NOT EXISTS task_evolution (
+    id                      TEXT PRIMARY KEY,
+    generated_at            TEXT NOT NULL,
+    event_type              TEXT NOT NULL,
+    graph_id                TEXT NOT NULL,
+    previous_status         TEXT,
+    new_status              TEXT,
+    reason                  TEXT NOT NULL,
+    task_count              INTEGER NOT NULL DEFAULT 0,
+    edge_count              INTEGER NOT NULL DEFAULT 0,
+    timestamp               TEXT NOT NULL
+);
+
+-- M9.2: Worker Registry. WRITE-ONLY layer on TOP of the Task Graph Compiler.
+-- Describes workers (capability profiles) and NOTHING else. NEVER executes,
+-- schedules, selects, or runs work. Append-only history + version log. NEVER
+-- overloads the Task Graph. Dedicated tables; every lower layer unchanged.
+-- Provider-agnostic from day one: workers are generic capability profiles
+-- (kind = llm/cli/function/agent/tool/service), not special-cased providers.
+
+CREATE TABLE IF NOT EXISTS workers (
+    id                      TEXT PRIMARY KEY,
+    name                    TEXT NOT NULL,
+    kind                    TEXT NOT NULL,
+    description             TEXT NOT NULL DEFAULT '',
+    capabilities            TEXT NOT NULL DEFAULT '',
+    supported_languages     TEXT NOT NULL DEFAULT '',
+    supported_task_types    TEXT NOT NULL DEFAULT '',
+    supported_plan_types    TEXT NOT NULL DEFAULT '',
+    limitations             TEXT NOT NULL DEFAULT '',
+    estimated_speed         TEXT NOT NULL DEFAULT '',
+    estimated_cost          TEXT NOT NULL DEFAULT '',
+    context_window          INTEGER NOT NULL DEFAULT 0,
+    parallelism             INTEGER NOT NULL DEFAULT 1,
+    requires_network        INTEGER NOT NULL DEFAULT 0,
+    requires_filesystem     INTEGER NOT NULL DEFAULT 0,
+    requires_git            INTEGER NOT NULL DEFAULT 0,
+    requires_python         INTEGER NOT NULL DEFAULT 0,
+    requires_shell          INTEGER NOT NULL DEFAULT 0,
+    confidence              TEXT NOT NULL DEFAULT 'medium',
+    version                 TEXT NOT NULL DEFAULT '1.0.0',
+    status                  TEXT NOT NULL DEFAULT 'active',
+    schema_version          TEXT NOT NULL DEFAULT '1.0',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+
+-- Normalized one-row-per-(worker,capability) so the future Capability Resolver
+-- can query "which workers have capability X" without parsing a joined string.
+CREATE TABLE IF NOT EXISTS worker_capabilities (
+    worker_id               TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    capability              TEXT NOT NULL,
+    PRIMARY KEY (worker_id, capability)
+);
+
+-- Append-only snapshot of every worker per registration event. Never mutated.
+CREATE TABLE IF NOT EXISTS worker_history (
+    registered_at           TEXT NOT NULL,
+    worker_id               TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    name                    TEXT NOT NULL,
+    kind                    TEXT NOT NULL,
+    version                 TEXT NOT NULL,
+    status                  TEXT NOT NULL,
+    capabilities            TEXT NOT NULL DEFAULT '',
+    limitations             TEXT NOT NULL DEFAULT '',
+    event_type              TEXT NOT NULL,
+    note                    TEXT,
+    PRIMARY KEY (registered_at, worker_id)
+);
+
+-- Append-only per-version log (version upgrades recorded forever).
+CREATE TABLE IF NOT EXISTS worker_versions (
+    worker_id               TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+    version                 TEXT NOT NULL,
+    registered_at           TEXT NOT NULL,
+    changelog               TEXT,
+    PRIMARY KEY (worker_id, version)
 );
 """
 
@@ -470,11 +691,285 @@ def _migrate(conn: sqlite3.Connection) -> None:
     know_cols = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge)")}
     if "is_static" not in know_cols:
         conn.execute("ALTER TABLE knowledge ADD COLUMN is_static INTEGER NOT NULL DEFAULT 0")
+    # M9.2.5: observations must have a PRIMARY KEY so INSERT OR REPLACE dedupes.
+    # Existing databases created the table without one; rebuild it in place.
+    _ensure_observations_pk(conn)
+    # M9.2.5: referential integrity. Rebuild FK-bearing tables that predate the
+    # FK schema so no orphan tasks/graphs/history/evolution rows can persist.
+    _ensure_fk_tables(conn)
+    # M9.2.5: contract versioning (Law 24). Add schema_version column where
+    # missing; existing rows are treated as the current version by the loader.
+    know_cols = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge)")}
+    if "schema_version" not in know_cols:
+        conn.execute(
+            "ALTER TABLE knowledge ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
+    # M9.2.5: contract versioning (Law 24) for understanding/insight/initiative.
+    for table in ("understanding", "insights", "initiatives", "workers", "plans"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if "schema_version" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
     conn.commit()
+
+
+def _ensure_observations_pk(conn: sqlite3.Connection) -> None:
+    """Rebuild `observations` with PRIMARY KEY(id) on databases that lack it.
+
+    SQLite cannot ALTER ADD a PRIMARY KEY, so copy rows into a new table and
+    swap. Idempotent: skips if the current table already declares the PK.
+    """
+    if "observations" not in _existing_tables(conn):
+        return
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(observations)")]
+    if "id" in cols and _column_is_pk(conn, "observations", "id"):
+        return
+    conn.execute("CREATE TABLE observations_new ("
+                 "id TEXT NOT NULL PRIMARY KEY, "
+                 "observed_at TEXT NOT NULL, source TEXT NOT NULL, "
+                 "subject TEXT NOT NULL, aspect TEXT NOT NULL, value TEXT NOT NULL, "
+                 "confidence TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '', detail TEXT)")
+    conn.execute(
+        "INSERT OR REPLACE INTO observations_new "
+        "(id, observed_at, source, subject, aspect, value, confidence, scope, detail) "
+        "SELECT id, observed_at, source, subject, aspect, value, confidence, scope, detail "
+        "FROM observations")
+    conn.execute("DROP TABLE observations")
+    conn.execute("ALTER TABLE observations_new RENAME TO observations")
+
+
+def _column_is_pk(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    for r in conn.execute(f"PRAGMA table_info({table})"):
+        if r["name"] == column:
+            return bool(r["pk"])
+    return False
+
+
+# M9.2.5: FK-bearing DDL for tables that originally shipped without FKs.
+# Used only by the migration to rebuild existing databases. New databases get
+# these FKs directly from SCHEMA (executescript). Kept in sync with SCHEMA.
+_FK_TABLE_DDL = {
+    "tasks": (
+        "CREATE TABLE tasks_new ("
+        "id TEXT PRIMARY KEY, "
+        "graph_id TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE, "
+        "plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE, "
+        "milestone_order INTEGER NOT NULL DEFAULT 0, title TEXT NOT NULL, "
+        "description TEXT NOT NULL DEFAULT '', task_type TEXT NOT NULL, "
+        "required_capabilities TEXT NOT NULL DEFAULT '', complexity TEXT NOT NULL DEFAULT 'medium', "
+        "priority TEXT NOT NULL DEFAULT 'medium', estimated_effort TEXT NOT NULL DEFAULT 'medium', "
+        "dependencies TEXT NOT NULL DEFAULT '', inputs TEXT NOT NULL DEFAULT '[]', "
+        "outputs TEXT NOT NULL DEFAULT '[]', acceptance_criteria TEXT NOT NULL DEFAULT '[]', "
+        "verification TEXT NOT NULL DEFAULT '[]', rollback TEXT NOT NULL DEFAULT '[]', "
+        "evidence TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'pending', "
+        "confidence TEXT NOT NULL DEFAULT 'medium', sequence INTEGER NOT NULL DEFAULT 0)"
+    ),
+    "task_edges": (
+        "CREATE TABLE task_edges_new ("
+        "id TEXT PRIMARY KEY, "
+        "graph_id TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE, "
+        "from_task TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, "
+        "to_task TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, "
+        "kind TEXT NOT NULL DEFAULT 'depends_on')"
+    ),
+    "task_graphs": (
+        "CREATE TABLE task_graphs_new ("
+        "id TEXT PRIMARY KEY, goal TEXT NOT NULL, "
+        "plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE, "
+        "plan_type TEXT NOT NULL, task_count INTEGER NOT NULL DEFAULT 0, "
+        "edge_count INTEGER NOT NULL DEFAULT 0, critical_path_length INTEGER NOT NULL DEFAULT 0, "
+        "parallel_groups INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'compiled', "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    ),
+    "task_history": (
+        "CREATE TABLE task_history_new ("
+        "generated_at TEXT NOT NULL, "
+        "graph_id TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE, "
+        "goal TEXT NOT NULL, task_count INTEGER NOT NULL DEFAULT 0, "
+        "edge_count INTEGER NOT NULL DEFAULT 0, critical_path_length INTEGER NOT NULL DEFAULT 0, "
+        "parallel_groups INTEGER NOT NULL DEFAULT 0, tasks_json TEXT NOT NULL DEFAULT '', "
+        "edges_json TEXT NOT NULL DEFAULT '')"
+    ),
+    "knowledge_history": (
+        "CREATE TABLE knowledge_history_new ("
+        "build_at TEXT NOT NULL, "
+        "knowledge_id TEXT NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE, "
+        "type TEXT NOT NULL, subject TEXT NOT NULL, statement TEXT NOT NULL, "
+        "confidence TEXT NOT NULL, evidence_ids TEXT NOT NULL, status TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "verification_count INTEGER NOT NULL DEFAULT 0, is_static INTEGER NOT NULL DEFAULT 0)"
+    ),
+    "understanding_history": (
+        "CREATE TABLE understanding_history_new ("
+        "build_at TEXT NOT NULL, "
+        "understanding_id TEXT NOT NULL REFERENCES understanding(id) ON DELETE CASCADE, "
+        "type TEXT NOT NULL, subject TEXT NOT NULL, statement TEXT NOT NULL, "
+        "confidence TEXT NOT NULL, status TEXT NOT NULL, knowledge_ids TEXT NOT NULL DEFAULT '', "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "reinforced_count INTEGER NOT NULL DEFAULT 0)"
+    ),
+    "initiative_history": (
+        "CREATE TABLE initiative_history_new ("
+        "build_at TEXT NOT NULL, "
+        "initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE, "
+        "title TEXT NOT NULL, initiative_type TEXT NOT NULL, status TEXT NOT NULL, "
+        "confidence TEXT NOT NULL, started_at TEXT, completed_at TEXT, "
+        "participating_repositories TEXT NOT NULL DEFAULT '', "
+        "understanding_ids TEXT NOT NULL DEFAULT '', knowledge_ids TEXT NOT NULL DEFAULT '')"
+    ),
+    "insight_history": (
+        "CREATE TABLE insight_history_new ("
+        "build_at TEXT NOT NULL, "
+        "insight_id TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE, "
+        "title TEXT NOT NULL, insight_type TEXT NOT NULL, statement TEXT NOT NULL, "
+        "status TEXT NOT NULL, confidence TEXT NOT NULL, "
+        "understanding_ids TEXT NOT NULL DEFAULT '', initiative_ids TEXT NOT NULL DEFAULT '', "
+        "knowledge_ids TEXT NOT NULL DEFAULT '')"
+    ),
+    "plan_history": (
+        "CREATE TABLE plan_history_new ("
+        "generated_at TEXT NOT NULL, "
+        "plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE, "
+        "goal TEXT NOT NULL, plan_type TEXT NOT NULL, confidence TEXT NOT NULL, "
+        "status TEXT NOT NULL, affected_initiative_ids TEXT NOT NULL DEFAULT '', "
+        "affected_insight_ids TEXT NOT NULL DEFAULT '', "
+        "affected_understanding_ids TEXT NOT NULL DEFAULT '', "
+        "affected_knowledge_ids TEXT NOT NULL DEFAULT '', milestones TEXT NOT NULL DEFAULT '', "
+        "dependencies TEXT NOT NULL DEFAULT '', risks TEXT NOT NULL DEFAULT '', "
+        "verification TEXT NOT NULL DEFAULT '', rollback TEXT NOT NULL DEFAULT '', "
+        "estimated_complexity TEXT NOT NULL DEFAULT '', estimated_effort TEXT NOT NULL DEFAULT '')"
+    ),
+    "understanding_evolution": (
+        "CREATE TABLE understanding_evolution_new ("
+        "id TEXT PRIMARY KEY, build_at TEXT NOT NULL, event_type TEXT NOT NULL, "
+        "understanding_id TEXT NOT NULL REFERENCES understanding(id) ON DELETE CASCADE, "
+        "previous_confidence TEXT, new_confidence TEXT, previous_status TEXT, new_status TEXT, "
+        "previous_statement TEXT, new_statement TEXT, reason TEXT NOT NULL, "
+        "knowledge_ids TEXT NOT NULL DEFAULT '')"
+    ),
+    "initiative_evolution": (
+        "CREATE TABLE initiative_evolution_new ("
+        "id TEXT PRIMARY KEY, build_at TEXT NOT NULL, event_type TEXT NOT NULL, "
+        "initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE, "
+        "parent_ids TEXT NOT NULL DEFAULT '', child_ids TEXT NOT NULL DEFAULT '', "
+        "previous_status TEXT, new_status TEXT, previous_confidence TEXT, new_confidence TEXT, "
+        "previous_title TEXT, new_title TEXT, reason TEXT NOT NULL, "
+        "understanding_ids TEXT NOT NULL DEFAULT '', knowledge_ids TEXT NOT NULL DEFAULT '')"
+    ),
+    "insight_evolution": (
+        "CREATE TABLE insight_evolution_new ("
+        "id TEXT PRIMARY KEY, build_at TEXT NOT NULL, event_type TEXT NOT NULL, "
+        "insight_id TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE, "
+        "previous_status TEXT, new_status TEXT, previous_confidence TEXT, new_confidence TEXT, "
+        "previous_statement TEXT, new_statement TEXT, reason TEXT NOT NULL, "
+        "understanding_ids TEXT NOT NULL DEFAULT '', initiative_ids TEXT NOT NULL DEFAULT '', "
+        "knowledge_ids TEXT NOT NULL DEFAULT '')"
+    ),
+    "plan_evolution": (
+        "CREATE TABLE plan_evolution_new ("
+        "id TEXT PRIMARY KEY, generated_at TEXT NOT NULL, event_type TEXT NOT NULL, "
+        "plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE, "
+        "previous_status TEXT, new_status TEXT, previous_confidence TEXT, new_confidence TEXT, "
+        "reason TEXT NOT NULL, affected_initiative_ids TEXT NOT NULL DEFAULT '', "
+        "affected_insight_ids TEXT NOT NULL DEFAULT '', "
+        "affected_understanding_ids TEXT NOT NULL DEFAULT '', "
+        "affected_knowledge_ids TEXT NOT NULL DEFAULT '')"
+    ),
+    "worker_history": (
+        "CREATE TABLE worker_history_new ("
+        "registered_at TEXT NOT NULL, "
+        "worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE, "
+        "name TEXT NOT NULL, kind TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, "
+        "capabilities TEXT NOT NULL DEFAULT '', limitations TEXT NOT NULL DEFAULT '', "
+        "event_type TEXT NOT NULL, note TEXT)"
+    ),
+    "worker_versions": (
+        "CREATE TABLE worker_versions_new ("
+        "worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE, "
+        "version TEXT NOT NULL, registered_at TEXT NOT NULL, changelog TEXT)"
+    ),
+}
+
+
+def _ensure_fk_tables(conn: sqlite3.Connection) -> None:
+    """Rebuild FK-bearing tables on existing databases that predate M9.2.5.
+
+    A table is rebuilt only if it currently lacks the expected foreign key.
+    SQLite cannot ALTER ADD a FK, so we copy rows into a *_new table (with FKs)
+    and swap. Idempotent and safe for already-correct databases.
+    """
+    for table, ddl in _FK_TABLE_DDL.items():
+        if table not in _existing_tables(conn):
+            continue
+        if _has_fk(conn, table):
+            continue
+        new = table + "_new"
+        conn.execute(ddl)
+        cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+        col_csv = ", ".join(cols)
+        conn.execute(
+            f"INSERT OR REPLACE INTO {new} ({col_csv}) SELECT {col_csv} FROM {table}")
+        conn.execute(f"DROP TABLE {table}")
+        conn.execute(f"ALTER TABLE {new} RENAME TO {table}")
+
+
+def _existing_tables(conn: sqlite3.Connection) -> set:
+    return {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+def _has_fk(conn: sqlite3.Connection, table: str) -> bool:
+    return bool(list(conn.execute(f"PRAGMA foreign_key_list({table})")))
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def commit_if_top(conn: sqlite3.Connection) -> None:
+    """Commit only when no explicit transaction is already open.
+
+    Insert helpers call this instead of `conn.commit()` so that a caller which
+    has opened a transaction (e.g. an engine `build()` wrapping its full
+    multi-table persist) owns the single commit/rollback boundary. When no
+    transaction is active the helper finalizes its own write (unchanged
+    standalone behaviour). Part F: every multi-table write is atomic.
+    """
+    if not conn.in_transaction:
+        conn.commit()
+
+
+class atomic:
+    """Context manager wrapping a block of writes in one transaction.
+
+    Usage::
+
+        with atomic(conn):
+            insert_x(conn, rows)
+            insert_x_history(conn, rows)
+
+    Commits on clean exit; rolls back on any exception so a failure mid-build
+    can never leave partially-written rows. Nested use is a no-op (the outermost
+    transaction owns the boundary), matching SQLite's lack of nested commits.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self._outer = False
+
+    def __enter__(self) -> "atomic":
+        if not self.conn.in_transaction:
+            self.conn.execute("BEGIN")
+            self._outer = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self._outer:
+            if exc_type is None:
+                self.conn.commit()
+            else:
+                self.conn.rollback()
+        return False
+
 
 
 def upsert_repository(
@@ -895,8 +1390,10 @@ class ObservationRow:
     """One persisted observation fact.
 
     `id` is the deterministic key `observed_at:source:subject:aspect` so the
-    same fact written twice in one run is idempotent. `scope` qualifies the
-    subject (e.g. a repository path) without overloading `subject`.
+    same fact written twice in one run is idempotent. With PRIMARY KEY(id) in
+    place (M9.2.5), `INSERT OR REPLACE` collapses identical re-inserts instead
+    of appending duplicates. `scope` qualifies the subject (e.g. a repository
+    path) without overloading `subject`.
     """
 
     id: str
@@ -1146,6 +1643,7 @@ class KnowledgeRow:
     last_verified: Optional[str]
     verification_count: int
     is_static: int = 0
+    schema_version: str = "1.0"
 
 
 def update_knowledge_status(conn: sqlite3.Connection, knowledge_id: str, status: str) -> None:
@@ -1344,6 +1842,7 @@ class UnderstandingRow:
     updated_at: str
     build_at: str
     retired_at: Optional[str] = None
+    schema_version: str = "1.0"
 
 
 @dataclass
@@ -1387,18 +1886,25 @@ def insert_understanding(conn: sqlite3.Connection, rows: List[UnderstandingRow])
     for r in rows:
         conn.execute(
             """
-            INSERT OR REPLACE INTO understanding
+            INSERT INTO understanding
                 (id, type, subject, statement, confidence, status,
-                 knowledge_ids, created_at, updated_at, build_at, retired_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 knowledge_ids, created_at, updated_at, build_at, retired_at,
+                 schema_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                type=excluded.type, subject=excluded.subject,
+                statement=excluded.statement, confidence=excluded.confidence,
+                status=excluded.status, knowledge_ids=excluded.knowledge_ids,
+                updated_at=excluded.updated_at, build_at=excluded.build_at,
+                retired_at=excluded.retired_at, schema_version=excluded.schema_version
             """,
             (
                 r.id, r.type, r.subject, r.statement, r.confidence, r.status,
                 r.knowledge_ids, r.created_at, r.updated_at, r.build_at,
-                r.retired_at,
+                r.retired_at, r.schema_version,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def get_all_understanding(conn: sqlite3.Connection) -> List[UnderstandingRow]:
@@ -1463,7 +1969,7 @@ def insert_understanding_history(conn: sqlite3.Connection, rows: List[Understand
                 r.updated_at, r.reinforced_count,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def latest_understanding_snapshot(conn: sqlite3.Connection) -> List[UnderstandingHistoryRow]:
@@ -1505,7 +2011,7 @@ def insert_understanding_evolution(conn: sqlite3.Connection, rows: List[Understa
                 r.knowledge_ids, r.timestamp,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def understanding_evolution_all(conn: sqlite3.Connection) -> List[UnderstandingEvolutionRow]:
@@ -1600,6 +2106,7 @@ class InitiativeRow:
     participating_repositories: str = ""
     understanding_ids: str = ""
     knowledge_ids: str = ""
+    schema_version: str = "1.0"
 
 
 @dataclass
@@ -1659,21 +2166,31 @@ def insert_initiative(conn: sqlite3.Connection, rows: List[InitiativeRow]) -> No
     for r in rows:
         conn.execute(
             """
-            INSERT OR REPLACE INTO initiatives
+            INSERT INTO initiatives
                 (id, title, initiative_type, status, confidence, statement,
                  started_at, updated_at, completed_at, participating_repositories,
-                 understanding_ids, knowledge_ids, build_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 understanding_ids, knowledge_ids, build_at, created_at,
+                 schema_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title, initiative_type=excluded.initiative_type,
+                status=excluded.status, confidence=excluded.confidence,
+                statement=excluded.statement, started_at=excluded.started_at,
+                updated_at=excluded.updated_at, completed_at=excluded.completed_at,
+                participating_repositories=excluded.participating_repositories,
+                understanding_ids=excluded.understanding_ids,
+                knowledge_ids=excluded.knowledge_ids, build_at=excluded.build_at,
+                created_at=excluded.created_at, schema_version=excluded.schema_version
             """,
             (
                 r.id, r.title, r.initiative_type, r.status, r.confidence,
                 r.statement,
                 r.started_at, r.updated_at, r.completed_at,
                 r.participating_repositories, r.understanding_ids,
-                r.knowledge_ids, r.build_at, r.created_at,
+                r.knowledge_ids, r.build_at, r.created_at, r.schema_version,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def get_all_initiatives(conn: sqlite3.Connection) -> List[InitiativeRow]:
@@ -1749,7 +2266,7 @@ def insert_initiative_history(
                 r.knowledge_ids,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def latest_initiative_snapshot(
@@ -1801,7 +2318,7 @@ def insert_initiative_evolution(
                 r.timestamp,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def initiative_evolution_all(
@@ -1843,7 +2360,7 @@ def insert_initiative_relationships(
                 r.build_at, r.created_at, r.note,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def initiative_relationships_all(
@@ -1949,6 +2466,7 @@ class InsightRow:
     understanding_ids: str = ""
     initiative_ids: str = ""
     knowledge_ids: str = ""
+    schema_version: str = "1.0"
 
 
 @dataclass
@@ -1993,20 +2511,30 @@ def insert_insight(conn: sqlite3.Connection, rows: List[InsightRow]) -> None:
     for r in rows:
         conn.execute(
             """
-            INSERT OR REPLACE INTO insights
+            INSERT INTO insights
                 (id, title, insight_type, statement, status, confidence,
                  started_at, updated_at, retired_at, understanding_ids,
-                 initiative_ids, knowledge_ids, build_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 initiative_ids, knowledge_ids, build_at, created_at,
+                 schema_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title, insight_type=excluded.insight_type,
+                statement=excluded.statement, status=excluded.status,
+                confidence=excluded.confidence, started_at=excluded.started_at,
+                updated_at=excluded.updated_at, retired_at=excluded.retired_at,
+                understanding_ids=excluded.understanding_ids,
+                initiative_ids=excluded.initiative_ids,
+                knowledge_ids=excluded.knowledge_ids, build_at=excluded.build_at,
+                created_at=excluded.created_at, schema_version=excluded.schema_version
             """,
             (
                 r.id, r.title, r.insight_type, r.statement, r.status,
                 r.confidence, r.started_at, r.updated_at, r.retired_at,
                 r.understanding_ids, r.initiative_ids, r.knowledge_ids,
-                r.build_at, r.created_at,
+                r.build_at, r.created_at, r.schema_version,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def get_all_insights(conn: sqlite3.Connection) -> List[InsightRow]:
@@ -2080,7 +2608,7 @@ def insert_insight_history(
                 r.knowledge_ids,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def latest_insight_snapshot(
@@ -2132,7 +2660,7 @@ def insert_insight_evolution(
                 r.timestamp,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def insight_evolution_all(
@@ -2211,3 +2739,905 @@ def _row_to_insight_evolution(r) -> InsightEvolutionRow:
     )
 
 
+
+
+# ===========================================================================
+# Planning Engine storage (Milestone 9.0) — write-only layer on top of
+# Insights/Initiatives/Understanding/Knowledge. Append-only. The Brain reads
+# `plans` (new); every lower layer is unchanged.
+# ===========================================================================
+
+
+@dataclass
+class PlanRow:
+    """One derived engineering plan (structured, evidence-backed)."""
+
+    id: str
+    goal: str
+    plan_type: str
+    confidence: str
+    status: str
+    milestones: str
+    dependencies: str
+    risks: str
+    verification: str
+    rollback: str
+    estimated_complexity: str
+    estimated_effort: str
+    plan_text: str
+    created_at: str
+    updated_at: str
+    affected_initiative_ids: str = ""
+    affected_insight_ids: str = ""
+    affected_understanding_ids: str = ""
+    affected_knowledge_ids: str = ""
+    schema_version: str = "1.0"
+
+
+@dataclass
+class PlanHistoryRow:
+    """One snapshot of a plan as of a single generation."""
+
+    generated_at: str
+    plan_id: str
+    goal: str
+    plan_type: str
+    confidence: str
+    status: str
+    milestones: str
+    dependencies: str
+    risks: str
+    verification: str
+    rollback: str
+    estimated_complexity: str
+    estimated_effort: str
+    affected_initiative_ids: str = ""
+    affected_insight_ids: str = ""
+    affected_understanding_ids: str = ""
+    affected_knowledge_ids: str = ""
+
+
+@dataclass
+class PlanEvolutionRow:
+    """One deterministic plan lifecycle / supersession event."""
+
+    id: str
+    generated_at: str
+    event_type: str
+    plan_id: str
+    previous_status: Optional[str]
+    new_status: Optional[str]
+    previous_confidence: Optional[str]
+    new_confidence: Optional[str]
+    reason: str
+    timestamp: str
+    affected_initiative_ids: str = ""
+    affected_insight_ids: str = ""
+    affected_understanding_ids: str = ""
+    affected_knowledge_ids: str = ""
+
+
+def insert_plan(conn: sqlite3.Connection, rows: List[PlanRow]) -> None:
+    """Insert or replace plan entries. Idempotent on id (stable per goal)."""
+    for r in rows:
+        conn.execute(
+            """
+            INSERT INTO plans
+                (id, goal, plan_type, confidence, status,
+                 affected_initiative_ids, affected_insight_ids,
+                 affected_understanding_ids, affected_knowledge_ids,
+                 milestones, dependencies, risks, verification, rollback,
+                 estimated_complexity, estimated_effort, plan_text,
+                 schema_version, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                goal=excluded.goal, plan_type=excluded.plan_type,
+                confidence=excluded.confidence, status=excluded.status,
+                affected_initiative_ids=excluded.affected_initiative_ids,
+                affected_insight_ids=excluded.affected_insight_ids,
+                affected_understanding_ids=excluded.affected_understanding_ids,
+                affected_knowledge_ids=excluded.affected_knowledge_ids,
+                milestones=excluded.milestones, dependencies=excluded.dependencies,
+                risks=excluded.risks, verification=excluded.verification,
+                rollback=excluded.rollback,
+                estimated_complexity=excluded.estimated_complexity,
+                estimated_effort=excluded.estimated_effort,
+                plan_text=excluded.plan_text, schema_version=excluded.schema_version,
+                updated_at=excluded.updated_at
+            """,
+            (
+                r.id, r.goal, r.plan_type, r.confidence, r.status,
+                r.affected_initiative_ids, r.affected_insight_ids,
+                r.affected_understanding_ids, r.affected_knowledge_ids,
+                r.milestones, r.dependencies, r.risks, r.verification,
+                r.rollback, r.estimated_complexity, r.estimated_effort,
+                r.plan_text, r.schema_version, r.created_at, r.updated_at,
+            ),
+        )
+    commit_if_top(conn)
+
+
+def get_all_plans(conn: sqlite3.Connection) -> List[PlanRow]:
+    """Every plan entry, newest-first by updated_at."""
+    rows = conn.execute("SELECT * FROM plans ORDER BY updated_at DESC").fetchall()
+    return [_row_to_plan(r) for r in rows]
+
+
+def get_plan_by_id(conn: sqlite3.Connection, pid: str) -> Optional[PlanRow]:
+    row = conn.execute("SELECT * FROM plans WHERE id = ?", (pid,)).fetchone()
+    return _row_to_plan(row) if row else None
+
+
+def get_plans_by_type(conn: sqlite3.Connection, ptype: str) -> List[PlanRow]:
+    rows = conn.execute(
+        "SELECT * FROM plans WHERE plan_type = ? ORDER BY updated_at DESC",
+        (ptype,),
+    ).fetchall()
+    return [_row_to_plan(r) for r in rows]
+
+
+def count_plans(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS c FROM plans").fetchone()
+    return row["c"] if row else 0
+
+
+def update_plan_status(conn: sqlite3.Connection, pid: str, status: str) -> None:
+    """Apply a lifecycle transition. History keeps the prior version forever."""
+    conn.execute("UPDATE plans SET status = ? WHERE id = ?", (status, pid))
+    conn.commit()
+
+
+def insert_plan_history(conn: sqlite3.Connection, rows: List[PlanHistoryRow]) -> None:
+    """Append a full snapshot of plan state for one generation. Idempotent on
+    (generated_at, plan_id)."""
+    for r in rows:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO plan_history
+                (generated_at, plan_id, goal, plan_type, confidence, status,
+                 affected_initiative_ids, affected_insight_ids,
+                 affected_understanding_ids, affected_knowledge_ids,
+                 milestones, dependencies, risks, verification, rollback,
+                 estimated_complexity, estimated_effort)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                r.generated_at, r.plan_id, r.goal, r.plan_type, r.confidence,
+                r.status, r.affected_initiative_ids, r.affected_insight_ids,
+                r.affected_understanding_ids, r.affected_knowledge_ids,
+                r.milestones, r.dependencies, r.risks, r.verification,
+                r.rollback, r.estimated_complexity, r.estimated_effort,
+            ),
+        )
+    commit_if_top(conn)
+
+
+def latest_plan_snapshot(conn: sqlite3.Connection) -> List[PlanHistoryRow]:
+    """The most recent prior generation snapshot, [] on cold start."""
+    row = conn.execute(
+        "SELECT MAX(generated_at) AS t FROM plan_history"
+    ).fetchone()
+    if row is None or row["t"] is None:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM plan_history WHERE generated_at = ? ORDER BY plan_id",
+        (row["t"],),
+    ).fetchall()
+    return [_row_to_plan_history(r) for r in rows]
+
+
+def plan_history_for(conn: sqlite3.Connection, pid: str) -> List[PlanHistoryRow]:
+    """Every snapshot of one plan, oldest first."""
+    rows = conn.execute(
+        "SELECT * FROM plan_history WHERE plan_id = ? ORDER BY generated_at",
+        (pid,),
+    ).fetchall()
+    return [_row_to_plan_history(r) for r in rows]
+
+
+def insert_plan_evolution(conn: sqlite3.Connection, rows: List[PlanEvolutionRow]) -> None:
+    """Append plan evolution events. Idempotent on id."""
+    for r in rows:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO plan_evolution
+                (id, generated_at, event_type, plan_id, previous_status,
+                 new_status, previous_confidence, new_confidence, reason,
+                 affected_initiative_ids, affected_insight_ids,
+                 affected_understanding_ids, affected_knowledge_ids, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                r.id, r.generated_at, r.event_type, r.plan_id, r.previous_status,
+                r.new_status, r.previous_confidence, r.new_confidence, r.reason,
+                r.affected_initiative_ids, r.affected_insight_ids,
+                r.affected_understanding_ids, r.affected_knowledge_ids,
+                r.timestamp,
+            ),
+        )
+    commit_if_top(conn)
+
+
+def plan_evolution_all(conn: sqlite3.Connection) -> List[PlanEvolutionRow]:
+    """Every plan evolution event, newest first."""
+    rows = conn.execute(
+        "SELECT * FROM plan_evolution ORDER BY timestamp DESC, id DESC"
+    ).fetchall()
+    return [_row_to_plan_evolution(r) for r in rows]
+
+
+def plan_evolution_for(conn: sqlite3.Connection, pid: str) -> List[PlanEvolutionRow]:
+    """Evolution events touching one plan, oldest first."""
+    rows = conn.execute(
+        "SELECT * FROM plan_evolution WHERE plan_id = ? ORDER BY timestamp, id",
+        (pid,),
+    ).fetchall()
+    return [_row_to_plan_evolution(r) for r in rows]
+
+
+# ===========================================================================
+# Task Graph Compiler storage (Milestone 9.1) — write-only layer on top of
+# the Planning Engine. Append-only. The Brain reads `task_graphs` (new); every
+# lower layer (including plans) is unchanged.
+# ===========================================================================
+
+
+@dataclass
+class TaskGraphRow:
+    """One compiled task graph (a deterministic DAG of tasks)."""
+
+    id: str
+    goal: str
+    plan_id: str
+    plan_type: str
+    task_count: int
+    edge_count: int
+    critical_path_length: int
+    parallel_groups: int
+    status: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class TaskRow:
+    """One executable task node in a compiled graph."""
+
+    id: str
+    graph_id: str
+    plan_id: str
+    milestone_order: int
+    title: str
+    description: str
+    task_type: str
+    required_capabilities: str
+    complexity: str
+    priority: str
+    estimated_effort: str
+    dependencies: str
+    inputs: str
+    outputs: str
+    acceptance_criteria: str
+    verification: str
+    rollback: str
+    evidence: str
+    status: str
+    confidence: str
+    sequence: int
+
+
+@dataclass
+class TaskEdgeRow:
+    """One dependency edge in a compiled graph (from_task depends on to_task)."""
+
+    id: str
+    graph_id: str
+    from_task: str
+    to_task: str
+    kind: str
+
+
+@dataclass
+class TaskHistoryRow:
+    """One append-only snapshot of a graph as of a single compilation."""
+
+    generated_at: str
+    graph_id: str
+    goal: str
+    task_count: int
+    edge_count: int
+    critical_path_length: int
+    parallel_groups: int
+    tasks_json: str
+    edges_json: str
+
+
+@dataclass
+class TaskEvolutionRow:
+    """One deterministic task-graph evolution event (append-only)."""
+
+    id: str
+    generated_at: str
+    event_type: str
+    graph_id: str
+    previous_status: Optional[str]
+    new_status: Optional[str]
+    reason: str
+    task_count: int
+    edge_count: int
+    timestamp: str
+
+
+def insert_task_graph(conn: sqlite3.Connection, graphs: List[TaskGraphRow],
+                      tasks: List[TaskRow], edges: List[TaskEdgeRow]) -> None:
+    """Persist one compiled graph: header, tasks, edges (idempotent on ids).
+
+    All three groups are written atomically — a crash mid-write leaves no
+    partial graph (e.g. a header with zero tasks).
+    """
+    conn.commit()  # close any open implicit transaction from prior raw writes
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        for g in graphs:
+            conn.execute(
+                """
+                INSERT INTO task_graphs
+                    (id, goal, plan_id, plan_type, task_count, edge_count,
+                     critical_path_length, parallel_groups, status, created_at,
+                     updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    goal=excluded.goal, plan_id=excluded.plan_id,
+                    plan_type=excluded.plan_type, task_count=excluded.task_count,
+                    edge_count=excluded.edge_count,
+                    critical_path_length=excluded.critical_path_length,
+                    parallel_groups=excluded.parallel_groups, status=excluded.status,
+                    updated_at=excluded.updated_at
+                """,
+                (g.id, g.goal, g.plan_id, g.plan_type, g.task_count, g.edge_count,
+                 g.critical_path_length, g.parallel_groups, g.status,
+                 g.created_at, g.updated_at),
+            )
+        for t in tasks:
+            conn.execute(
+                """
+                INSERT INTO tasks
+                    (id, graph_id, plan_id, milestone_order, title, description,
+                     task_type, required_capabilities, complexity, priority,
+                     estimated_effort, dependencies, inputs, outputs,
+                     acceptance_criteria, verification, rollback, evidence, status,
+                     confidence, sequence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    graph_id=excluded.graph_id, plan_id=excluded.plan_id,
+                    milestone_order=excluded.milestone_order, title=excluded.title,
+                    description=excluded.description, task_type=excluded.task_type,
+                    required_capabilities=excluded.required_capabilities,
+                    complexity=excluded.complexity, priority=excluded.priority,
+                    estimated_effort=excluded.estimated_effort,
+                    dependencies=excluded.dependencies, inputs=excluded.inputs,
+                    outputs=excluded.outputs,
+                    acceptance_criteria=excluded.acceptance_criteria,
+                    verification=excluded.verification, rollback=excluded.rollback,
+                    evidence=excluded.evidence, status=excluded.status,
+                    confidence=excluded.confidence, sequence=excluded.sequence
+                """,
+                (t.id, t.graph_id, t.plan_id, t.milestone_order, t.title,
+                 t.description, t.task_type, t.required_capabilities, t.complexity,
+                 t.priority, t.estimated_effort, t.dependencies, t.inputs, t.outputs,
+                 t.acceptance_criteria, t.verification, t.rollback, t.evidence,
+                 t.status, t.confidence, t.sequence),
+            )
+        for e in edges:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO task_edges
+                    (id, graph_id, from_task, to_task, kind)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (e.id, e.graph_id, e.from_task, e.to_task, e.kind),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_all_task_graphs(conn: sqlite3.Connection) -> List[TaskGraphRow]:
+    rows = conn.execute(
+        "SELECT * FROM task_graphs ORDER BY updated_at DESC").fetchall()
+    return [_row_to_task_graph(r) for r in rows]
+
+
+def get_task_graph_by_id(conn: sqlite3.Connection, gid: str) -> Optional[TaskGraphRow]:
+    row = conn.execute(
+        "SELECT * FROM task_graphs WHERE id = ?", (gid,)).fetchone()
+    return _row_to_task_graph(row) if row else None
+
+
+def get_tasks_for_graph(conn: sqlite3.Connection, gid: str) -> List[TaskRow]:
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE graph_id = ? ORDER BY sequence", (gid,)
+    ).fetchall()
+    return [_row_to_task(r) for r in rows]
+
+
+def get_edges_for_graph(conn: sqlite3.Connection, gid: str) -> List[TaskEdgeRow]:
+    rows = conn.execute(
+        "SELECT * FROM task_edges WHERE graph_id = ?", (gid,)).fetchall()
+    return [_row_to_task_edge(r) for r in rows]
+
+
+def count_task_graphs(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS c FROM task_graphs").fetchone()
+    return row["c"] if row else 0
+
+
+def update_task_graph_status(conn: sqlite3.Connection, gid: str,
+                             status: str) -> None:
+    conn.execute(
+        "UPDATE task_graphs SET status = ? WHERE id = ?", (status, gid))
+    conn.commit()
+
+
+def insert_task_history(conn: sqlite3.Connection,
+                        rows: List[TaskHistoryRow]) -> None:
+    for r in rows:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO task_history
+                (generated_at, graph_id, goal, task_count, edge_count,
+                 critical_path_length, parallel_groups, tasks_json, edges_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (r.generated_at, r.graph_id, r.goal, r.task_count, r.edge_count,
+             r.critical_path_length, r.parallel_groups, r.tasks_json,
+             r.edges_json),
+        )
+    conn.commit()
+
+
+def latest_task_graph_snapshot(conn: sqlite3.Connection) -> List[TaskHistoryRow]:
+    row = conn.execute(
+        "SELECT MAX(generated_at) AS t FROM task_history").fetchone()
+    if row is None or row["t"] is None:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM task_history WHERE generated_at = ? ORDER BY graph_id",
+        (row["t"],)).fetchall()
+    return [_row_to_task_history(r) for r in rows]
+
+
+def task_history_for(conn: sqlite3.Connection, gid: str) -> List[TaskHistoryRow]:
+    rows = conn.execute(
+        "SELECT * FROM task_history WHERE graph_id = ? ORDER BY generated_at",
+        (gid,)).fetchall()
+    return [_row_to_task_history(r) for r in rows]
+
+
+def insert_task_evolution(conn: sqlite3.Connection,
+                          rows: List[TaskEvolutionRow]) -> None:
+    for r in rows:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO task_evolution
+                (id, generated_at, event_type, graph_id, previous_status,
+                 new_status, reason, task_count, edge_count, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (r.id, r.generated_at, r.event_type, r.graph_id, r.previous_status,
+             r.new_status, r.reason, r.task_count, r.edge_count, r.timestamp),
+        )
+    conn.commit()
+
+
+def task_evolution_all(conn: sqlite3.Connection) -> List[TaskEvolutionRow]:
+    rows = conn.execute(
+        "SELECT * FROM task_evolution ORDER BY timestamp DESC, id DESC"
+    ).fetchall()
+    return [_row_to_task_evolution(r) for r in rows]
+
+
+def task_evolution_for(conn: sqlite3.Connection, gid: str) -> List[TaskEvolutionRow]:
+    rows = conn.execute(
+        "SELECT * FROM task_evolution WHERE graph_id = ? ORDER BY timestamp, id",
+        (gid,)).fetchall()
+    return [_row_to_task_evolution(r) for r in rows]
+
+
+def _row_to_task_graph(r) -> TaskGraphRow:
+    return TaskGraphRow(
+        id=r["id"], goal=r["goal"], plan_id=r["plan_id"],
+        plan_type=r["plan_type"], task_count=r["task_count"],
+        edge_count=r["edge_count"],
+        critical_path_length=r["critical_path_length"],
+        parallel_groups=r["parallel_groups"], status=r["status"],
+        created_at=r["created_at"], updated_at=r["updated_at"],
+    )
+
+
+def _row_to_task(r) -> TaskRow:
+    return TaskRow(
+        id=r["id"], graph_id=r["graph_id"], plan_id=r["plan_id"],
+        milestone_order=r["milestone_order"], title=r["title"],
+        description=r["description"], task_type=r["task_type"],
+        required_capabilities=r["required_capabilities"],
+        complexity=r["complexity"], priority=r["priority"],
+        estimated_effort=r["estimated_effort"], dependencies=r["dependencies"],
+        inputs=r["inputs"], outputs=r["outputs"],
+        acceptance_criteria=r["acceptance_criteria"],
+        verification=r["verification"], rollback=r["rollback"],
+        evidence=r["evidence"], status=r["status"], confidence=r["confidence"],
+        sequence=r["sequence"],
+    )
+
+
+def _row_to_task_edge(r) -> TaskEdgeRow:
+    return TaskEdgeRow(
+        id=r["id"], graph_id=r["graph_id"], from_task=r["from_task"],
+        to_task=r["to_task"], kind=r["kind"],
+    )
+
+
+def _row_to_task_history(r) -> TaskHistoryRow:
+    return TaskHistoryRow(
+        generated_at=r["generated_at"], graph_id=r["graph_id"], goal=r["goal"],
+        task_count=r["task_count"], edge_count=r["edge_count"],
+        critical_path_length=r["critical_path_length"],
+        parallel_groups=r["parallel_groups"], tasks_json=r["tasks_json"],
+        edges_json=r["edges_json"],
+    )
+
+
+def _row_to_task_evolution(r) -> TaskEvolutionRow:
+    return TaskEvolutionRow(
+        id=r["id"], generated_at=r["generated_at"], event_type=r["event_type"],
+        graph_id=r["graph_id"], previous_status=r["previous_status"],
+        new_status=r["new_status"], reason=r["reason"],
+        task_count=r["task_count"], edge_count=r["edge_count"],
+        timestamp=r["timestamp"],
+    )
+
+
+def _row_to_plan(r) -> PlanRow:
+    return PlanRow(
+        id=r["id"],
+        goal=r["goal"],
+        plan_type=r["plan_type"],
+        confidence=r["confidence"],
+        status=r["status"],
+        milestones=r["milestones"] or "",
+        dependencies=r["dependencies"] or "",
+        risks=r["risks"] or "",
+        verification=r["verification"] or "",
+        rollback=r["rollback"] or "",
+        estimated_complexity=r["estimated_complexity"] or "",
+        estimated_effort=r["estimated_effort"] or "",
+        plan_text=r["plan_text"] or "",
+        created_at=r["created_at"] or "",
+        updated_at=r["updated_at"] or "",
+        affected_initiative_ids=r["affected_initiative_ids"] or "",
+        affected_insight_ids=r["affected_insight_ids"] or "",
+        affected_understanding_ids=r["affected_understanding_ids"] or "",
+        affected_knowledge_ids=r["affected_knowledge_ids"] or "",
+    )
+
+
+def _row_to_plan_history(r) -> PlanHistoryRow:
+    return PlanHistoryRow(
+        generated_at=r["generated_at"],
+        plan_id=r["plan_id"],
+        goal=r["goal"],
+        plan_type=r["plan_type"],
+        confidence=r["confidence"],
+        status=r["status"],
+        milestones=r["milestones"] or "",
+        dependencies=r["dependencies"] or "",
+        risks=r["risks"] or "",
+        verification=r["verification"] or "",
+        rollback=r["rollback"] or "",
+        estimated_complexity=r["estimated_complexity"] or "",
+        estimated_effort=r["estimated_effort"] or "",
+        affected_initiative_ids=r["affected_initiative_ids"] or "",
+        affected_insight_ids=r["affected_insight_ids"] or "",
+        affected_understanding_ids=r["affected_understanding_ids"] or "",
+        affected_knowledge_ids=r["affected_knowledge_ids"] or "",
+    )
+
+
+def _row_to_plan_evolution(r) -> PlanEvolutionRow:
+    return PlanEvolutionRow(
+        id=r["id"],
+        generated_at=r["generated_at"],
+        event_type=r["event_type"],
+        plan_id=r["plan_id"],
+        previous_status=r["previous_status"],
+        new_status=r["new_status"],
+        previous_confidence=r["previous_confidence"],
+        new_confidence=r["new_confidence"],
+        reason=r["reason"],
+        timestamp=r["timestamp"],
+        affected_initiative_ids=r["affected_initiative_ids"] or "",
+        affected_insight_ids=r["affected_insight_ids"] or "",
+        affected_understanding_ids=r["affected_understanding_ids"] or "",
+        affected_knowledge_ids=r["affected_knowledge_ids"] or "",
+    )
+
+
+# ===========================================================================
+# Worker Registry storage (Milestone 9.2) — write-only layer describing workers.
+# Append-only history + version log. Every lower layer unchanged. No execution.
+# ===========================================================================
+
+
+@dataclass
+class WorkerRow:
+    """One registered worker (a capability profile; NEVER an execution)."""
+
+    id: str
+    name: str
+    kind: str
+    description: str = ""
+    capabilities: str = ""
+    supported_languages: str = ""
+    supported_task_types: str = ""
+    supported_plan_types: str = ""
+    limitations: str = ""
+    estimated_speed: str = ""
+    estimated_cost: str = ""
+    context_window: int = 0
+    parallelism: int = 1
+    requires_network: bool = False
+    requires_filesystem: bool = False
+    requires_git: bool = False
+    requires_python: bool = False
+    requires_shell: bool = False
+    confidence: str = "medium"
+    version: str = "1.0.0"
+    status: str = "active"
+    schema_version: str = "1.0"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class WorkerHistoryRow:
+    """One append-only snapshot of a worker per registration event."""
+
+    registered_at: str
+    worker_id: str
+    name: str
+    kind: str
+    version: str
+    status: str
+    capabilities: str = ""
+    limitations: str = ""
+    event_type: str = "registered"
+    note: Optional[str] = None
+
+
+@dataclass
+class WorkerVersionRow:
+    """One append-only version record for a worker."""
+
+    worker_id: str
+    version: str
+    registered_at: str
+    changelog: Optional[str] = None
+
+
+def insert_worker(conn: sqlite3.Connection, w: WorkerRow) -> None:
+    """Insert or replace a worker by id (idempotent on id)."""
+    conn.execute(
+        """
+        INSERT INTO workers
+            (id, name, kind, description, capabilities, supported_languages,
+             supported_task_types, supported_plan_types, limitations,
+             estimated_speed, estimated_cost, context_window, parallelism,
+             requires_network, requires_filesystem, requires_git,
+             requires_python, requires_shell, confidence, version, status,
+             schema_version, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, kind=excluded.kind, description=excluded.description,
+            capabilities=excluded.capabilities,
+            supported_languages=excluded.supported_languages,
+            supported_task_types=excluded.supported_task_types,
+            supported_plan_types=excluded.supported_plan_types,
+            limitations=excluded.limitations, estimated_speed=excluded.estimated_speed,
+            estimated_cost=excluded.estimated_cost,
+            context_window=excluded.context_window, parallelism=excluded.parallelism,
+            requires_network=excluded.requires_network,
+            requires_filesystem=excluded.requires_filesystem,
+            requires_git=excluded.requires_git, requires_python=excluded.requires_python,
+            requires_shell=excluded.requires_shell, confidence=excluded.confidence,
+            version=excluded.version, status=excluded.status,
+            schema_version=excluded.schema_version, updated_at=excluded.updated_at
+        """,
+        (
+            w.id, w.name, w.kind, w.description, w.capabilities,
+            w.supported_languages, w.supported_task_types, w.supported_plan_types,
+            w.limitations, w.estimated_speed, w.estimated_cost, w.context_window,
+            w.parallelism, int(w.requires_network), int(w.requires_filesystem),
+            int(w.requires_git), int(w.requires_python), int(w.requires_shell),
+            w.confidence, w.version, w.status, w.schema_version,
+            w.created_at, w.updated_at,
+        ),
+    )
+    # Re-sync normalized capability rows.
+    conn.execute(
+        "DELETE FROM worker_capabilities WHERE worker_id = ?", (w.id,)
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO worker_capabilities (worker_id, capability) "
+        "VALUES (?, ?)",
+        [(w.id, c) for c in (w.capabilities.split(",") if w.capabilities else [])],
+    )
+    commit_if_top(conn)
+
+
+def replace_worker_capabilities(
+    conn: sqlite3.Connection, worker_id: str, capabilities: list[str]
+) -> None:
+    conn.execute(
+        "DELETE FROM worker_capabilities WHERE worker_id = ?", (worker_id,)
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO worker_capabilities (worker_id, capability) "
+        "VALUES (?, ?)",
+        [(worker_id, c) for c in capabilities],
+    )
+    conn.commit()
+
+
+def get_worker(conn: sqlite3.Connection, wid: str) -> Optional[WorkerRow]:
+    row = conn.execute("SELECT * FROM workers WHERE id = ?", (wid,)).fetchone()
+    return _row_to_worker(row) if row else None
+
+
+def get_worker_by_name(conn: sqlite3.Connection, name: str) -> Optional[WorkerRow]:
+    row = conn.execute(
+        "SELECT * FROM workers WHERE name = ?", (name,)
+    ).fetchone()
+    return _row_to_worker(row) if row else None
+
+
+def get_all_workers(conn: sqlite3.Connection) -> List[WorkerRow]:
+    rows = conn.execute("SELECT * FROM workers ORDER BY name").fetchall()
+    return [_row_to_worker(r) for r in rows]
+
+
+def count_workers(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS c FROM workers").fetchone()
+    return row["c"] if row else 0
+
+
+def workers_with_capability(
+    conn: sqlite3.Connection, capability: str
+) -> List[WorkerRow]:
+    """Capability Resolver query hook: every worker exposing `capability`.
+    Case-insensitive (the vocabulary stores canonical-capitalized forms)."""
+    rows = conn.execute(
+        """
+        SELECT w.* FROM workers w
+        JOIN worker_capabilities c ON c.worker_id = w.id
+        WHERE LOWER(c.capability) = LOWER(?)
+        ORDER BY w.name
+        """,
+        (capability,),
+    ).fetchall()
+    return [_row_to_worker(r) for r in rows]
+
+
+def update_worker_status(
+    conn: sqlite3.Connection, wid: str, status: str
+) -> None:
+    """The only live-row mutation: enable/disable a worker. History keeps the
+    prior version forever."""
+    conn.execute("UPDATE workers SET status = ? WHERE id = ?", (status, wid))
+    conn.commit()
+
+
+def update_worker_version(
+    conn: sqlite3.Connection, wid: str, version: str
+) -> None:
+    """Advance a worker's live version (the only other live-row mutation)."""
+    conn.execute("UPDATE workers SET version = ? WHERE id = ?", (version, wid))
+    conn.commit()
+
+
+def insert_worker_history(conn: sqlite3.Connection, rows: List[WorkerHistoryRow]) -> None:
+    """Append a snapshot of worker state per registration/upgrade/disable event.
+    Idempotent on (registered_at, worker_id)."""
+    for r in rows:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO worker_history
+                (registered_at, worker_id, name, kind, version, status,
+                 capabilities, limitations, event_type, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                r.registered_at, r.worker_id, r.name, r.kind, r.version,
+                r.status, r.capabilities, r.limitations, r.event_type, r.note,
+            ),
+        )
+    conn.commit()
+
+
+def insert_worker_version(conn: sqlite3.Connection, rows: List[WorkerVersionRow]) -> None:
+    """Append a version record. Idempotent on (worker_id, version)."""
+    for r in rows:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO worker_versions
+                (worker_id, version, registered_at, changelog)
+            VALUES (?, ?, ?, ?)
+            """,
+            (r.worker_id, r.version, r.registered_at, r.changelog),
+        )
+    conn.commit()
+
+
+def worker_history_for(
+    conn: sqlite3.Connection, wid: str
+) -> List[WorkerHistoryRow]:
+    """Every snapshot of one worker, newest first."""
+    rows = conn.execute(
+        "SELECT * FROM worker_history WHERE worker_id = ? ORDER BY registered_at DESC",
+        (wid,),
+    ).fetchall()
+    return [_row_to_worker_history(r) for r in rows]
+
+
+def worker_versions_for(
+    conn: sqlite3.Connection, wid: str
+) -> List[WorkerVersionRow]:
+    rows = conn.execute(
+        "SELECT * FROM worker_versions WHERE worker_id = ? ORDER BY registered_at",
+        (wid,),
+    ).fetchall()
+    return [_row_to_worker_version(r) for r in rows]
+
+
+def _row_to_worker(r) -> WorkerRow:
+    return WorkerRow(
+        id=r["id"], name=r["name"], kind=r["kind"],
+        description=r["description"] or "",
+        capabilities=r["capabilities"] or "",
+        supported_languages=r["supported_languages"] or "",
+        supported_task_types=r["supported_task_types"] or "",
+        supported_plan_types=r["supported_plan_types"] or "",
+        limitations=r["limitations"] or "",
+        estimated_speed=r["estimated_speed"] or "",
+        estimated_cost=r["estimated_cost"] or "",
+        context_window=r["context_window"] or 0,
+        parallelism=r["parallelism"] or 1,
+        requires_network=bool(r["requires_network"]),
+        requires_filesystem=bool(r["requires_filesystem"]),
+        requires_git=bool(r["requires_git"]),
+        requires_python=bool(r["requires_python"]),
+        requires_shell=bool(r["requires_shell"]),
+        confidence=r["confidence"] or "medium",
+        version=r["version"] or "1.0.0",
+        status=r["status"] or "active",
+        created_at=r["created_at"] or "",
+        updated_at=r["updated_at"] or "",
+    )
+
+
+def _row_to_worker_history(r) -> WorkerHistoryRow:
+    return WorkerHistoryRow(
+        registered_at=r["registered_at"], worker_id=r["worker_id"],
+        name=r["name"], kind=r["kind"], version=r["version"],
+        status=r["status"], capabilities=r["capabilities"] or "",
+        limitations=r["limitations"] or "", event_type=r["event_type"] or "registered",
+        note=r["note"],
+    )
+
+
+def _row_to_worker_version(r) -> WorkerVersionRow:
+    return WorkerVersionRow(
+        worker_id=r["worker_id"], version=r["version"],
+        registered_at=r["registered_at"], changelog=r["changelog"],
+    )

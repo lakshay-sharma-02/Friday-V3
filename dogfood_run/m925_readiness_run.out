@@ -1,0 +1,49 @@
+=== PASS 1 ===
+OK friday ingest /home/lakshay/Projects
+OK friday observe
+OK friday context build
+OK friday knowledge build
+OK friday understanding build
+OK friday initiatives build
+OK friday insights build
+OK friday plan reduce tech debt
+OK friday graph reduce tech debt
+OK friday worker register --file /tmp/wm.json
+  observations=20924
+  sessions=1
+  knowledge=32
+  understanding=20
+  initiatives=5
+  insights=2
+  plans=1
+  task_graphs=1
+  tasks=8
+  workers=1
+  worker_history=1
+=== PASS 2 (full repeat) ===
+OK friday ingest /home/lakshay/Projects
+OK friday observe
+OK friday context build
+OK friday knowledge build
+OK friday understanding build
+OK friday initiatives build
+OK friday insights build
+OK friday plan reduce tech debt
+OK friday graph reduce tech debt
+OK friday worker register --file /tmp/wm.json
+  observations=41848
+  sessions=1
+  knowledge=32
+  understanding=76
+  initiatives=10
+  insights=5
+  plans=1
+  task_graphs=1
+  tasks=8
+  workers=1
+  worker_history=2
+=== orphan check ===
+  tasks without graph = 0
+  graph without plan = 0
+  worker_history orphan = 0
+  worker without history-ok = 1

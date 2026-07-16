@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from ..db import (
+    atomic,
     UnderstandingEvolutionRow,
     UnderstandingHistoryRow,
     evolution_events_all,
@@ -161,10 +162,12 @@ class UnderstandingEngine:
                     verified += 1
             to_persist.append(u)
 
-        insert_understanding(self.conn, [u.to_row() for u in to_persist])
-
-        # Append-only history + evolution.
-        n_events = self._record_evolution(build_at, to_persist)
+        # Whole build is one atomic transaction: live rows, history, and
+        # evolution are written together or not at all (Part F).
+        with atomic(self.conn):
+            insert_understanding(self.conn, [u.to_row() for u in to_persist])
+            # Append-only history + evolution.
+            n_events = self._record_evolution(build_at, to_persist)
 
         all_u = get_all_understanding(self.conn)
         candidates_n = sum(1 for u in all_u if u.status == UnderstandingStatus.CANDIDATE)

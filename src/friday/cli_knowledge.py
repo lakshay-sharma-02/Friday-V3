@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .db import connect
+from .db import atomic, connect
 from .knowledge import KnowledgeEngine, KnowledgeStatus, evolve, history_timeline
 from .knowledge.evolution import evolution_timeline
 
@@ -14,8 +14,10 @@ def cmd_knowledge_build(args: argparse.Namespace) -> int:
     """WRITE: build knowledge, then derive Knowledge Evolution records."""
     conn = connect()
     eng = KnowledgeEngine(conn)
-    result = eng.build()
-    n_events = evolve(conn)
+    # build + evolution is one atomic unit: either both persist or neither does.
+    with atomic(conn):
+        result = eng.build()
+        n_events = evolve(conn)
     conn.close()
     print(result.to_text(), end="")
     print(f"Evolution events recorded: {n_events}\n")

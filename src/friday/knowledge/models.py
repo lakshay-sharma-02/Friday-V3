@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 
+from ..db import KnowledgeRow
+
 
 class KnowledgeType(str, Enum):
     """Types of knowledge Friday accumulates."""
@@ -40,7 +42,7 @@ class KnowledgeType(str, Enum):
         for kt in cls:
             if kt.value == s:
                 return kt
-        return cls.ENGINEERING_TREND
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class KnowledgeStatus(str, Enum):
@@ -59,7 +61,7 @@ class KnowledgeStatus(str, Enum):
         for ks in cls:
             if ks.value == s:
                 return ks
-        return cls.CANDIDATE
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class KnowledgeConfidence(str, Enum):
@@ -75,7 +77,7 @@ class KnowledgeConfidence(str, Enum):
         for kc in cls:
             if kc.value == s:
                 return kc
-        return cls.WEAK
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class TrendDirection(str, Enum):
@@ -93,11 +95,15 @@ class TrendDirection(str, Enum):
         for td in cls:
             if td.value == s:
                 return td
-        return cls.STABLE
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# Contract version (Law 24). Bump when the persisted shape changes.
+SCHEMA_VERSION = "1.0"
 
 
 @dataclass
@@ -108,6 +114,9 @@ class Knowledge:
     entered or LLM-generated. Every knowledge statement must be backed by
     evidence (observation or session ids).
     """
+
+    # Contract version (Law 24), exposed as a class attribute.
+    SCHEMA_VERSION = SCHEMA_VERSION
 
     type: KnowledgeType
     subject: str
@@ -120,6 +129,7 @@ class Knowledge:
     last_verified: Optional[str] = None
     verification_count: int = 0
     is_static: bool = False
+    schema_version: str = SCHEMA_VERSION
     id: Optional[str] = None
 
     @property
@@ -127,8 +137,6 @@ class Knowledge:
         return len(self.evidence_ids)
 
     def to_row(self):
-        from ..db import KnowledgeRow
-
         return KnowledgeRow(
             id=self.id or self._generate_id(),
             type=self.type.value,
@@ -141,6 +149,8 @@ class Knowledge:
             updated_at=self.updated_at,
             last_verified=self.last_verified,
             verification_count=self.verification_count,
+            is_static=int(bool(self.is_static)),
+            schema_version=self.schema_version,
         )
 
     def _generate_id(self) -> str:
@@ -149,6 +159,22 @@ class Knowledge:
 
     @classmethod
     def from_row(cls, row) -> "Knowledge":
+        if isinstance(row, KnowledgeRow):
+            return cls(
+                id=row.id,
+                type=KnowledgeType.from_str(row.type),
+                subject=row.subject,
+                statement=row.statement,
+                confidence=KnowledgeConfidence.from_str(row.confidence),
+                evidence_ids=[e for e in (row.evidence_ids or "").split(",") if e],
+                status=KnowledgeStatus.from_str(row.status),
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                last_verified=row.last_verified,
+                verification_count=row.verification_count or 0,
+                is_static=bool(row.is_static),
+                schema_version=cls._coerce_version(row),
+            )
         return cls(
             id=row["id"],
             type=KnowledgeType.from_str(row["type"]),
@@ -162,7 +188,28 @@ class Knowledge:
             last_verified=row["last_verified"],
             verification_count=row["verification_count"] or 0,
             is_static=bool(row["is_static"]),
+            schema_version=cls._coerce_version(row),
         )
+
+    @staticmethod
+    def _coerce_version(row) -> str:
+        """Reject stored knowledge whose contract version is unknown.
+
+        Law 24: older/incompatible versions must fail cleanly, not silently
+        load under the current schema. Rows predating versioning (no column)
+        are backfilled with the current version — they were written by this
+        same schema and remain valid.
+        """
+        version = getattr(row, "schema_version", None)
+        if version is None:
+            # sqlite3.Row exposes columns via .keys(); named rows lack it.
+            if hasattr(row, "keys") and "schema_version" not in row.keys():
+                return SCHEMA_VERSION
+            return SCHEMA_VERSION
+        if version != SCHEMA_VERSION:
+            raise ValueError(
+                f"Knowledge schema_version {version!r} != current {SCHEMA_VERSION!r}")
+        return version
 
 
 @dataclass

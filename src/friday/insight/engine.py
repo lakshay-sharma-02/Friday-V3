@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from ..db import (
+    atomic,
     InsightEvolutionRow,
     InsightHistoryRow,
     get_all_insights,
@@ -165,8 +166,10 @@ class InsightEngine:
                 self._retire(prev, build_at)
                 retired += 1
 
-        insert_insight(self.conn, [i.to_row() for i in to_persist])
-        n_events = self._record_evolution(build_at, to_persist)
+        # Whole build is one atomic transaction (Part F).
+        with atomic(self.conn):
+            insert_insight(self.conn, [i.to_row() for i in to_persist])
+            n_events = self._record_evolution(build_at, to_persist)
 
         all_i = get_all_insights(self.conn)
         active_n = sum(1 for i in all_i

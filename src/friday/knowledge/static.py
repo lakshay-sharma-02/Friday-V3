@@ -14,7 +14,7 @@ languages, technologies, architecture, relationships). No LLM, no inference.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from ..db import (
     get_all_relationships,
@@ -63,13 +63,54 @@ def detect_static_knowledge(conn) -> List[Knowledge]:
     return knowledge
 
 
-def _project_identity(conn, repo_id: int, name: str) -> List[Knowledge]:
-    from ..identity import build_identity
+def _recover_purpose_from_summary(summary: Optional[str]) -> Optional[str]:
+    """Extract a project purpose line from a stored README summary.
 
-    ident = build_identity(conn, repo_id, None)
+    Law 19: the Knowledge layer must not depend on the Brain `identity` module.
+    Purpose is deterministic evidence already persisted at ingest time in
+    `repositories.readme_summary`. The canonical format is the deterministic
+    summary's "Purpose:\\n<value>\\n\\n..." block, but some callers store a raw
+    "purpose: <value>" line; both are accepted (case-insensitive marker).
+    """
+    if not summary:
+        return None
+    value: Optional[str] = None
+    # Canonical summary: a line beginning with "Purpose:" (value on the next line).
+    for line in summary.splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        if low.startswith("purpose:"):
+            rest = stripped[len("purpose:"):].strip()
+            if rest:
+                value = rest
+            else:
+                # Value on the following line; scan ahead.
+                idx = summary.lower().find("purpose:")
+                after = summary[idx + len("purpose:"):]
+                first_blank = after.find("\n")
+                if first_blank != -1:
+                    nxt = after[first_blank + 1:].split("\n", 1)[0].strip()
+                    if nxt and nxt.lower() not in ("none stated", "unknown"):
+                        value = nxt
+            break
+    if value is None:
+        return None
+    # A blank line ends the Purpose paragraph.
+    value = value.split("\n\n", 1)[0].strip().lstrip(":")
+    if not value or len(value.split()) < 3:
+        return None
+    if value.lower() in ("none stated", "unknown"):
+        return None
+    return value
+
+
+def _project_identity(conn, repo_id: int, name: str) -> List[Knowledge]:
+    repos = get_repositories(conn)
+    repo = next((r for r in repos if r.id == repo_id), None)
+    summary = repo.readme_summary if repo else None
     out: List[Knowledge] = []
-    purpose = (ident.purpose or "").strip() if ident else ""
-    if purpose and purpose.lower() not in ("none stated", "unknown"):
+    purpose = _recover_purpose_from_summary(summary)
+    if purpose:
         out.append(
             Knowledge(
                 type=KnowledgeType.PROJECT_IDENTITY,
@@ -183,10 +224,8 @@ def _portfolio_integration(conn, name_by_id: dict) -> List[Knowledge]:
     for r in get_repositories(conn):
         if r.id is None or r.id == friday_repo.id:
             continue
-        from ..identity import build_identity
-
-        ident = build_identity(conn, r.id, None)
-        purpose = (ident.purpose or "").lower() if ident else ""
+        repo_summary = r.readme_summary
+        purpose = (_recover_purpose_from_summary(repo_summary) or "").lower()
         techs = {t.tech.lower() for t in get_technologies(conn, r.id)}
         reasons: List[str] = []
         if any(m in purpose for m in _FIT):

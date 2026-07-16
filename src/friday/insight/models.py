@@ -58,7 +58,7 @@ class InsightType(str, Enum):
         for it in cls:
             if it.value == s:
                 return it
-        return cls.OPPORTUNITY
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class InsightStatus(str, Enum):
@@ -76,7 +76,7 @@ class InsightStatus(str, Enum):
         for is_ in cls:
             if is_.value == s:
                 return is_
-        return cls.CANDIDATE
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class InsightConfidence(str, Enum):
@@ -92,7 +92,7 @@ class InsightConfidence(str, Enum):
         for ic in cls:
             if ic.value == s:
                 return ic
-        return cls.WEAK
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 def now_iso() -> str:
@@ -108,6 +108,9 @@ class Insight:
     ids). Build-only derived; the Brain consumes it as evidence.
     """
 
+    # Contract version (Law 24).
+    SCHEMA_VERSION = "1.0"
+
     type: InsightType
     title: str
     statement: str
@@ -121,6 +124,7 @@ class Insight:
     retired_at: Optional[str] = None
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
+    schema_version: str = SCHEMA_VERSION
     id: Optional[str] = None
 
     @property
@@ -151,6 +155,7 @@ class Insight:
             knowledge_ids=",".join(self.knowledge_ids),
             build_at=self.build_at,
             created_at=self.created_at,
+            schema_version=self.schema_version,
         )
 
     def _generate_id(self) -> str:
@@ -180,6 +185,7 @@ class Insight:
                 build_at=row.build_at, started_at=row.started_at,
                 retired_at=row.retired_at, created_at=row.created_at,
                 updated_at=row.updated_at,
+                schema_version=cls._coerce_version(row),
             )
         return cls(
             id=row["id"], type=InsightType.from_str(row["insight_type"]),
@@ -198,4 +204,22 @@ class Insight:
             build_at=row["build_at"], started_at=row["started_at"],
             retired_at=row["retired_at"], created_at=row["created_at"],
             updated_at=row["updated_at"],
+            schema_version=cls._coerce_version(row),
         )
+
+    @classmethod
+    def _coerce_version(cls, row) -> str:
+        """Reject stored insight whose contract version is unknown (Law 24).
+
+        Rows predating versioning are backfilled with the current version.
+        """
+        if isinstance(row, InsightRow):
+            version = getattr(row, "schema_version", None)
+        else:
+            version = row["schema_version"] if "schema_version" in row.keys() else None
+        if version is None:
+            return cls.SCHEMA_VERSION
+        if version != cls.SCHEMA_VERSION:
+            raise ValueError(
+                f"Insight schema_version {version!r} != current {cls.SCHEMA_VERSION!r}")
+        return version

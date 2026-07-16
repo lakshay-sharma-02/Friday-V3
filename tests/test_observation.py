@@ -54,7 +54,10 @@ def test_observation_id_is_deterministic():
 def test_confidence_from_str_roundtrip():
     assert Confidence.from_str("Derived") is Confidence.DERIVED
     assert Confidence.from_str("INFERRED") is Confidence.INFERRED
-    assert Confidence.from_str("nonsense") is Confidence.OBSERVED
+    # Unknown values must raise, never silently coerce to a default (Part E).
+    import pytest
+    with pytest.raises(ValueError):
+        Confidence.from_str("nonsense")
 
 
 def test_observation_to_row_roundtrip(conn):

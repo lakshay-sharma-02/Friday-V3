@@ -12,3 +12,6 @@ __pycache__/
 
 # Claude Code local settings (machine-specific)
 .claude/
+
+# local tool cache
+.zcode/

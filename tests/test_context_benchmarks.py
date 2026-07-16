@@ -162,11 +162,19 @@ def test_bench_append_only_no_overwrite(conn, start, tmp_path):
     eng.build(as_of="2026-07-14T09:00:00+00:00")
     first = len(eng.sessions())
     assert first == 1
-    # A second, genuinely distinct window appends rather than overwrites.
+    # Re-building over the SAME observations (different as_of) is idempotent:
+    # the session id is keyed on the observation window, not build time, so no
+    # duplicate session is created (Part A #4).
     eng.build(as_of="2026-07-14T17:00:00+00:00")
-    assert len(eng.sessions()) == 2  # two persisted sessions, not one
-    # Re-running the SAME explicit window replaces (idempotent), not appends.
-    eng.build(as_of="2026-07-14T09:00:00+00:00")
+    assert len(eng.sessions()) == 1
+    # A genuinely new observation window appends a distinct session instead.
+    insert_observations(conn, [
+        _obs("FridayV3", "commit_count", "2", "2026-07-14T20:00:00+00:00").to_row(),
+    ])
+    eng.build()
+    assert len(eng.sessions()) == 2
+    # Re-running the same data still replaces, not duplicates.
+    eng.build()
     assert len(eng.sessions()) == 2
 
 

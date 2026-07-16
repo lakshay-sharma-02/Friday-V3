@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from ..context.models import EngineeringSession
-from ..db import connect, observations_all, sessions_all
+from ..db import atomic, connect, observations_all, sessions_all
 from ..observation.model import Observation
 from .confidence import update_confidence, verify_knowledge
 from .models import Knowledge, KnowledgeStatus, now_iso
@@ -135,7 +135,12 @@ class KnowledgeEngine:
                 ) else None
                 updated_k = update_confidence(existing_k, k.evidence_ids)
                 updated_k.updated_at = now_iso()
-                updated_k = verify_knowledge(updated_k)
+                # Verification is evidence-driven: only count a verification when
+                # genuinely NEW evidence arrives. A bare rebuild over the same
+                # observations must NOT inflate verification_count/status.
+                new_evidence = set(k.evidence_ids) - set(existing_k.evidence_ids)
+                if new_evidence:
+                    updated_k = verify_knowledge(updated_k)
                 if preserved is not None:
                     updated_k.status = preserved
                 to_persist.append(updated_k)
@@ -148,8 +153,9 @@ class KnowledgeEngine:
                 to_persist.append(k)
                 created += 1
 
-        # Persist all knowledge
-        insert_knowledge(self.conn, to_persist)
+        # Persist all knowledge atomically (Part F).
+        with atomic(self.conn):
+            insert_knowledge(self.conn, to_persist)
 
         # Count by status
         all_knowledge = get_all_knowledge(self.conn)

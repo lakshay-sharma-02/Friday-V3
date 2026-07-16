@@ -41,7 +41,7 @@ class SessionActivity(str, Enum):
         for a in cls:
             if a.value.lower() == s:
                 return a
-        return cls.UNKNOWN
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class Confidence(str, Enum):
@@ -104,7 +104,7 @@ class EngineeringSession:
     @property
     def id(self) -> str:
         repo = self.primary_repo or ",".join(sorted(self.repositories))
-        return f"{self.built_at}:{repo}:{self.start_time}"
+        return f"{repo}:{self.start_time}"
 
     def to_row(self):
         from ..db import SessionRow

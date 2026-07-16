@@ -34,7 +34,7 @@ class Confidence(str, Enum):
         for c in cls:
             if c.value.lower() == s:
                 return c
-        return cls.OBSERVED
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class Health(str, Enum):
@@ -48,7 +48,7 @@ class Health(str, Enum):
         for h in cls:
             if h.value == s:
                 return h
-        return cls.HEALTHY
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 def now_iso() -> str:

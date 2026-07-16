@@ -32,6 +32,9 @@ from .cli_knowledge import cmd_knowledge
 from .cli_understanding import cmd_understanding
 from .cli_initiative import cmd_initiatives
 from .cli_insight import cmd_insights
+from .cli_planning import cmd_plan
+from .cli_graph import cmd_graph
+from .cli_worker import cmd_worker
 from .context import ContextEngine, TimelineEntry, summarize_day
 from .db import connect
 from .ingest import ingest_paths
@@ -457,6 +460,70 @@ def main(argv: list[str] | None = None) -> int:
         "--id", help="Insight ID for 'explain' action."
     )
     p_insights.set_defaults(func=cmd_insights)
+
+    p_plan = sub.add_parser(
+        "plan", help="Generate / show an engineering plan (WRITE: '<goal>')."
+    )
+    p_plan.add_argument(
+        "goal", nargs="?",
+        help="Goal to plan for (e.g. \"Implement OAuth\"). Omit with an action to list.",
+    )
+    p_plan.add_argument(
+        "action", nargs="?", default=None,
+        help="'explain <id>', 'history', or 'list'; omit with a goal to generate.",
+    )
+    p_plan.add_argument(
+        "plan_id", nargs="?", default=None,
+        help="Plan ID for 'explain' (can also use --id)."
+    )
+    p_plan.add_argument("--id", help="Plan ID for 'explain' action.")
+    p_plan.set_defaults(func=cmd_plan)
+
+    p_plans = sub.add_parser(
+        "plans", help="List derived engineering plans (alias of 'plan list')."
+    )
+    p_plans.set_defaults(func=cmd_plan, action="list", goal=[])
+
+    p_graph = sub.add_parser(
+        "graph", help="Compile a goal's Plan into a Task Graph (WRITE: '<goal>')."
+    )
+    p_graph.add_argument(
+        "goal", nargs="?",
+        help="Goal to compile (e.g. \"Implement OAuth\"). Omit with an action to list.",
+    )
+    p_graph.add_argument(
+        "action", nargs="?",
+        help="'explain <id>', 'export <id>', or 'list'; omit with a goal to compile.",
+    )
+    p_graph.add_argument(
+        "graph_id", nargs="?", default=None,
+        help="Graph ID for 'explain'/'export' (can also use --id)."
+    )
+    p_graph.add_argument("--id", help="Graph ID for 'explain'/'export' action.")
+    p_graph.set_defaults(func=cmd_graph)
+
+    p_graphs = sub.add_parser(
+        "graphs", help="List compiled task graphs (alias of 'graph list')."
+    )
+    p_graphs.set_defaults(func=cmd_graph, action="list", goal=[])
+
+    p_workers = sub.add_parser(
+        "workers", help="List all registered workers (capability profiles)."
+    )
+    p_workers.set_defaults(func=cmd_worker, action=None, name=None)
+
+    p_worker = sub.add_parser(
+        "worker", help="Show / register / export workers (catalog only)."
+    )
+    p_worker.add_argument(
+        "token", nargs="?", default=None,
+        help="Worker name to show, or 'register' / 'export' action.",
+    )
+    p_worker.add_argument(
+        "--file", default=None,
+        help="Manifest JSON file for the 'register' action.",
+    )
+    p_worker.set_defaults(func=cmd_worker)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -275,13 +275,16 @@ def test_engine_persists_sessions_append_only(conn, base, tmp_path):
     assert len(sessions) == 1
     first_id = sessions[0].id
     assert len(eng.sessions()) == 1
-    # Rebuild with SAME as_of => replaces, no duplicate.
-    eng.build(as_of=sessions[0].built_at)
+    # Rebuild over the SAME observations => idempotent (no new session).
+    eng.build()
     assert len(eng.sessions()) == 1
     assert eng.session(first_id) is not None
-    # New window with different as_of => appended.
-    eng.build(as_of="2026-07-14T23:00:00+00:00")
-    # Two distinct build_at windows -> two session rows total.
+    # A genuinely NEW observation window (new start_time) => a new session.
+    _seed_observations(conn, [
+        _obs("FridayV3", "commit_count", "3", _t(base, 400)),
+        _obs("FridayV3", "branch", "main", _t(base, 410)),
+    ])
+    eng.build()
     assert len(eng.sessions()) == 2
 
 

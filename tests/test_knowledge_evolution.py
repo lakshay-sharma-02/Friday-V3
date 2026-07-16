@@ -162,9 +162,12 @@ def test_history_preserves_every_prior_version(db):
 
 def test_history_is_append_only(db):
     now = datetime.now(timezone.utc)
+    # Distinct observation ids (distinct timestamps) — observations are
+    # naturally distinct events; the Part A #1 PRIMARY KEY collapses genuine
+    # duplicates, so the test must not rely on triplicate identical rows.
     insert_observations(db, [
-        obs("git", "Go", "language", "used", now.isoformat())
-        for _ in range(3)
+        obs("git", "Go", "language", "used", (now - timedelta(days=i+1)).isoformat())
+        for i in range(3)
     ])
     build(db)
     before = latest_knowledge_snapshot(db)

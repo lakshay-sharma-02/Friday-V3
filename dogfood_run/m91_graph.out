@@ -1,0 +1,147 @@
+==============================================================================
+M9.1 DOGFOOD: Task Graph Compiler end-to-end (real engines, no LLM)
+==============================================================================
+
+[1] Knowledge / Understanding / Initiatives / Insights (lower layers)
+
+[2] Plans (M9.0, FROZEN) -> Task Graphs (M9.1, NEW)
+
+  Goal: Implement OAuth
+    Plan: feature / strong (8 milestones)
+    Task Graph: taskgraph:plan:implement oauth
+      tasks=8 edges=10 acyclic=True
+      schema contract: VALID (schema_version=1, contract OK)
+      capabilities: architecture, backend, configuration, documentation, frontend, infrastructure, research, testing
+    Critical path (6):
+      Investigate & scope -> Design -> Implement backend logic -> Run verification plan (tests/benchmarks/review) -> Document -> Roll out & monitor
+    Parallel tasks (2 groups):
+      - Implement backend logic (implementation)
+      - Implement frontend surface (implementation)
+      - Run verification plan (tests/benchmarks/review) (testing)
+      - Verify against acceptance criteria (verification)
+
+  Goal: Refactor authentication
+    Plan: refactor / strong (7 milestones)
+    Task Graph: taskgraph:plan:refactor authentication
+      tasks=8 edges=8 acyclic=True
+      schema contract: VALID (schema_version=1, contract OK)
+      capabilities: architecture, backend, configuration, documentation, infrastructure, research, testing
+    Critical path (7):
+      Investigate & scope -> Design -> Characterize current behavior with tests -> Implement -> Run verification plan (tests/benchmarks/review) -> Document -> Roll out & monitor
+    Parallel tasks (1 groups):
+      - Run verification plan (tests/benchmarks/review) (testing)
+      - Verify against acceptance criteria (verification)
+
+  Goal: Extract shared Rust crates
+    Plan: refactor / strong (7 milestones)
+    Task Graph: taskgraph:plan:extract shared rust crates
+      tasks=8 edges=8 acyclic=True
+      schema contract: VALID (schema_version=1, contract OK)
+      capabilities: architecture, backend, configuration, documentation, infrastructure, research, rust, testing
+    Critical path (7):
+      Investigate & scope -> Design -> Characterize current behavior with tests -> Implement -> Run verification plan (tests/benchmarks/review) -> Document -> Roll out & monitor
+    Parallel tasks (1 groups):
+      - Run verification plan (tests/benchmarks/review) (testing)
+      - Verify against acceptance criteria (verification)
+
+  Goal: Build worker system
+    Plan: infrastructure / medium (7 milestones)
+    Task Graph: taskgraph:plan:build worker system
+      tasks=8 edges=8 acyclic=True
+      schema contract: VALID (schema_version=1, contract OK)
+      capabilities: architecture, backend, configuration, documentation, infrastructure, research, testing
+    Critical path (7):
+      Investigate & scope -> Establish module/component boundaries -> Design -> Implement -> Run verification plan (tests/benchmarks/review) -> Document -> Roll out & monitor
+    Parallel tasks (1 groups):
+      - Run verification plan (tests/benchmarks/review) (testing)
+      - Verify against acceptance criteria (verification)
+
+  Goal: Improve Vivaha architecture
+    Plan: architecture / strong (7 milestones)
+    Task Graph: taskgraph:plan:improve vivaha architecture
+      tasks=8 edges=8 acyclic=True
+      schema contract: VALID (schema_version=1, contract OK)
+      capabilities: architecture, backend, configuration, documentation, infrastructure, research, testing
+    Critical path (7):
+      Investigate & scope -> Establish module/component boundaries -> Design -> Implement -> Run verification plan (tests/benchmarks/review) -> Document -> Roll out & monitor
+    Parallel tasks (1 groups):
+      - Run verification plan (tests/benchmarks/review) (testing)
+      - Verify against acceptance criteria (verification)
+
+[3] Graph export (Worker-Engine JSON) — Implement OAuth
+    graph_id=taskgraph:plan:implement oauth tasks=8 edges=10 acyclic=True
+    schema contract: VALID (schema_version=1)
+    first task JSON:
+      {
+        "id": "taskgraph:plan:implement oauth#t1",
+        "graph_id": "taskgraph:plan:implement oauth",
+        "plan_id": "plan:implement oauth",
+        "milestone_order": 0,
+        "title": "Investigate & scope",
+        "description": "Confirm requirements from initiative evidence.",
+        "task_type": "analysis",
+        "required_capabilities": [
+          "research"
+        ],
+        "complexity": "small",
+        "priority": "low",
+        "estimated_effort": "high",
+        "dependencies": [],
+        "inputs": [
+          "Plan goal",
+          "Prior findings"
+        ],
+        "outputs": [
+          "Findings report"
+        ],
+        "acceptance_criteria": [
+          "Current state documented; gaps and unknowns identified.",
+          "'Investigate & scope' satisfies the milestone it was compiled from."
+        ],
+        "verification": [
+          {
+            "method": "tests",
+            "detail": "Add/extend unit + integration tests covering the change."
+          },
+          {
+            "method": "static_analysis",
+            "detail": "Lint + type-check + CI gates must pass."
+          },
+          {
+            "method": "review",
+            "detail": "Peer review before merge; confirm against goal."
+          },
+          {
+            "method": "manual_validation",
+            "detail": "Exercise the user-facing path end to end."
+          }
+        ],
+        "rollback": [
+          {
+            "strategy": "feature_flag",
+            "detail": "Ship behind a flag; disable to revert behavior instantly."
+          },
+          {
+            "strategy": "git_revert",
+            "detail": "Keep changes in small reversible commits; revert via git."
+          },
+          {
+            "strategy": "configuration_restore",
+            "detail": "Back up config; restore previous values if behavior regresses."
+          }
+        ],
+        "evidence": [
+          "infrastructure:Authentication Infrastructure"
+        ],
+        "status": "pending",
+        "confidence": "strong",
+        "sequence": 1
+      }
+
+[4] Idempotency (recompile) + append-only history
+    graphs before recompile=5 after=5 (idempotent on goal: True)
+    evolution events for OAuth graph: 1
+
+==============================================================================
+DOGFOOD COMPLETE — Plans compiled to deterministic task DAGs; no execution performed.
+==============================================================================

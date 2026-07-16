@@ -52,7 +52,7 @@ class UnderstandingType(str, Enum):
         for ut in cls:
             if ut.value == s:
                 return ut
-        return cls.ENGINEERING_DIRECTION
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class UnderstandingStatus(str, Enum):
@@ -70,7 +70,7 @@ class UnderstandingStatus(str, Enum):
         for us in cls:
             if us.value == s:
                 return us
-        return cls.CANDIDATE
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class UnderstandingConfidence(str, Enum):
@@ -86,7 +86,7 @@ class UnderstandingConfidence(str, Enum):
         for uc in cls:
             if uc.value == s:
                 return uc
-        return cls.WEAK
+        raise ValueError(f"{cls.__name__} has no member {s!r}")
 
 
 class UnderstandingLifecycleRank:
@@ -117,6 +117,10 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Contract version (Law 24).
+SCHEMA_VERSION = "1.0"
+
+
 @dataclass
 class Understanding:
     """One derived engineering understanding.
@@ -124,6 +128,8 @@ class Understanding:
     Never manually entered. Every statement cites knowledge ids. Build-only
     derived; the Brain consumes it as evidence, never computes it.
     """
+
+    SCHEMA_VERSION = SCHEMA_VERSION
 
     type: UnderstandingType
     subject: str
@@ -135,6 +141,7 @@ class Understanding:
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
     retired_at: Optional[str] = None
+    schema_version: str = SCHEMA_VERSION
     id: Optional[str] = None
 
     @property
@@ -156,6 +163,7 @@ class Understanding:
             updated_at=self.updated_at,
             build_at=self.build_at,
             retired_at=self.retired_at,
+            schema_version=self.schema_version,
         )
 
     def _generate_id(self) -> str:
@@ -176,6 +184,7 @@ class Understanding:
                 knowledge_ids=[k for k in (row.knowledge_ids or "").split(",") if k],
                 build_at=row.build_at, created_at=row.created_at,
                 updated_at=row.updated_at, retired_at=row.retired_at,
+                schema_version=cls._coerce_version(row),
             )
         return cls(
             id=row["id"],
@@ -189,4 +198,22 @@ class Understanding:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             retired_at=row["retired_at"],
+            schema_version=cls._coerce_version(row),
         )
+
+    @classmethod
+    def _coerce_version(cls, row) -> str:
+        """Reject stored understanding whose contract version is unknown (Law 24).
+
+        Rows predating versioning are backfilled with the current version.
+        """
+        if isinstance(row, UnderstandingRow):
+            version = getattr(row, "schema_version", None)
+        else:
+            version = row["schema_version"] if "schema_version" in row.keys() else None
+        if version is None:
+            return SCHEMA_VERSION
+        if version != SCHEMA_VERSION:
+            raise ValueError(
+                f"Understanding schema_version {version!r} != current {SCHEMA_VERSION!r}")
+        return version

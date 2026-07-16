@@ -999,6 +999,102 @@ def _p_insight(req, conn, ev, today):
     return
 
 
+# --- plan (how should we do it, derived from insights/initiatives/ ---- ---
+# understanding/knowledge) — see engine.insert/_p_insight above for the M8.5
+# pattern. Plans are STRUCTURED, evidence-backed strategies; this provider
+# surfaces them as supporting context when a question asks HOW to proceed.
+# No routing/retrieval/judgment change: it is registered as a provider and
+# folded into answers exactly like the insight provider.
+
+
+@_provider("plan")
+def _p_plan(req, conn, ev, today):
+    from .planning import PlanEngine
+
+    eng = PlanEngine(conn)
+    items = eng.active_plans()
+
+    blocks: list[str] = []
+    if not items:
+        blocks.append(
+            "No engineering plan derived yet. Run "
+            "`friday plan \"<goal>\"` to produce a structured, evidence-backed plan."
+        )
+    else:
+        blocks.append(
+            f"Engineering plans ({len(items)} active, derived from "
+            f"insights + initiatives + understanding + knowledge):"
+        )
+        for p in items:
+            ev_count = (p.initiative_count + p.insight_count
+                        + p.understanding_count + p.knowledge_count)
+            blocks.append(
+                f"- [{p.confidence.value}] {p.goal} "
+                f"({p.plan_type.value}): {p.estimated_complexity} complexity, "
+                f"{len(p.milestones)} milestones, evidence={ev_count}"
+            )
+
+    ev.blocks = blocks
+    ev.raw["plan_total"] = len(items)
+    ev.raw["plans"] = [
+        {"id": p.id, "goal": p.goal, "type": p.plan_type.value,
+         "status": p.status.value, "confidence": p.confidence.value,
+         "complexity": p.estimated_complexity, "effort": p.estimated_effort,
+         "milestone_count": len(p.milestones),
+         "risk_count": len(p.risks),
+         "initiative_count": p.initiative_count,
+         "insight_count": p.insight_count,
+         "understanding_count": p.understanding_count,
+         "knowledge_count": p.knowledge_count} for p in items
+    ]
+    return
+
+
+@_provider("taskgraph")
+def _p_taskgraph(req, conn, ev, today):
+    """M9.1 Brain exposure: surface compiled Task Graphs as supporting context
+    when a question asks HOW EXACTLY to execute a goal (ordered tasks, deps,
+    capabilities). Read-only over the new task-graph tables; no routing/retrieval/
+    judgment change — it is registered as a provider and folded into answers
+    exactly like the plan provider. The Task Graph Compiler is FROZEN-wrt-lower
+    layers: this only reads them."""
+    from .planning import TaskGraphEngine
+
+    eng = TaskGraphEngine(conn)
+    rows = eng.all_graphs()
+
+    blocks: list[str] = []
+    if not rows:
+        blocks.append(
+            "No task graph compiled yet. Run "
+            "`friday graph \"<goal>\"` to compile a Plan into an executable "
+            "task DAG."
+        )
+    else:
+        blocks.append(
+            f"Task graphs ({len(rows)} compiled — ordered, dependency-aware "
+            f"execution DAGs compiled from Plans):"
+        )
+        for r in sorted(rows, key=lambda x: x.updated_at, reverse=True):
+            blocks.append(
+                f"- {r.goal} ({r.plan_type}): {r.task_count} tasks, "
+                f"{r.edge_count} deps, critical path {r.critical_path_length}, "
+                f"{r.parallel_groups} parallel groups"
+            )
+
+    ev.blocks = blocks
+    ev.raw["taskgraph_total"] = len(rows)
+    ev.raw["task_graphs"] = [
+        {"graph_id": r.id, "goal": r.goal, "plan_id": r.plan_id,
+         "plan_type": r.plan_type, "task_count": r.task_count,
+         "edge_count": r.edge_count,
+         "critical_path_length": r.critical_path_length,
+         "parallel_groups": r.parallel_groups, "status": r.status}
+        for r in rows
+    ]
+    return
+
+
 def _select_providers(req: RetrievalRequirements) -> list[_Provider]:
     """Deterministic, needs-driven provider selection. No switch, no intent.
 
@@ -1175,6 +1271,31 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
                     ev.raw[key] = side.raw[key]
             if "_p_insight" not in audit_returned:
                 audit_returned.append("_p_insight")
+
+    # Guarantee plans (M9.0) surface when a question asks HOW to proceed, even
+    # when the offline route did not name the `plan` need explicitly (e.g.
+    # "how should we implement OAuth" -> PLAN). Plans are a first-class strategy
+    # layer built only from insights/initiatives/understanding/knowledge, so they
+    # belong in any "how should we do it" answer. No judgment/retrieval change —
+    # this just ensures the provider's lines are present in the evidence.
+    _PLAN_HINTS = ("plan", "how should", "how do we", "how to", "approach",
+                   "strategy for", "roadmap", "next steps")
+    needs_plan = "plan" in decision.needs or any(
+        h in (req.query or "").lower() for h in _PLAN_HINTS)
+    if needs_plan and "plan" not in decision.needs:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_plan.fn(req, conn, side, today)
+        if side.blocks:
+            ev.raw.setdefault("supporting", []).extend(side.blocks)
+            if decision.objective not in _PROSE_OBJECTIVES:
+                for b in side.blocks:
+                    if b not in ev.blocks:
+                        ev.blocks.append(b)
+            for key in ("plan_total", "plans"):
+                if key in side.raw:
+                    ev.raw[key] = side.raw[key]
+            if "_p_plan" not in audit_returned:
+                audit_returned.append("_p_plan")
 
     # Retrieval audit (Part H) — providers requested vs returned, surfaced via
     # `ask --verbose` only. Never affects the normal answer.

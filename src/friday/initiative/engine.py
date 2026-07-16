@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from ..db import (
+    atomic,
     InitiativeEvolutionRow,
     InitiativeHistoryRow,
     InitiativeRelationshipRow,
@@ -168,8 +169,10 @@ class InitiativeEngine:
                 updated += 1
             to_persist.append(i)
 
-        insert_initiative(self.conn, [i.to_row() for i in to_persist])
-        n_events = self._record_evolution(build_at, to_persist)
+        # Whole build is one atomic transaction (Part F).
+        with atomic(self.conn):
+            insert_initiative(self.conn, [i.to_row() for i in to_persist])
+            n_events = self._record_evolution(build_at, to_persist)
 
         all_i = get_all_initiatives(self.conn)
         cand_n = sum(1 for i in all_i if i.status == InitiativeStatus.CANDIDATE)

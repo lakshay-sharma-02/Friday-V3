@@ -178,14 +178,22 @@ def test_repeated_builds_idempotent(conn, start, tmp_path):
 def test_build_is_append_only_across_distinct_windows(conn, start, tmp_path):
     _seed(conn, start, tmp_path)
     eng = ContextEngine(conn)
-    eng.build(as_of="W1")
+    eng.build()
     n1 = _count_sessions(conn)
-    eng.build(as_of="W2")  # distinct window => appended
-    n2 = _count_sessions(conn)
-    assert n2 == n1 + 1  # append, not overwrite
-    # Re-running W2 replaces itself (no duplicate).
+    # Re-building over the SAME observations (even with a different as_of) must
+    # be idempotent: the session id is keyed on the observation window, not the
+    # build time, so no duplicate session is created (Part A #4).
     eng.build(as_of="W2")
-    assert _count_sessions(conn) == n2
+    assert _count_sessions(conn) == n1
+    # A genuinely NEW observation window appends a distinct session.
+    insert_observations(conn, [
+        _obs("FridayV3", "commit_count", "2", _t(start, 600)).to_row(),
+    ])
+    eng.build()
+    assert _count_sessions(conn) == n1 + 1
+    # Re-running still replaces, not duplicates.
+    eng.build()
+    assert _count_sessions(conn) == n1 + 1
 
 
 def test_build_does_not_duplicate_observations(conn, start, tmp_path):

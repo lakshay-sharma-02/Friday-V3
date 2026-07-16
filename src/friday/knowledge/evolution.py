@@ -46,6 +46,7 @@ from ..db import (
     latest_knowledge_snapshot,
     observations_all,
     update_knowledge_status,
+    evolution_events_all,
 )
 from .models import Knowledge, KnowledgeConfidence, KnowledgeStatus
 from .store import get_all_knowledge

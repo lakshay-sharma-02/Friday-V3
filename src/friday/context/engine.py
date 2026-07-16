@@ -114,10 +114,13 @@ class ContextEngine:
             duplicates = [sid for sid in session_ids if session_ids.count(sid) > 1]
             raise ValueError(
                 f"Session ID collision detected. Duplicate IDs: {list(set(duplicates))}. "
-                f"This indicates sessions with identical (built_at, primary_repo, start_time). "
+                f"This indicates sessions with identical (primary_repo, start_time). "
                 f"This should not happen with the current observation model."
             )
 
+        # Close any open implicit transaction from prior raw writes, then
+        # run the session insert atomically.
+        self.conn.commit()
         self.conn.execute("BEGIN TRANSACTION")
         try:
             insert_sessions(self.conn, [s.to_row() for s in sessions])

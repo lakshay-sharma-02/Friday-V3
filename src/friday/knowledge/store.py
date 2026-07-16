@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from ..db import connect
+from ..db import connect, commit_if_top
 from .models import Knowledge
 
 
@@ -16,11 +16,23 @@ def insert_knowledge(conn, knowledge: List[Knowledge]) -> None:
     for k in knowledge:
         conn.execute(
             """
-            INSERT OR REPLACE INTO knowledge
+            INSERT INTO knowledge
                 (id, type, subject, statement, confidence, evidence_ids,
                  status, created_at, updated_at, last_verified, verification_count,
-                 is_static)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 is_static, schema_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                type=excluded.type,
+                subject=excluded.subject,
+                statement=excluded.statement,
+                confidence=excluded.confidence,
+                evidence_ids=excluded.evidence_ids,
+                status=excluded.status,
+                updated_at=excluded.updated_at,
+                last_verified=excluded.last_verified,
+                verification_count=excluded.verification_count,
+                is_static=excluded.is_static,
+                schema_version=excluded.schema_version
             """,
             (
                 k.id or k._generate_id(),
@@ -35,9 +47,10 @@ def insert_knowledge(conn, knowledge: List[Knowledge]) -> None:
                 k.last_verified,
                 k.verification_count,
                 int(bool(k.is_static)),
+                k.schema_version,
             ),
         )
-    conn.commit()
+    commit_if_top(conn)
 
 
 def get_all_knowledge(conn) -> List[Knowledge]:
