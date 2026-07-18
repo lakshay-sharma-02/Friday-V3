@@ -32,9 +32,21 @@ from .cli_knowledge import cmd_knowledge
 from .cli_understanding import cmd_understanding
 from .cli_initiative import cmd_initiatives
 from .cli_insight import cmd_insights
+from .cli_identity import cmd_identity
+from .cli_portfolio import cmd_portfolio_dispatch
+from .cli_strategy import cmd_strategy
 from .cli_planning import cmd_plan
 from .cli_graph import cmd_graph
 from .cli_worker import cmd_worker
+from .cli_resolver import cmd_resolve, cmd_resolver
+from .cli_scheduler import cmd_schedule, cmd_scheduler
+from .cli_review import cmd_review
+from .cli_runtime import (
+    cmd_runtime,
+    cmd_runtime_dispatch,
+    cmd_runtime_show,
+    cmd_runtime_export,
+)
 from .context import ContextEngine, TimelineEntry, summarize_day
 from .db import connect
 from .ingest import ingest_paths
@@ -147,11 +159,33 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def cmd_observe(args: argparse.Namespace) -> int:
-    """Record the workspace and report changes since the previous observation."""
+    """Refresh the workspace knowledge stack from current repository state.
+
+    `friday observe`                  -> refresh the whole workspace.
+    `friday observe <repo>`           -> refresh only one repository.
+    `friday observe --changed`        -> refresh only changed repositories.
+    `friday observe --summary`        -> refresh + print the summary report.
+
+    Composes the EXISTING pipeline (ingest -> knowledge -> understanding ->
+    initiative -> insight). No new subsystem; change detection skips untouched
+    repositories and every layer's build() is idempotent.
+    """
+    from .observe import refresh
+
     conn = connect()
-    prev_time, changes = observe_via_engine(conn)
+    only_changed = bool(getattr(args, "changed", False))
+    summary = bool(getattr(args, "summary", False))
+    repo = getattr(args, "repo", None)
+    repos = [repo] if repo else None
+
+    rep = refresh(conn, repos=repos, only_changed=only_changed)
     conn.close()
-    print(format_report(prev_time, changes), end="")
+
+    print(rep.to_text())
+    if not summary and rep.changed_repos:
+        print("Changed repositories:")
+        for name in rep.changed_repos:
+            print(f"  - {name}")
     return 0
 
 
@@ -346,7 +380,21 @@ def main(argv: list[str] | None = None) -> int:
     p_analyze.set_defaults(func=cmd_analyze)
 
     p_observe = sub.add_parser(
-        "observe", help="Record the workspace and report changes since last time."
+        "observe",
+        help="Refresh the workspace knowledge stack from current repos.",
+    )
+    p_observe.add_argument(
+        "repo", nargs="?", default=None,
+        help="Refresh only this repository (path or name); omit for the whole workspace.",
+    )
+    p_observe.add_argument(
+        "--changed", action="store_true",
+        help="Refresh ONLY repositories whose observable state changed.",
+    )
+    p_observe.add_argument(
+        "--summary", action="store_true",
+        help="Print the summary report (repos scanned/changed, knowledge, "
+             "understanding, identity, portfolio, insights, elapsed).",
     )
     p_observe.set_defaults(func=cmd_observe)
 
@@ -461,6 +509,35 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_insights.set_defaults(func=cmd_insights)
 
+    p_identity = sub.add_parser(
+        "identity", help="List or explain project identities (what each project is)."
+    )
+    p_identity.add_argument(
+        "project", nargs="?",
+        help="Project name/id to explain; omit to list all identities.",
+    )
+    p_identity.set_defaults(func=cmd_identity)
+
+    p_portfolio = sub.add_parser(
+        "portfolio", help="Workspace reasoning: themes, overlap, value, recommendations."
+    )
+    p_portfolio.add_argument(
+        "token", nargs="?",
+        choices=["themes", "overlap", "ranking", "recommendations", "integrations"],
+        help="Aspect to view; omit for the workspace overview.",
+    )
+    p_portfolio.set_defaults(func=cmd_portfolio_dispatch)
+
+    p_strategy = sub.add_parser(
+        "strategy", help="Strategic judgment: impact, platform, learning, opportunity."
+    )
+    p_strategy.add_argument(
+        "token", nargs="?",
+        choices=["impact", "platform", "learning", "opportunity", "priority", "merge", "converge"],
+        help="Judgment axis; omit for the converging thesis.",
+    )
+    p_strategy.set_defaults(func=cmd_strategy)
+
     p_plan = sub.add_parser(
         "plan", help="Generate / show an engineering plan (WRITE: '<goal>')."
     )
@@ -520,10 +597,100 @@ def main(argv: list[str] | None = None) -> int:
         help="Worker name to show, or 'register' / 'export' action.",
     )
     p_worker.add_argument(
+        "sub", nargs="?", default=None,
+        help="Sub-action for 'register': 'builtin' registers all built-in workers.",
+    )
+    p_worker.add_argument(
         "--file", default=None,
         help="Manifest JSON file for the 'register' action.",
     )
     p_worker.set_defaults(func=cmd_worker)
+
+    p_resolve = sub.add_parser(
+        "resolve", help='Resolve a goal into task->worker assignments.'
+    )
+    p_resolve.add_argument(
+        "goal", nargs="*",
+        help='Goal to resolve (e.g. "Implement OAuth").',
+    )
+    p_resolve.set_defaults(func=cmd_resolve)
+
+    p_resolver = sub.add_parser(
+        "resolver", help="List / explain / export resolver assignments."
+    )
+    p_resolver.add_argument(
+        "token", nargs="?", default=None,
+        help="'explain <id>' or 'export'; omit to list.",
+    )
+    p_resolver.add_argument(
+        "assignment_id", nargs="?", default=None,
+        help="Assignment ID for 'explain' (can also use --id).",
+    )
+    p_resolver.add_argument("--id", help="Assignment ID for 'explain' action.")
+    p_resolver.set_defaults(func=cmd_resolver)
+
+    p_schedule = sub.add_parser(
+        "schedule", help='Schedule a goal into an execution ordering.'
+    )
+    p_schedule.add_argument(
+        "goal", nargs="*",
+        help='Goal to schedule (e.g. "Implement OAuth").',
+    )
+    p_schedule.set_defaults(func=cmd_schedule)
+
+    p_scheduler = sub.add_parser(
+        "scheduler", help="List / explain / export execution schedules."
+    )
+    p_scheduler.add_argument(
+        "token", nargs="?", default=None,
+        help="'explain <id>' or 'export'; omit to list.",
+    )
+    p_scheduler.add_argument(
+        "schedule_id", nargs="?", default=None,
+        help="Schedule/graph ID for 'explain' (can also use --id).",
+    )
+    p_scheduler.add_argument("--id", help="Schedule/graph ID for 'explain' action.")
+    p_scheduler.set_defaults(func=cmd_scheduler)
+
+    p_runtime = sub.add_parser(
+        "runtime", help="Execute a goal (Plan->Graph->Resolve->Schedule->Run)."
+    )
+    p_runtime.add_argument(
+        "goal", nargs="*",
+        help='Goal to execute (e.g. "Implement OAuth").',
+    )
+    p_runtime.set_defaults(func=cmd_runtime)
+
+    p_runtime_session = sub.add_parser(
+        "runtime_session", help="List execution sessions."
+    )
+    p_runtime_session.set_defaults(func=cmd_runtime_dispatch)
+
+    p_runtime_show = sub.add_parser(
+        "runtime_show", help="Show an execution session's timeline."
+    )
+    p_runtime_show.add_argument("session_id", nargs="?", default=None)
+    p_runtime_show.set_defaults(func=cmd_runtime_show)
+
+    p_runtime_export = sub.add_parser(
+        "runtime_export", help="Export all execution sessions as JSON."
+    )
+    p_runtime_export.set_defaults(func=cmd_runtime_export)
+
+    p_review = sub.add_parser(
+        "review",
+        help="Review engineering work: workspace, project, plan, graph, runtime, portfolio.",
+    )
+    p_review.add_argument(
+        "token", nargs="?",
+        help="Subcommand: 'plan', 'graph', 'runtime', 'portfolio'; or a project name; omit for the workspace review.",
+    )
+    p_review.add_argument(
+        "rest", nargs="*",
+        help="Argument for the subcommand: goal for 'plan', id for 'graph'/'runtime', project name for bare review.",
+    )
+    p_review.add_argument("--id", help="Graph or session ID (alternative to position).")
+    p_review.set_defaults(func=cmd_review)
 
     args = parser.parse_args(argv)
     return args.func(args)
