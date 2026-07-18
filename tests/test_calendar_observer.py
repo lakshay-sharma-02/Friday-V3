@@ -14,6 +14,7 @@ integration, offline fixtures, ICS parsing, and derived engineering signals.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,12 @@ def _ev(uid, **over):
 
 def _observer(events):
     return CalendarObserver(FixtureProvider(events))
+
+
+def _soon(days: int) -> str:
+    """ISO timestamp `days` from now (UTC) so date-relative signals don't rot."""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00")
 
 
 # --- Classification (deterministic, no LLM) --------------------------------
@@ -317,7 +324,7 @@ def test_ics_cancelled_status(tmp_path):
 
 def test_deadline_approaching_inferred():
     evs = [_ev(f"d{i}", title=f"Deadline {i}",
-               start="2026-07-15T10:00:00+00:00") for i in range(2)]
+               start=_soon(3)) for i in range(2)]
     obs = {(o.subject, o.aspect): o for o in _observer(evs).collect(None)}
     assert obs[("calendar", "deadline_approaching")].value == "true"
     assert obs[("calendar", "deadline_approaching")].confidence is __import__(
@@ -387,8 +394,8 @@ def test_event_duration_min():
 def test_summary_counts_and_upcoming(tmp_path):
     conn = connect(tmp_path / "kb.db")
     evs = [
-        _ev("d1", title="Project deadline", start="2026-07-15T10:00:00+00:00"),
-        _ev("d2", title="Assignment due", start="2026-07-16T10:00:00+00:00"),
+        _ev("d1", title="Project deadline", start=_soon(2)),
+        _ev("d2", title="Assignment due", start=_soon(3)),
         _ev("d3", title="Exam", start="2026-08-01T10:00:00+00:00"),
         _ev("m1", title="Meeting one", start="2026-09-01T10:00:00+00:00"),
         _ev("m2", title="Meeting two", start="2026-09-02T10:00:00+00:00"),
@@ -405,7 +412,7 @@ def test_summary_counts_and_upcoming(tmp_path):
     assert "Releases\n1" in summary
     assert "Assignments\n2" in summary
     assert "Exams\n1" in summary
-    # d1, d2 within 7 days of 2026-07-14 -> upcoming; d3 (Aug 1) not.
+    # d1, d2 within the focus window -> upcoming; d3 (Aug 1) not.
     assert "Upcoming\n2" in summary
 
 

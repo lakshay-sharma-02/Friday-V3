@@ -80,6 +80,19 @@ _CAP_CANON = (
 # Lowercase alias -> canonical (Capitalized) form. Deterministic single source.
 _CANON_MAP = {c.lower(): c for c in _CAP_CANON}
 
+# Informal synonyms users register with, mapped to the canonical capability
+# name (NO new canonical caps added, validation stays closed). Without these,
+# common names like "Shell"/"Git"/"File System" were rejected entirely.
+_ALIASES = {
+    "shell": "Shell Commands",
+    "git": "Git Operations",
+    "file system": "File Editing",
+    "filesystem": "File Editing",
+    "file editing": "File Editing",
+    "shell commands": "Shell Commands",
+    "git operations": "Git Operations",
+}
+
 
 def all_capabilities() -> tuple:
     """The full closed capability vocabulary (canonical forms)."""
@@ -88,7 +101,8 @@ def all_capabilities() -> tuple:
 
 def is_valid_capability(c: str) -> bool:
     """True iff `c` is in the closed vocabulary (case-insensitive)."""
-    return (c or "").strip().lower() in _CANON_MAP
+    c = (c or "").strip().lower()
+    return c in _CANON_MAP or c in _ALIASES
 
 
 def validate_capabilities(caps: List[str]) -> List[str]:
@@ -100,7 +114,8 @@ def validate_capabilities(caps: List[str]) -> List[str]:
         c = (c or "").strip()
         if not c:
             continue
-        canon = _CANON_MAP.get(c.lower())
+        key = c.lower()
+        canon = _CANON_MAP.get(key) or _ALIASES.get(key)
         if canon is None:
             continue  # rejected: no hallucinated capabilities
         if canon not in seen:

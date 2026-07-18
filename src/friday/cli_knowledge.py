@@ -101,9 +101,9 @@ def cmd_knowledge_explain(args: argparse.Namespace) -> int:
         return err
 
     k = eng.knowledge_by_id(resolved)
-    conn.close()
 
     if not k:
+        conn.close()
         print(f"error: knowledge not found: {knowledge_id}", file=sys.stderr)
         return 2
 
@@ -135,6 +135,7 @@ def cmd_knowledge_explain(args: argparse.Namespace) -> int:
     for h in hist:
         print(f"  {h.build_at[:19]}  {h.confidence:6}  {h.status:8}  {h.evidence_ids.count(',')+1 if h.evidence_ids else 0} ev")
 
+    conn.close()
     return 0
 
 

@@ -228,8 +228,12 @@ class Plan:
     def _generate_id(self) -> str:
         """Deterministic id from goal. Stable across generations, so repeated
         planning of the same goal REPLACES the same row (idempotent). created_at
-        varies per generation and must NOT be part of the id."""
-        return f"plan:{self.goal.strip().lower()}"
+        varies per generation and must NOT be part of the id.
+
+        Only the id is normalized: surrounding quotes are stripped so a goal
+        passed as `"goal"` yields the same id as `goal` (the user-visible goal
+        text is left untouched)."""
+        return f"plan:{self.goal.strip().strip('\"').strip().lower()}"
 
     def to_row(self) -> PlanRow:
         return PlanRow(

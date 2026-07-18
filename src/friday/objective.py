@@ -70,6 +70,7 @@ class Objective:
     NEWEST = "newest"              # most recent
     RECOMMEND = "recommend"        # what to work on next
     BY_TECH = "by-tech"            # which projects use a tech
+    MATURITY = "maturity"          # which project is most/least mature
     UNIVERSE = "universe"          # engineering-universe overview
     SURPRISE = "surprise"          # what surprises you
     EVOLVE = "evolve"              # how would you evolve the portfolio
@@ -191,6 +192,7 @@ _PRIORITY: dict[str, dict[str, int]] = {
         "activity": 5, "value": 4,
     },
     Objective.BY_TECH: {"by-tech": 10},
+    Objective.MATURITY: {"maturity": 10, "activity": 5, "observation": 3},
     Objective.UNIVERSE: {
         "universe": 10, "themes": 7, "overlap": 5, "relationships": 5,
         "integration": 4, "effort": 3,
@@ -294,6 +296,7 @@ _CONTRACTS: dict[str, list[str]] = {
     Objective.NEWEST: ["Newest"],
     Objective.RECOMMEND: ["Recommendation", "Why", "Next"],
     Objective.BY_TECH: ["Projects using tech"],
+    Objective.MATURITY: ["Maturity ranking", "Evidence"],
     Objective.UNIVERSE: ["Themes", "Reuse", "Integration point"],
     Objective.SURPRISE: ["Surprise", "Evidence"],
     Objective.EVOLVE: [
@@ -339,6 +342,7 @@ _OBJECTIVE_CANONICAL_NEED: dict[str, str] = {
     Objective.NEWEST: "newest",
     Objective.RECOMMEND: "recommend",
     Objective.BY_TECH: "by-tech",
+    Objective.MATURITY: "maturity",
     Objective.UNIVERSE: "universe",
     Objective.SURPRISE: "surprise",
     Objective.EVOLVE: "evolve",
@@ -412,6 +416,7 @@ _LENS_OBJECTIVE: dict[tuple[str, Optional[str]], str] = {
     ("newest", None): Objective.NEWEST,
     ("recommend", None): Objective.RECOMMEND,
     ("by-tech", None): Objective.BY_TECH,
+    ("maturity", None): Objective.MATURITY,
     ("universe", None): Objective.UNIVERSE,
     ("insights", None): Objective.INSIGHTS,
     ("compare", None): Objective.COMPARE,
@@ -451,6 +456,7 @@ _SINGLE_NEED_OBJECTIVE: dict[str, str] = {
     "newest": Objective.NEWEST,
     "recommend": Objective.RECOMMEND,
     "by-tech": Objective.BY_TECH,
+    "maturity": Objective.MATURITY,
     "universe": Objective.UNIVERSE,
     "insights": Objective.INSIGHTS,
     "compare": Objective.COMPARE,
@@ -518,6 +524,8 @@ def _rank_objective(needs: set[str], lens: Optional[str], req=None) -> str:
         return Objective.RECOMMEND
     if "by-tech" in n:
         return Objective.BY_TECH
+    if "maturity" in n:
+        return Objective.MATURITY
     if "universe" in n:
         return Objective.UNIVERSE
     if "understanding" in n:

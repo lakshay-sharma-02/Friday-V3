@@ -479,10 +479,15 @@ def _p_related(req, conn, ev, today):
         name_by_id = {x.id: x.name for x in q.all_repositories(conn)}
         ranked = [rel for rel in get_all_relationships(conn) if rel.strength != "Weak"]
         ranked.sort(key=lambda rel: _rel_rank(rel.kind))
+        seen_pairs: set[tuple[str, str, str]] = set()
         for rel in ranked:
             an = name_by_id.get(rel.repo_a)
             bn = name_by_id.get(rel.repo_b)
             if an and bn:
+                key = (an, bn, rel.kind)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
                 pairs.append(f"{an} and {bn}: {rel.kind.replace('shared-', 'shared ')} "
                              f"({rel.evidence})")
         if pairs:
@@ -651,6 +656,49 @@ def _p_newest(req, conn, ev, today):
     ]
     ev.raw["newest"] = [r.name for r in repos]
     return
+
+
+@_provider("maturity")
+def _p_maturity(req, conn, ev, today):
+    """Rank projects by maturity using stored evidence only — README-derived
+    maturity plus git activity/recency. No invented maturity metric: when a repo
+    has no stated maturity we say so and fall back to its git signals."""
+    from .identity import build_identity
+
+    repos = q.all_repositories(conn)
+    if not repos:
+        ev.blocks = ["I don't have enough evidence — no repositories are ingested."]
+        ev.raw["note"] = "no repositories"
+        return
+
+    # Maturity is reported as stored (README-derived), falling back to git
+    # activity when no maturity text exists. We present the evidence, never a
+    # fabricated score.
+    active = {r.id: s for r, s in q.most_active(conn, today, len(repos))}
+    rows = []
+    for r in repos:
+        ident = build_identity(conn, r.id) if r.id is not None else None
+        maturity = (ident.maturity if ident else None) or "Unknown"
+        recency = r.last_commit_date[:10] if r.last_commit_date else "unknown"
+        rate = active.get(r.id)
+        rows.append((r, maturity, recency, rate))
+
+    def _mat_rank(m: str) -> int:
+        return {"stable": 3, "beta": 2, "alpha": 2, "wip": 1}.get(m.lower(), 0)
+
+    rows.sort(key=lambda x: (_mat_rank(x[1]), x[3] or 0.0), reverse=True)
+
+    lines = []
+    for r, maturity, recency, rate in rows:
+        bits = [f"{r.name}: maturity={maturity}"]
+        if recency != "unknown":
+            bits.append(f"last commit {recency}")
+        if rate is not None:
+            bits.append(f"~{rate:.1f} commits/day")
+        lines.append("; ".join(bits))
+    ev.blocks = lines
+    ev.raw["maturity"] = [(r.name, m) for r, m, _, _ in rows]
+    ev.subject = rows[0][0].name if rows else None
 
 
 # --- recommend ---------------------------------------------------------------
@@ -1826,6 +1874,12 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
         "same problem as", "solves a problem", "solved a problem",
     )):
         return mk(needs=("overlap",))
+    if any(w in qlow for w in (
+        "most mature", "least mature", "most maturely", "most developed",
+        "most advanced", "most production", "most production-ready",
+        "oldest project", "youngest project", "most stable",
+    )):
+        return mk(needs=("maturity",))
     if "share" in qlow or "use" in qlow or "which project" in qlow:
         for t in techs:
             if t.lower() in qlow:

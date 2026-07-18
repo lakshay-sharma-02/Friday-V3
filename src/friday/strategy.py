@@ -144,17 +144,21 @@ def strategy_platform(conn, today: Optional[dt.date] = None) -> list[str]:
                               "shared-framework", "shared-architecture")
                 and r.strength != _WEAK]
     names = _names(conn)
-    capcount: Counter = Counter()
+    # Components and repo names are distinct vocabularies; keep them separate so
+    # the "lead" capability and the "other repos" list never conflate the two
+    # (a repo name is never a component, and vice versa).
+    compcount: Counter = Counter()
     for repos in shared.values():
         for name in repos:
-            capcount[name] += 1
+            compcount[name] += 1
+    repocount: Counter = Counter()
     for r in abs_rels:
         if names.get(r.repo_a):
-            capcount[names[r.repo_a]] += 1
+            repocount[names[r.repo_a]] += 1
         if names.get(r.repo_b):
-            capcount[names[r.repo_b]] += 1
+            repocount[names[r.repo_b]] += 1
 
-    if not capcount:
+    if not compcount and not repocount:
         return [Judgment(
             axis="platform",
             recommendation="I can't name a platform candidate yet",
@@ -166,21 +170,18 @@ def strategy_platform(conn, today: Optional[dt.date] = None) -> list[str]:
             confidence="Insufficient",
         ).render()]
 
-    lead, n = capcount.most_common(1)[0]
+    lead = compcount.most_common(1)[0][0] if compcount else repocount.most_common(1)[0][0]
     caps = [c for c, repos in shared.items() if lead in repos]
     bits = []
     if caps:
         bits.append("it already provides reusable capability others consume ("
                     + ", ".join(caps) + ")")
-    if abs_rels and names.get(abs_rels[0].repo_a) == lead:
-        partners = [names.get(r.repo_b) for r in abs_rels
-                    if names.get(r.repo_a) == lead and names.get(r.repo_b)]
-        if partners:
-            bits.append("shares engineering with " + ", ".join(filter(None, partners)))
+    # Distinct OTHER repos that share engineering with the lead capability.
+    # Deduplicated and excluding the lead itself (component or repo).
+    other_repos = sorted({n for n in repocount if n != lead})
     other = ""
-    if len(capcount) > 1:
-        other = " Other repos contributing reusable capability: " + ", ".join(
-            f"{name} ({c})" for name, c in capcount.most_common()[1:])
+    if other_repos:
+        other = " Other repos contributing reusable capability: " + ", ".join(other_repos)
     reuse = reuse_opportunities(conn)
     if reuse:
         other += " Concrete reuse already detected: " + "; ".join(reuse[:2]) + "."

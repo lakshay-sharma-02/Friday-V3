@@ -17,7 +17,7 @@ import sys
 
 from .db import connect
 from .worker import WorkerRegistry
-from .worker.engine import RegistryError
+from .worker.engine import RegistryError, BUILTIN_WORKERS
 
 
 def cmd_workers(args: argparse.Namespace) -> int:
@@ -85,6 +85,16 @@ def cmd_worker_register(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_worker_register_builtin(args: argparse.Namespace) -> int:
+    """WRITE: register every built-in worker (idempotent, no duplicates)."""
+    conn = connect()
+    reg = WorkerRegistry(conn)
+    res = reg.register_builtins()
+    conn.close()
+    sys.stdout.write(res.to_text())
+    return 0
+
+
 def cmd_worker_export(args: argparse.Namespace) -> int:
     """READ: export the entire registry as deterministic JSON."""
     conn = connect()
@@ -98,13 +108,17 @@ def cmd_worker_export(args: argparse.Namespace) -> int:
 def cmd_worker(args: argparse.Namespace) -> int:
     """Dispatch friday worker subcommands.
 
-    `friday worker`            -> list all workers
-    `friday worker <name>`     -> show one worker
+    `friday worker`                  -> list all workers
+    `friday worker <name>`           -> show one worker
+    `friday worker register builtin` -> register all built-in workers
     `friday worker register --file <f>` -> register a custom worker
-    `friday worker export`     -> export the registry JSON
+    `friday worker export`           -> export the registry JSON
     """
     token = getattr(args, "token", None)
     if token == "register":
+        sub = getattr(args, "sub", None)
+        if sub == "builtin":
+            return cmd_worker_register_builtin(args)
         return cmd_worker_register(args)
     if token == "export":
         return cmd_worker_export(args)

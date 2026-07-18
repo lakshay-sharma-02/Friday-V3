@@ -50,6 +50,43 @@ _LOWCONF_KW = ("weak", "uncertain", "unverified", "speculative")
 _PLAN_DRIFT_KW = ("drift", "diverge", "off-track", "architecture")
 
 
+# Project names whose knowledge/understanding/initiatives the plan should
+# surface. Resolved once per module load from the persisted repos so a goal that
+# names a project (e.g. "Add logout button to MindWell") connects to the
+# evidence Friday already holds about it.
+def _project_names() -> frozenset[str]:
+    try:
+        from ..db import connect, get_repositories
+        # Connect per call (respects FRIDAY_DB / default path); caching a module
+        # global connection would bind to the wrong database across sessions.
+        c = connect()
+        try:
+            return frozenset(
+                (r.name or "").lower() for r in get_repositories(c) if r.name
+            )
+        finally:
+            c.close()
+    except Exception:
+        return frozenset()
+
+
+def _project_hits(goal: str) -> set[str]:
+    """Project-name tokens from the goal that also exist as known repos."""
+    g = goal.lower()
+    return {n for n in _project_names() if n and n in g}
+
+
+def _matches_project(item, g: str, hits: set[str]) -> bool:
+    if not hits:
+        return False
+    hay = " ".join([
+        (getattr(item, "subject", None) or "").lower(),
+        (getattr(item, "statement", None) or "").lower(),
+        (getattr(item, "title", None) or "").lower(),
+    ])
+    return any(h in hay for h in hits)
+
+
 @dataclass
 class Evidence:
     """Read-only view of the lower layers the planner consumes."""
@@ -94,6 +131,7 @@ def _goal_tokens(goal: str) -> List[str]:
 
 def _match_initiatives(ev: Evidence, goal: str) -> List[str]:
     g = goal.lower()
+    hits = _project_hits(goal)
     out: List[str] = []
     for i in ev.initiatives:
         hay = " ".join([
@@ -111,6 +149,8 @@ def _match_initiatives(ev: Evidence, goal: str) -> List[str]:
             out.append(i.id)
         elif any(kw in hay for kw in _COMMERCIAL_KW) and any(kw in g for kw in _COMMERCIAL_KW):
             out.append(i.id)
+        elif _matches_project(i, g, hits):
+            out.append(i.id)
         elif (i.title or "").lower() in g or (i.title or "").lower()[:6] in g:
             out.append(i.id)
     # de-dup, preserve order
@@ -122,6 +162,7 @@ def _match_insights(ev: Evidence, goal: str) -> List[str]:
     """Match live insights whose subject/type overlaps the goal. Insights are
     the 'what deserves attention' signal; a plan should reference them."""
     g = goal.lower()
+    hits = _project_hits(goal)
     out: List[str] = []
     for ins in ev.insights:
         hay = " ".join([
@@ -141,6 +182,8 @@ def _match_insights(ev: Evidence, goal: str) -> List[str]:
             out.append(ins.id)
         elif any(kw in hay for kw in _COMMERCIAL_KW) and any(kw in g for kw in _COMMERCIAL_KW):
             out.append(ins.id)
+        elif _matches_project(ins, g, hits):
+            out.append(ins.id)
         elif any(kw in hay for kw in _DRIFT_KW) and any(kw in g for kw in _PLAN_DRIFT_KW):
             out.append(ins.id)
     seen = set()
@@ -149,6 +192,7 @@ def _match_insights(ev: Evidence, goal: str) -> List[str]:
 
 def _match_understanding(ev: Evidence, goal: str) -> List[str]:
     g = goal.lower()
+    hits = _project_hits(goal)
     out: List[str] = []
     for u in ev.understanding:
         hay = " ".join([
@@ -166,12 +210,15 @@ def _match_understanding(ev: Evidence, goal: str) -> List[str]:
             out.append(u.id)
         elif any(kw in hay for kw in _COMMERCIAL_KW) and any(kw in g for kw in _COMMERCIAL_KW):
             out.append(u.id)
+        elif _matches_project(u, g, hits):
+            out.append(u.id)
     seen = set()
     return [x for x in out if not (x in seen or seen.add(x))]
 
 
 def _match_knowledge(ev: Evidence, goal: str) -> List[str]:
     g = goal.lower()
+    hits = _project_hits(goal)
     out: List[str] = []
     for k in ev.knowledge:
         hay = " ".join([
@@ -190,6 +237,8 @@ def _match_knowledge(ev: Evidence, goal: str) -> List[str]:
         elif any(kw in hay for kw in _ARCH_KW) and any(kw in g for kw in _ARCH_KW):
             out.append(k.id)
         elif any(kw in hay for kw in _COMMERCIAL_KW) and any(kw in g for kw in _COMMERCIAL_KW):
+            out.append(k.id)
+        elif _matches_project(k, g, hits):
             out.append(k.id)
     seen = set()
     return [x for x in out if not (x in seen or seen.add(x))]

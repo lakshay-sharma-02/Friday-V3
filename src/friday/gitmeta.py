@@ -53,6 +53,7 @@ class Metadata:
     last_commit_date: Optional[str] = None
     remote_url: Optional[str] = None
     commit_count: Optional[int] = None
+    head_sha: Optional[str] = None
     primary_author: Optional[str] = None
     license: Optional[str] = None
 
@@ -130,6 +131,12 @@ def commit_count(repo: Path) -> Optional[int]:
         return None
 
 
+def head_sha(repo: Path) -> Optional[str]:
+    """Current HEAD commit SHA — the strongest single ingest-independent
+    change signal (a new commit => new SHA, regardless of count drift)."""
+    return _run(repo, ["rev-parse", "HEAD"])
+
+
 def primary_author(repo: Path) -> Optional[str]:
     # Most-prolific contributor (matches the "primary" meaning), not merely the
     # author of the single latest commit. `git shortlog -sn` ranks by commit
@@ -170,6 +177,7 @@ def collect(repo: Repo) -> Metadata:
         last_commit_date=last_commit_date(path),
         remote_url=remote_url(path),
         commit_count=commit_count(path),
+        head_sha=head_sha(path),
         primary_author=primary_author(path),
         license=license_name(path),
     )

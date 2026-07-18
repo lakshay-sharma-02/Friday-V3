@@ -99,7 +99,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
     is_dirty         INTEGER NOT NULL DEFAULT 0,
     readme_hash      TEXT,
     architecture_hash TEXT,
-    identity_hash    TEXT
+    identity_hash    TEXT,
+    head_sha         TEXT,
+    manifest_hash    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS observations (
@@ -578,6 +580,227 @@ CREATE TABLE IF NOT EXISTS worker_versions (
     changelog               TEXT,
     PRIMARY KEY (worker_id, version)
 );
+
+-- ===========================================================================
+-- M9.3 Capability Resolver (dedicated tables; Worker Registry is NOT overloaded)
+-- ===========================================================================
+
+-- One Task -> Worker mapping per resolution. Append-only; `updated_at` may
+-- change on deterministic re-resolution, but prior states live in history.
+CREATE TABLE IF NOT EXISTS resolver_assignments (
+    assignment_id          TEXT NOT NULL PRIMARY KEY,
+    graph_id               TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    task_id                TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    worker_id              TEXT REFERENCES workers(id) ON DELETE SET NULL,
+    status                 TEXT NOT NULL,
+    confidence             TEXT NOT NULL,
+    reason                 TEXT NOT NULL DEFAULT '',
+    matched_capabilities  TEXT NOT NULL DEFAULT '[]',
+    missing_capabilities  TEXT NOT NULL DEFAULT '[]',
+    selection_strategy    TEXT NOT NULL,
+    schema_version         TEXT NOT NULL DEFAULT '1.0',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    UNIQUE (graph_id, task_id)
+);
+
+-- Append-only snapshot of every resolution run (never updated, only inserted).
+-- Surrogate autoincrement PK guarantees a new row per run even when two runs
+-- share the same resolved_at (sub-millisecond re-resolution). Never mutated.
+CREATE TABLE IF NOT EXISTS resolver_history (
+    hid                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    resolved_at            TEXT NOT NULL,
+    assignment_id         TEXT,
+    graph_id              TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    task_id               TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    worker_id             TEXT REFERENCES workers(id) ON DELETE SET NULL,
+    status                TEXT NOT NULL,
+    confidence            TEXT NOT NULL,
+    score_total           INTEGER NOT NULL DEFAULT 0,
+    matched_capabilities  TEXT NOT NULL DEFAULT '[]',
+    missing_capabilities  TEXT NOT NULL DEFAULT '[]',
+    selection_strategy    TEXT NOT NULL,
+    FOREIGN KEY (assignment_id)
+        REFERENCES resolver_assignments(assignment_id) ON DELETE SET NULL
+);
+
+-- Evolution of the resolver's own decisions (assignment churn over runs).
+CREATE TABLE IF NOT EXISTS resolver_evolution (
+    evolved_at            TEXT NOT NULL,
+    graph_id             TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    task_id              TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    from_worker_id       TEXT REFERENCES workers(id) ON DELETE SET NULL,
+    to_worker_id         TEXT REFERENCES workers(id) ON DELETE SET NULL,
+    change_type          TEXT NOT NULL,
+    reason               TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (evolved_at, task_id, from_worker_id, to_worker_id)
+);
+
+-- ===========================================================================
+-- M9.4 Task Scheduler (dedicated tables; Resolver/Task Graph NOT overloaded)
+-- ===========================================================================
+
+-- One scheduled task per (graph, task). Re-scheduling UPDATES the live row in
+-- place (never INSERT OR REPLACE — that would cascade-delete history). The
+-- initial runnable state is recorded; the Runtime mutates states forward later.
+CREATE TABLE IF NOT EXISTS scheduler_tasks (
+    schedule_id          TEXT NOT NULL PRIMARY KEY,
+    graph_id             TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    assignment_id        TEXT NOT NULL REFERENCES resolver_assignments(assignment_id) ON DELETE SET NULL,
+    task_id              TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    worker_id            TEXT REFERENCES workers(id) ON DELETE SET NULL,
+    phase                TEXT NOT NULL DEFAULT '',
+    status               TEXT NOT NULL,
+    priority             INTEGER NOT NULL DEFAULT 0,
+    wave                 INTEGER NOT NULL DEFAULT 1,
+    dependency_count     INTEGER NOT NULL DEFAULT 0,
+    estimated_start      INTEGER,
+    estimated_finish     INTEGER,
+    blocked_reason       TEXT NOT NULL DEFAULT '',
+    confidence           TEXT NOT NULL DEFAULT 'low',
+    selection_strategy   TEXT NOT NULL DEFAULT 'single',
+    schema_version       TEXT NOT NULL DEFAULT '1.0',
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+
+-- Append-only snapshot of every scheduling run (never updated, only inserted).
+-- Surrogate autoincrement PK guarantees a new row per run even when two runs
+-- share the same scheduled_at (sub-millisecond re-scheduling).
+CREATE TABLE IF NOT EXISTS scheduler_history (
+    hid                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    scheduled_at         TEXT NOT NULL,
+    schedule_id           TEXT NOT NULL,
+    graph_id             TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    task_id              TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    worker_id            TEXT REFERENCES workers(id) ON DELETE SET NULL,
+    wave                 INTEGER NOT NULL DEFAULT 1,
+    status               TEXT NOT NULL,
+    priority             INTEGER NOT NULL DEFAULT 0,
+    assignment_id        TEXT,
+    FOREIGN KEY (assignment_id)
+        REFERENCES resolver_assignments(assignment_id) ON DELETE SET NULL
+);
+
+-- Evolution of the scheduler's decisions (wave/state churn over runs).
+CREATE TABLE IF NOT EXISTS scheduler_evolution (
+    evolved_at           TEXT NOT NULL,
+    schedule_id          TEXT NOT NULL,
+    graph_id             TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    task_id              TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    from_wave            INTEGER,
+    to_wave              INTEGER,
+    from_state           TEXT,
+    to_state             TEXT,
+    change_type          TEXT NOT NULL,
+    reason               TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (evolved_at, task_id, from_state, to_state)
+);
+
+-- One run-level record per scheduling run (runnable ordering summary).
+CREATE TABLE IF NOT EXISTS scheduler_runs (
+    run_id               TEXT NOT NULL PRIMARY KEY,
+    graph_id             TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    goal                 TEXT NOT NULL DEFAULT '',
+    wave_count           INTEGER NOT NULL DEFAULT 0,
+    task_count           INTEGER NOT NULL DEFAULT 0,
+    critical_path_length INTEGER NOT NULL DEFAULT 0,
+    max_parallelism      INTEGER NOT NULL DEFAULT 0,
+    status               TEXT NOT NULL DEFAULT 'scheduled',
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+
+-- ===========================================================================
+-- M9.5 Execution Runtime
+-- ===========================================================================
+
+-- One execution session per schedule run.
+CREATE TABLE IF NOT EXISTS runtime_sessions (
+    session_id           TEXT NOT NULL PRIMARY KEY,
+    schedule_id          TEXT NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
+    state                TEXT NOT NULL DEFAULT 'created',
+    started_at           TEXT NOT NULL,
+    finished_at          TEXT,
+    schema_version       TEXT NOT NULL DEFAULT '1.0',
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+
+-- Append-only event log for a session.
+CREATE TABLE IF NOT EXISTS runtime_events (
+    eid                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id             TEXT NOT NULL,
+    session_id           TEXT NOT NULL REFERENCES runtime_sessions(session_id) ON DELETE CASCADE,
+    kind                 TEXT NOT NULL,
+    task_id              TEXT NOT NULL DEFAULT '',
+    worker_id            TEXT,
+    detail               TEXT NOT NULL DEFAULT '',
+    at                   TEXT NOT NULL
+);
+
+-- Per-task execution record (latest state). Updated in place as a task moves
+-- PENDING -> RUNNING -> terminal (the only mutable runtime table).
+CREATE TABLE IF NOT EXISTS runtime_tasks (
+    execution_id         TEXT NOT NULL PRIMARY KEY,
+    session_id           TEXT NOT NULL REFERENCES runtime_sessions(session_id) ON DELETE CASCADE,
+    schedule_id          TEXT NOT NULL,
+    task_id              TEXT NOT NULL,
+    worker_id            TEXT,
+    wave                 INTEGER NOT NULL DEFAULT 1,
+    attempt              INTEGER NOT NULL DEFAULT 1,
+    status               TEXT NOT NULL,
+    started_at           TEXT,
+    finished_at          TEXT,
+    duration_ms          INTEGER,
+    exit_code            INTEGER,
+    error                TEXT NOT NULL DEFAULT '',
+    output_reference     TEXT,
+    schema_version       TEXT NOT NULL DEFAULT '1.0',
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+
+-- Immutable outcome of each execution attempt (append-only; never updated).
+CREATE TABLE IF NOT EXISTS runtime_results (
+    result_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    execution_id         TEXT NOT NULL REFERENCES runtime_tasks(execution_id) ON DELETE CASCADE,
+    session_id           TEXT NOT NULL,
+    task_id              TEXT NOT NULL,
+    worker_id            TEXT,
+    success              INTEGER NOT NULL,
+    stdout               TEXT NOT NULL DEFAULT '',
+    stderr               TEXT NOT NULL DEFAULT '',
+    artifacts            TEXT NOT NULL DEFAULT '[]',
+    exit_code            INTEGER,
+    duration_ms          INTEGER NOT NULL DEFAULT 0,
+    error                TEXT NOT NULL DEFAULT '',
+    recorded_at          TEXT NOT NULL
+);
+
+-- Append-only snapshot of every session run (never updated, only inserted).
+CREATE TABLE IF NOT EXISTS runtime_history (
+    hid                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id           TEXT NOT NULL,
+    schedule_id          TEXT NOT NULL,
+    task_id              TEXT NOT NULL,
+    worker_id            TEXT,
+    status               TEXT NOT NULL,
+    attempt              INTEGER NOT NULL DEFAULT 1,
+    at                   TEXT NOT NULL
+);
+
+-- Decision/state evolution across sessions (append-only).
+CREATE TABLE IF NOT EXISTS runtime_evolution (
+    evolved_at           TEXT NOT NULL,
+    session_id           TEXT NOT NULL,
+    task_id              TEXT NOT NULL,
+    from_state           TEXT,
+    to_state             TEXT,
+    change_type          TEXT NOT NULL,
+    reason               TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (evolved_at, task_id, from_state, to_state)
+);
 """
 
 
@@ -709,7 +932,59 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if "schema_version" not in cols:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
+    # M9.3: resolver_history gained a surrogate AUTOINCREMENT PK so sub-millisecond
+    # re-resolutions append instead of colliding on (resolved_at, assignment_id).
+    # Rebuild in place for databases created before the change.
+    _ensure_resolver_history_pk(conn)
+    # M9.8: snapshots gains head_sha + manifest_hash to store the
+    # ingest-independent change signature used by `friday observe --changed`.
+    _ensure_snapshots_signature_cols(conn)
     conn.commit()
+
+
+def _ensure_snapshots_signature_cols(conn: sqlite3.Connection) -> None:
+    """Add head_sha / manifest_hash to snapshots if absent (idempotent)."""
+    if "snapshots" not in _existing_tables(conn):
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
+    if "head_sha" not in cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN head_sha TEXT")
+    if "manifest_hash" not in cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN manifest_hash TEXT")
+
+
+def _ensure_resolver_history_pk(conn: sqlite3.Connection) -> None:
+    """Rebuild resolver_history with an AUTOINCREMENT surrogate PK if missing.
+
+    Idempotent: skips when the table already has the `hid` column.
+    """
+    if "resolver_history" not in _existing_tables(conn):
+        return
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(resolver_history)")}
+    if "hid" in cols:
+        return
+    conn.execute(
+        "CREATE TABLE resolver_history_new ("
+        "hid INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "resolved_at TEXT NOT NULL, assignment_id TEXT, "
+        "graph_id TEXT NOT NULL, task_id TEXT NOT NULL, "
+        "worker_id TEXT, status TEXT NOT NULL, confidence TEXT NOT NULL, "
+        "score_total INTEGER NOT NULL DEFAULT 0, "
+        "matched_capabilities TEXT NOT NULL DEFAULT '[]', "
+        "missing_capabilities TEXT NOT NULL DEFAULT '[]', "
+        "selection_strategy TEXT NOT NULL, "
+        "FOREIGN KEY (assignment_id) REFERENCES resolver_assignments(assignment_id) "
+        "ON DELETE SET NULL)")
+    conn.execute(
+        "INSERT INTO resolver_history_new "
+        "(resolved_at, assignment_id, graph_id, task_id, worker_id, status, "
+        "confidence, score_total, matched_capabilities, missing_capabilities, "
+        "selection_strategy) "
+        "SELECT resolved_at, assignment_id, graph_id, task_id, worker_id, status, "
+        "confidence, score_total, matched_capabilities, missing_capabilities, "
+        "selection_strategy FROM resolver_history")
+    conn.execute("DROP TABLE resolver_history")
+    conn.execute("ALTER TABLE resolver_history_new RENAME TO resolver_history")
 
 
 def _ensure_observations_pk(conn: sqlite3.Connection) -> None:
@@ -1323,6 +1598,8 @@ class SnapshotRow:
     readme_hash: Optional[str]
     architecture_hash: Optional[str]
     identity_hash: Optional[str]
+    head_sha: Optional[str] = None
+    manifest_hash: Optional[str] = None
 
 
 def insert_snapshot(conn: sqlite3.Connection, snap: SnapshotRow) -> None:
@@ -1331,8 +1608,9 @@ def insert_snapshot(conn: sqlite3.Connection, snap: SnapshotRow) -> None:
         """
         INSERT INTO snapshots
             (observed_at, repo_path, repo_name, default_branch, commit_count,
-             last_commit_date, is_dirty, readme_hash, architecture_hash, identity_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             last_commit_date, is_dirty, readme_hash, architecture_hash, identity_hash,
+             head_sha, manifest_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             snap.observed_at,
@@ -1345,6 +1623,8 @@ def insert_snapshot(conn: sqlite3.Connection, snap: SnapshotRow) -> None:
             snap.readme_hash,
             snap.architecture_hash,
             snap.identity_hash,
+            snap.head_sha,
+            snap.manifest_hash,
         ),
     )
     conn.commit()
@@ -3641,3 +3921,588 @@ def _row_to_worker_version(r) -> WorkerVersionRow:
         worker_id=r["worker_id"], version=r["version"],
         registered_at=r["registered_at"], changelog=r["changelog"],
     )
+
+
+# ===========================================================================
+# M9.3 Capability Resolver — persistence helpers (append-only history)
+# ===========================================================================
+
+@dataclass
+class ResolverAssignmentRow:
+    """One persisted Task -> Worker assignment (resolver_assignments)."""
+    assignment_id: str
+    graph_id: str
+    task_id: str
+    worker_id: Optional[str]
+    status: str
+    confidence: str
+    reason: str
+    matched_capabilities: str
+    missing_capabilities: str
+    selection_strategy: str
+    schema_version: str
+    created_at: str
+    updated_at: str
+
+
+def insert_resolver_assignment(conn: sqlite3.Connection, row: dict) -> None:
+    """Insert one assignment, or UPDATE an existing one in place.
+
+    Uses UPDATE (not INSERT OR REPLACE) on re-resolution so the original row id
+    is preserved — INSERT OR REPLACE would DELETE+INSERT, which cascades to
+    resolver_history and breaks append-only history. The assignment's prior
+    state lives in history; the live row is simply advanced.
+    """
+    existing = conn.execute(
+        "SELECT 1 FROM resolver_assignments WHERE assignment_id = ?",
+        (row["assignment_id"],),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO resolver_assignments
+                (assignment_id, graph_id, task_id, worker_id, status, confidence,
+                 reason, matched_capabilities, missing_capabilities,
+                 selection_strategy, schema_version, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (row["assignment_id"], row["graph_id"], row["task_id"], row["worker_id"],
+             row["status"], row["confidence"], row["reason"],
+             row["matched_capabilities"], row["missing_capabilities"],
+             row["selection_strategy"], row["schema_version"],
+             row["created_at"], row["updated_at"]),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE resolver_assignments
+                SET worker_id = ?, status = ?, confidence = ?, reason = ?,
+                    matched_capabilities = ?, missing_capabilities = ?,
+                    selection_strategy = ?, schema_version = ?, updated_at = ?
+                WHERE assignment_id = ?
+            """,
+            (row["worker_id"], row["status"], row["confidence"], row["reason"],
+             row["matched_capabilities"], row["missing_capabilities"],
+             row["selection_strategy"], row["schema_version"],
+             row["updated_at"], row["assignment_id"]),
+        )
+
+
+def insert_resolver_history(conn: sqlite3.Connection, row: dict) -> None:
+    """Append one resolution-run snapshot (append-only, never updated)."""
+    conn.execute(
+        """
+        INSERT INTO resolver_history
+            (resolved_at, assignment_id, graph_id, task_id, worker_id, status,
+             confidence, score_total, matched_capabilities,
+             missing_capabilities, selection_strategy)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["resolved_at"], row["assignment_id"], row["graph_id"],
+         row["task_id"], row["worker_id"], row["status"], row["confidence"],
+         row["score_total"], row["matched_capabilities"],
+         row["missing_capabilities"], row["selection_strategy"]),
+    )
+
+
+def insert_resolver_evolution(conn: sqlite3.Connection, row: dict) -> None:
+    """Record one assignment-change event (append-only)."""
+    conn.execute(
+        """
+        INSERT INTO resolver_evolution
+            (evolved_at, graph_id, task_id, from_worker_id, to_worker_id,
+             change_type, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["evolved_at"], row["graph_id"], row["task_id"],
+         row["from_worker_id"], row["to_worker_id"], row["change_type"],
+         row["reason"]),
+    )
+
+
+def get_resolver_assignments(conn: sqlite3.Connection,
+                             graph_id: Optional[str] = None
+                             ) -> List[ResolverAssignmentRow]:
+    if graph_id is None:
+        rows = conn.execute(
+            "SELECT * FROM resolver_assignments ORDER BY graph_id, task_id"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM resolver_assignments WHERE graph_id = ? "
+            "ORDER BY task_id", (graph_id,)).fetchall()
+    return [_row_to_resolver_assignment(r) for r in rows]
+
+
+def get_resolver_assignment(conn: sqlite3.Connection,
+                           assignment_id: str) -> Optional[ResolverAssignmentRow]:
+    row = conn.execute(
+        "SELECT * FROM resolver_assignments WHERE assignment_id = ?",
+        (assignment_id,)).fetchone()
+    return _row_to_resolver_assignment(row) if row else None
+
+
+def get_resolver_assignment_by_task(conn: sqlite3.Connection,
+                                    task_id: str
+                                    ) -> Optional[ResolverAssignmentRow]:
+    """Lookup a resolver assignment by its task id (not assignment_id).
+
+    Orders by `updated_at` (the live row's recency); `resolver_assignments`
+    has no `resolved_at` column — per-run recency lives in `resolver_history`.
+    """
+    row = conn.execute(
+        "SELECT * FROM resolver_assignments WHERE task_id = ? "
+        "ORDER BY updated_at DESC", (task_id,)).fetchone()
+    return _row_to_resolver_assignment(row) if row else None
+
+
+def get_resolver_history(conn: sqlite3.Connection,
+                        assignment_id: Optional[str] = None
+                        ) -> list:
+    if assignment_id is None:
+        rows = conn.execute(
+            "SELECT * FROM resolver_history ORDER BY resolved_at"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM resolver_history WHERE assignment_id = ? "
+            "ORDER BY resolved_at", (assignment_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_resolver_evolution(conn: sqlite3.Connection,
+                          graph_id: Optional[str] = None) -> list:
+    if graph_id is None:
+        rows = conn.execute(
+            "SELECT * FROM resolver_evolution ORDER BY evolved_at"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM resolver_evolution WHERE graph_id = ? "
+            "ORDER BY evolved_at", (graph_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_resolver_assignments(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS c FROM resolver_assignments").fetchone()
+    return row["c"] if row else 0
+
+
+def _row_to_resolver_assignment(r) -> ResolverAssignmentRow:
+    return ResolverAssignmentRow(
+        assignment_id=r["assignment_id"], graph_id=r["graph_id"],
+        task_id=r["task_id"], worker_id=r["worker_id"], status=r["status"],
+        confidence=r["confidence"], reason=r["reason"] or "",
+        matched_capabilities=r["matched_capabilities"] or "[]",
+        missing_capabilities=r["missing_capabilities"] or "[]",
+        selection_strategy=r["selection_strategy"],
+        schema_version=r["schema_version"] if "schema_version" in r.keys() else "1.0",
+        created_at=r["created_at"], updated_at=r["updated_at"],
+    )
+
+
+# ===========================================================================
+# M9.4 Task Scheduler — persistence helpers (append-only history/evolution)
+# ===========================================================================
+
+@dataclass
+class SchedulerTaskRow:
+    """One persisted scheduled task (scheduler_tasks)."""
+    schedule_id: str
+    graph_id: str
+    assignment_id: str
+    task_id: str
+    worker_id: Optional[str]
+    phase: str
+    status: str
+    priority: int
+    wave: int
+    dependency_count: int
+    estimated_start: Optional[int]
+    estimated_finish: Optional[int]
+    blocked_reason: str
+    confidence: str
+    selection_strategy: str
+    schema_version: str
+    created_at: str
+    updated_at: str
+
+
+def insert_scheduler_run(conn: sqlite3.Connection, row: dict) -> None:
+    """Insert or replace one scheduler run record (one per graph run)."""
+    conn.execute(
+        """
+        INSERT INTO scheduler_runs
+            (run_id, graph_id, goal, wave_count, task_count,
+             critical_path_length, max_parallelism, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET
+            goal=excluded.goal, wave_count=excluded.wave_count,
+            task_count=excluded.task_count,
+            critical_path_length=excluded.critical_path_length,
+            max_parallelism=excluded.max_parallelism,
+            status=excluded.status, updated_at=excluded.updated_at
+        """,
+        (row["run_id"], row["graph_id"], row["goal"], row["wave_count"],
+         row["task_count"], row["critical_path_length"],
+         row["max_parallelism"], row["status"],
+         row["created_at"], row["updated_at"]),
+    )
+
+
+def insert_scheduler_task(conn: sqlite3.Connection, row: dict) -> None:
+    """Insert one scheduled task, or UPDATE an existing one in place.
+
+    UPDATE (not INSERT OR REPLACE) preserves the row id so scheduler_history
+    (FK ON DELETE SET NULL) is never cascade-deleted. Append-only history keeps
+    the prior state.
+    """
+    existing = conn.execute(
+        "SELECT 1 FROM scheduler_tasks WHERE schedule_id = ?",
+        (row["schedule_id"],),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO scheduler_tasks
+                (schedule_id, graph_id, assignment_id, task_id, worker_id,
+                 phase, status, priority, wave, dependency_count,
+                 estimated_start, estimated_finish, blocked_reason,
+                 confidence, selection_strategy, schema_version,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (row["schedule_id"], row["graph_id"], row["assignment_id"],
+             row["task_id"], row["worker_id"], row["phase"], row["status"],
+             row["priority"], row["wave"], row["dependency_count"],
+             row["estimated_start"], row["estimated_finish"],
+             row["blocked_reason"], row["confidence"],
+             row["selection_strategy"], row["schema_version"],
+             row["created_at"], row["updated_at"]),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE scheduler_tasks
+                SET graph_id = ?, assignment_id = ?, worker_id = ?,
+                    phase = ?, status = ?, priority = ?, wave = ?,
+                    dependency_count = ?, estimated_start = ?,
+                    estimated_finish = ?, blocked_reason = ?,
+                    confidence = ?, selection_strategy = ?, schema_version = ?,
+                    updated_at = ?
+                WHERE schedule_id = ?
+            """,
+            (row["graph_id"], row["assignment_id"], row["worker_id"],
+             row["phase"], row["status"], row["priority"], row["wave"],
+             row["dependency_count"], row["estimated_start"],
+             row["estimated_finish"], row["blocked_reason"], row["confidence"],
+             row["selection_strategy"], row["schema_version"],
+             row["updated_at"], row["schedule_id"]),
+        )
+
+
+def insert_scheduler_history(conn: sqlite3.Connection, row: dict) -> None:
+    """Append one scheduling-run snapshot (append-only, never updated)."""
+    conn.execute(
+        """
+        INSERT INTO scheduler_history
+            (scheduled_at, schedule_id, graph_id, task_id, worker_id, wave,
+             status, priority, assignment_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["scheduled_at"], row["schedule_id"], row["graph_id"],
+         row["task_id"], row["worker_id"], row["wave"], row["status"],
+         row["priority"], row["assignment_id"]),
+    )
+
+
+def insert_scheduler_evolution(conn: sqlite3.Connection, row: dict) -> None:
+    """Record one scheduler decision change (append-only)."""
+    conn.execute(
+        """
+        INSERT INTO scheduler_evolution
+            (evolved_at, schedule_id, graph_id, task_id, from_wave, to_wave,
+             from_state, to_state, change_type, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["evolved_at"], row["schedule_id"], row["graph_id"],
+         row["task_id"], row["from_wave"], row["to_wave"],
+         row["from_state"], row["to_state"], row["change_type"],
+         row["reason"]),
+    )
+
+
+def get_scheduler_tasks(conn: sqlite3.Connection,
+                        graph_id: Optional[str] = None) -> List[dict]:
+    if graph_id is None:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_tasks ORDER BY graph_id, wave, priority DESC, task_id"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_tasks WHERE graph_id = ? "
+            "ORDER BY wave, priority DESC, task_id", (graph_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_scheduler_task(conn: sqlite3.Connection, schedule_id: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM scheduler_tasks WHERE schedule_id = ?",
+        (schedule_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_scheduler_runs(conn: sqlite3.Connection,
+                       graph_id: Optional[str] = None) -> List[dict]:
+    if graph_id is None:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_runs ORDER BY created_at DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_runs WHERE graph_id = ? "
+            "ORDER BY created_at DESC", (graph_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_scheduler_history(conn: sqlite3.Connection,
+                          graph_id: Optional[str] = None) -> List[dict]:
+    if graph_id is None:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_history ORDER BY scheduled_at"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_history WHERE graph_id = ? "
+            "ORDER BY scheduled_at", (graph_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_scheduler_evolution(conn: sqlite3.Connection,
+                            graph_id: Optional[str] = None) -> List[dict]:
+    if graph_id is None:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_evolution ORDER BY evolved_at"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM scheduler_evolution WHERE graph_id = ? "
+            "ORDER BY evolved_at", (graph_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ===========================================================================
+# M9.5 Execution Runtime — persistence helpers
+# ===========================================================================
+
+def insert_runtime_session(conn: sqlite3.Connection, row: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO runtime_sessions
+            (session_id, schedule_id, state, started_at, finished_at,
+             schema_version, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["session_id"], row["schedule_id"], row["state"],
+         row["started_at"], row.get("finished_at"),
+         row.get("schema_version", "1.0"),
+         row["created_at"], row["updated_at"]),
+    )
+
+
+def update_runtime_session(conn: sqlite3.Connection, row: dict) -> None:
+    conn.execute(
+        """
+        UPDATE runtime_sessions
+        SET state = ?, finished_at = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (row["state"], row.get("finished_at"), row["updated_at"],
+         row["session_id"]),
+    )
+
+
+def get_runtime_sessions(conn: sqlite3.Connection,
+                         schedule_id: Optional[str] = None) -> List[dict]:
+    if schedule_id is None:
+        rows = conn.execute(
+            "SELECT * FROM runtime_sessions ORDER BY created_at DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM runtime_sessions WHERE schedule_id = ? "
+            "ORDER BY created_at DESC", (schedule_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_runtime_session(conn: sqlite3.Connection,
+                        session_id: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM runtime_sessions WHERE session_id = ?",
+        (session_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def insert_runtime_event(conn: sqlite3.Connection, row: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO runtime_events
+            (event_id, session_id, kind, task_id, worker_id, detail, at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["event_id"], row["session_id"], row["kind"],
+         row.get("task_id", ""), row.get("worker_id"),
+         row.get("detail", ""), row["at"]),
+    )
+
+
+def get_runtime_events(conn: sqlite3.Connection,
+                       session_id: str) -> List[dict]:
+    rows = conn.execute(
+        "SELECT * FROM runtime_events WHERE session_id = ? ORDER BY eid",
+        (session_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_runtime_task(conn: sqlite3.Connection, row: dict) -> None:
+    """Insert or UPDATE a task's latest state in place (the only mutable
+    runtime table). A crash mid-run leaves a consistent last-known state."""
+    existing = conn.execute(
+        "SELECT 1 FROM runtime_tasks WHERE execution_id = ?",
+        (row["execution_id"],)).fetchone()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO runtime_tasks
+                (execution_id, session_id, schedule_id, task_id, worker_id,
+                 wave, attempt, status, started_at, finished_at, duration_ms,
+                 exit_code, error, output_reference, schema_version,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (row["execution_id"], row["session_id"], row["schedule_id"],
+             row["task_id"], row.get("worker_id"),
+             row.get("wave", 1), row.get("attempt", 1), row["status"],
+             row.get("started_at"), row.get("finished_at"),
+             row.get("duration_ms"), row.get("exit_code"), row.get("error", ""),
+             row.get("output_reference"),
+             row.get("schema_version", "1.0"),
+             row["created_at"], row["updated_at"]),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE runtime_tasks
+            SET session_id = ?, schedule_id = ?, worker_id = ?, wave = ?,
+                attempt = ?, status = ?, started_at = ?, finished_at = ?,
+                duration_ms = ?, exit_code = ?, error = ?, output_reference = ?,
+                updated_at = ?
+            WHERE execution_id = ?
+            """,
+            (row["session_id"], row["schedule_id"], row.get("worker_id"),
+             row.get("wave", 1), row.get("attempt", 1), row["status"],
+             row.get("started_at"), row.get("finished_at"),
+             row.get("duration_ms"), row.get("exit_code"), row.get("error", ""),
+             row.get("output_reference"), row["updated_at"],
+             row["execution_id"]),
+        )
+
+
+def get_runtime_tasks(conn: sqlite3.Connection,
+                      session_id: Optional[str] = None) -> List[dict]:
+    if session_id is None:
+        rows = conn.execute(
+            "SELECT * FROM runtime_tasks ORDER BY session_id, wave, task_id"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM runtime_tasks WHERE session_id = ? "
+            "ORDER BY wave, task_id", (session_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_runtime_task(conn: sqlite3.Connection,
+                     execution_id: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM runtime_tasks WHERE execution_id = ?",
+        (execution_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def insert_runtime_result(conn: sqlite3.Connection, row: dict) -> None:
+    """Append-only outcome of one execution attempt."""
+    conn.execute(
+        """
+        INSERT INTO runtime_results
+            (execution_id, session_id, task_id, worker_id, success, stdout,
+             stderr, artifacts, exit_code, duration_ms, error, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["execution_id"], row["session_id"], row["task_id"],
+         row.get("worker_id"),
+         1 if row.get("success") else 0,
+         row.get("stdout", ""), row.get("stderr", ""), row.get("artifacts", "[]"),
+         row.get("exit_code"), row.get("duration_ms", 0), row.get("error", ""),
+         row["recorded_at"]),
+    )
+
+
+def get_runtime_results(conn: sqlite3.Connection,
+                        session_id: str) -> List[dict]:
+    rows = conn.execute(
+        "SELECT * FROM runtime_results WHERE session_id = ? ORDER BY result_id",
+        (session_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_runtime_history(conn: sqlite3.Connection, row: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO runtime_history
+            (session_id, schedule_id, task_id, worker_id, status, attempt, at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["session_id"], row["schedule_id"], row["task_id"],
+         row.get("worker_id"), row["status"], row.get("attempt", 1),
+         row["at"]),
+    )
+
+
+def get_runtime_history(conn: sqlite3.Connection,
+                        session_id: Optional[str] = None) -> List[dict]:
+    if session_id is None:
+        rows = conn.execute(
+            "SELECT * FROM runtime_history ORDER BY hid"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM runtime_history WHERE session_id = ? ORDER BY hid",
+            (session_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_runtime_evolution(conn: sqlite3.Connection, row: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO runtime_evolution
+            (evolved_at, session_id, task_id, from_state, to_state,
+             change_type, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (row["evolved_at"], row["session_id"], row["task_id"],
+         row.get("from_state"), row.get("to_state"),
+         row["change_type"], row.get("reason", "")),
+    )
+
+
+def get_runtime_evolution(conn: sqlite3.Connection,
+                          session_id: Optional[str] = None) -> List[dict]:
+    if session_id is None:
+        rows = conn.execute(
+            "SELECT * FROM runtime_evolution ORDER BY evolved_at"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM runtime_evolution WHERE session_id = ? "
+            "ORDER BY evolved_at", (session_id,)).fetchall()
+    return [dict(r) for r in rows]
