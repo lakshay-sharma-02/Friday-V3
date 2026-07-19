@@ -18,7 +18,7 @@ import pytest
 
 from friday.db import connect
 from friday.runtime import dispatch
-from friday.runtime.models import RuntimeTask, RunState
+from friday.runtime.models import RuntimeTask, RunState, ExecutionResult
 from friday.runtime.workers import (
     BuiltinPythonWorker,
     BuiltinShellWorker,
@@ -29,6 +29,30 @@ from friday.runtime.workers import (
     resolve_worker,
 )
 from friday.worker.engine import WorkerRegistry, BUILTIN_WORKERS
+
+
+from friday.runtime.workers import CLIWorker, Invocation, VerificationResult
+
+
+class _EchoWorker(CLIWorker):
+    worker_id = "worker:echo"
+    def build_invocation(self, task):
+        return Invocation(argv=["printf", "%s", (task.runtime_payload or "")])
+
+
+def test_cliworker_runs_invocation():
+    t = _task("hi")
+    res = _EchoWorker().execute(t)
+    assert res.success is True
+    assert res.stdout == "hi"
+
+
+def test_cliworker_default_verify():
+    ok = ExecutionResult(success=True, exit_code=0, stdout="x")
+    bad = ExecutionResult(success=True, exit_code=0, stdout="")
+    t = _task("hi")
+    assert CLIWorker().verify(t, ok).passed is True
+    assert CLIWorker().verify(t, bad).passed is False
 
 
 def _task(payload: str = "", **kw) -> RuntimeTask:

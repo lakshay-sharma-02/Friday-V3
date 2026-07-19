@@ -31,13 +31,16 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 from .models import ExecutionResult, Worker
+from ..worker.models import VerificationResult
 
 
 # Honour a global timeout (seconds) for any external process.
@@ -610,3 +613,58 @@ BUILTIN_EXECUTION_IDS = (
     "worker:shell", "worker:git", "worker:filesystem", "worker:python",
     "worker:testing", "worker:documentation",
 )
+
+
+# ---------------------------------------------------------------------------
+# CLIWorker — generic subprocess base
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Invocation:
+    argv: list
+    stdin: Optional[str] = None
+    cwd: str = "."
+    env: dict = field(default_factory=dict)
+    timeout: int = _DEFAULT_TIMEOUT
+    stream: bool = False
+
+
+class CLIWorker(Worker):
+    """Base for any worker invoked via a subprocess. Owns ALL subprocess
+    mechanics; subclasses implement only build_invocation(task)."""
+    def execute(self, task) -> ExecutionResult:
+        from datetime import datetime, timezone
+        inv = self.build_invocation(task)
+        t0 = time.monotonic()
+        started = datetime.now(timezone.utc).isoformat()
+        try:
+            proc = subprocess.run(
+                inv.argv, input=inv.stdin, cwd=inv.cwd,
+                env=inv.env or None, capture_output=True, text=True,
+                timeout=inv.timeout)
+            dur = int((time.monotonic() - t0) * 1000)
+            return ExecutionResult(
+                success=proc.returncode == 0, stdout=proc.stdout,
+                stderr=proc.stderr, exit_code=proc.returncode,
+                duration_ms=dur,
+                error="" if proc.returncode == 0 else proc.stderr,
+                worker_id=self.worker_id, started_at=started,
+                ended_at=datetime.now(timezone.utc).isoformat())
+        except Exception as e:
+            dur = int((time.monotonic() - t0) * 1000)
+            return ExecutionResult(
+                success=False, stdout="", stderr=str(e), exit_code=None,
+                duration_ms=dur, error=f"{type(e).__name__}: {e}",
+                worker_id=self.worker_id, started_at=started,
+                ended_at=datetime.now(timezone.utc).isoformat())
+
+    def build_invocation(self, task) -> Invocation:
+        raise NotImplementedError
+
+    def verify(self, task, result: ExecutionResult) -> VerificationResult:
+        """Default verification: exit 0 + non-empty stdout (sane for AI CLIs)."""
+        passed = result.exit_code == 0 and bool((result.stdout or "").strip())
+        return VerificationResult(
+            passed=passed,
+            reason="exit_code==0 and stdout non-empty" if passed
+            else "exit_code!=0 or empty stdout")
