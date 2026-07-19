@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# OS / editor
+.directory
+.DS_Store
+*.swp
+
+# Claude Code local settings (machine-specific)
+.claude/
+
+# local tool cache
+.zcode/

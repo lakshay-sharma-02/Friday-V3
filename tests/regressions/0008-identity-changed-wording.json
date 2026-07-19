@@ -1,0 +1,13 @@
+{
+  "id": "0008-identity-changed-wording",
+  "title": "Identity/explanation must lead with purpose and meaning, not static-analysis detail",
+  "question": "Tell me about friday-v3",
+  "required_scope": "project",
+  "expected": {
+    "objective": "explain",
+    "min_repos_cited": 1
+  },
+  "forbidden": [],
+  "required_evidence": ["friday-v3"],
+  "note": "An explain/tell-me-about question resolves to EXPLAIN (purpose-first). It must not open with architecture/component minutiae."
+}

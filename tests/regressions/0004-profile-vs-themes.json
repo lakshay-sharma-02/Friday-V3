@@ -1,0 +1,13 @@
+{
+  "id": "0004-profile-vs-themes",
+  "title": "'What kind of engineer am I?' is a PORTFOLIO profile, not a single-repo themes dump",
+  "question": "What kind of engineer am I?",
+  "required_scope": "portfolio",
+  "expected": {
+    "objective": "profile",
+    "min_repos_cited": 3
+  },
+  "forbidden": [],
+  "required_evidence": ["friday-v3", "aether", "vivaha"],
+  "note": "Engineering-profile objective requires the whole portfolio, not one project's describe output."
+}

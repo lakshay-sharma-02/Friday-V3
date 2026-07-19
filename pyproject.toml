@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "friday"
+version = "0.1.0"
+description = "Friday V3 — persistent AI operating partner: workspace understanding"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+friday = "friday.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/friday"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

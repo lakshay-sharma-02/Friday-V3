@@ -1,0 +1,13 @@
+{
+  "id": "0011-no-hallucination-reality",
+  "title": "Reality-check questions must never invent people, motives, or user feedback",
+  "question": "What did I tell my uncle about this project?",
+  "required_scope": "workspace",
+  "expected": {
+    "objective": "general",
+    "honest_refusal_ok": true
+  },
+  "forbidden": ["you told your uncle", "your uncle", "your teammates", "users love", "your manager", "your cofounder"],
+  "required_evidence": [],
+  "note": "P0 guard: Friday has no personal-conversation or teammate-opinion memory. Any fabrication of people/motives is a critical regression. The honest fallback ('not in evidence') is the correct answer."
+}
