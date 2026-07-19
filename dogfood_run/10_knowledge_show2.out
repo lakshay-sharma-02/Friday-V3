@@ -1,0 +1,113 @@
+
+Portfolio Integration (6):
+
+  [·] vivaha (M)
+      vivaha is a candidate to integrate with Friday (stored relationship with Friday).
+      Evidence: 1, Verified: 0x
+  [·] finance-tracker (M)
+      finance-tracker is a candidate to integrate with Friday (shares technology with Friday; stored relationship with Friday).
+      Evidence: 1, Verified: 0x
+  [·] MindWell (M)
+      MindWell is a candidate to integrate with Friday (purpose indicates a natural fit with an operating partner; stored relationship with Friday).
+      Evidence: 1, Verified: 0x
+  [·] Friday V3 (M)
+      Friday V3 is a candidate to integrate with Friday (shares technology with Friday; stored relationship with Friday).
+      Evidence: 1, Verified: 0x
+  [·] Friday V2 (M)
+      Friday V2 is a candidate to integrate with Friday (stored relationship with Friday).
+      Evidence: 1, Verified: 0x
+  [·] Aether (M)
+      Aether is a candidate to integrate with Friday (purpose indicates a natural fit with an operating partner; stored relationship with Friday).
+      Evidence: 1, Verified: 0x
+
+Portfolio Technology (6):
+
+  [·] npm (M)
+      npm is used across 2 projects (MindWell, vivaha).
+      Evidence: 2, Verified: 0x
+  [·] TypeScript (M)
+      TypeScript is used across 2 projects (MindWell, vivaha).
+      Evidence: 2, Verified: 0x
+  [·] Supabase (M)
+      Supabase is used across 2 projects (MindWell, vivaha).
+      Evidence: 2, Verified: 0x
+  [·] React (M)
+      React is used across 2 projects (MindWell, vivaha).
+      Evidence: 2, Verified: 0x
+  [·] Node.js (M)
+      Node.js is used across 2 projects (MindWell, vivaha).
+      Evidence: 2, Verified: 0x
+  [·] Python (S)
+      Python is used across 3 projects (Friday, Friday V3, finance-tracker).
+      Evidence: 3, Verified: 0x
+
+Project Architecture (7):
+
+  [·] vivaha (M)
+      vivaha is built as a Next.js (router type unknown).
+      Evidence: 1, Verified: 0x
+  [·] finance-tracker (M)
+      finance-tracker is built as a Library.
+      Evidence: 1, Verified: 0x
+  [·] MindWell (M)
+      MindWell is built as a React SPA.
+      Evidence: 1, Verified: 0x
+  [·] Friday V3 (M)
+      Friday V3 is built as a CLI tool.
+      Evidence: 1, Verified: 0x
+  [·] Friday V2 (M)
+      Friday V2 is built as a Library.
+      Evidence: 1, Verified: 0x
+  [·] Friday (M)
+      Friday is built as a FastAPI REST API.
+      Evidence: 1, Verified: 0x
+  [·] Aether (M)
+      Aether is built as a Cargo workspace.
+      Evidence: 1, Verified: 0x
+
+Project Identity (6):
+
+  [·] finance-tracker (M)
+      finance-tracker is a project for: A finance tracker project..
+      Evidence: 1, Verified: 0x
+  [·] demo-observe (M)
+      demo-observe is a project for: A demo observe project..
+      Evidence: 1, Verified: 0x
+  [·] MindWell (M)
+      MindWell is a project for: A mental health platform offering anonymous storytelling, resource access, mood tracking, and community support, with separate interfaces for users and admins..
+      Evidence: 1, Verified: 0x
+  [·] Friday V2 (M)
+      Friday V2 is a project for: Friday exists to make software engineers dramatically more capable..
+      Evidence: 1, Verified: 0x
+  [·] Friday (M)
+      Friday is a project for: Guidelines for project task completion, testing, and code style practices..
+      Evidence: 1, Verified: 0x
+  [·] Aether (M)
+      Aether is a project for: Aether is an AI-native operating system written in Rust where AI is integrated as a first-class kernel subsystem with direct access to hardware state and system telemetry, rather than as a separate application..
+      Evidence: 1, Verified: 0x
+
+Project Stack (7):
+
+  [·] vivaha (M)
+      vivaha uses languages: CSS, JavaScript, Markdown, SQL, Shell, TypeScript; technologies: Next.js, Node.js, React, Supabase, TypeScript, npm.
+      Evidence: 1, Verified: 0x
+  [·] finance-tracker (M)
+      finance-tracker uses technologies: Python.
+      Evidence: 1, Verified: 0x
+  [·] MindWell (M)
+      MindWell uses languages: CSS, HTML, JavaScript, Markdown, SQL, TypeScript; technologies: Node.js, React, Supabase, TypeScript, npm.
+      Evidence: 1, Verified: 0x
+  [·] Friday V3 (M)
+      Friday V3 uses languages: Markdown, Python; technologies: Python.
+      Evidence: 1, Verified: 0x
+  [·] Friday V2 (M)
+      Friday V2 uses languages: Markdown, Python.
+      Evidence: 1, Verified: 0x
+  [·] Friday (M)
+      Friday uses languages: Markdown, Python, SQL; technologies: Python.
+      Evidence: 1, Verified: 0x
+  [·] Aether (M)
+      Aether uses languages: HTML, Markdown, Rust, Shell; technologies: Cargo, Rust.
+      Evidence: 1, Verified: 0x
+
+Total: 32

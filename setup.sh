@@ -17,6 +17,13 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 export REPO_DIR
 
+# ---- 0. Pip install (if not already) ----
+cd "$REPO_DIR"
+if ! python3 -c "import friday" 2>/dev/null; then
+  echo "[setup] Installing friday package ..."
+  pip install -e . 2>&1 | tail -3
+fi
+
 # ---- 1. npm-global on PATH (claude resolves) ----
 NPM_BIN="$HOME/.npm-global/bin"
 if [[ -d "$NPM_BIN" && ":$PATH:" != *":$NPM_BIN:"* ]]; then

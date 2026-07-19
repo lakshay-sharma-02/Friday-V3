@@ -1,0 +1,9 @@
+Your engineering effort is concentrated in three active areas right now:
+
+**Active uncommitted work** centers on Friday V3, vivaha, and finance-tracker. You have unstaged changes across all three, indicating they're your current focus.
+
+**Recent commit velocity** shows Friday V3 leading at ~8.5 commits/day over its lifetime, followed by vivaha at ~6.9 commits/day and Friday at ~4.7 commits/day. This suggests Friday V3 (a Python CLI tool) and vivaha (a Next.js full-stack project) are your most actively developed projects by momentum.
+
+**Where effort has stalled** is less clear from the Evidence. Friday V2 and demo-observe show no uncommitted changes or recent velocity data, but the data only captures a single observation point — long-term trends cannot yet be determined. You'd need to run `friday observe` over time to see which projects have genuinely stalled versus which are simply dormant.
+
+The broader context: you have seven projects candidate for integration with Friday (your operating partner platform), spanning Python-based tools (Friday, Friday V3, finance-tracker) and full-stack JavaScript/TypeScript projects (vivaha, MindWell). The uncommitted changes across Friday, Friday V3, and finance-tracker suggest you're actively building or refining the Python side of this ecosystem.

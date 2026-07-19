@@ -1,0 +1,7 @@
+You're repeatedly choosing React and Supabase as your shared architecture. Both MindWell and vivaha are built on this stack.
+
+Structurally, you keep reaching for a Library pattern—it appears in both Friday V2 and finance-tracker.
+
+This suggests you're building toward reusable, composable systems rather than one-off applications. You're establishing a foundation that lets you move faster across projects by standardizing on a proven tech pairing and repeating structural patterns you trust.
+
+Confidence: Medium. This is based on detected technologies and structural choices across 5 of your 8 repositories. I'm missing technology detection for Friday V2 and demo-observe, which could confirm or shift the picture.

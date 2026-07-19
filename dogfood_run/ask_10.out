@@ -1,0 +1,18 @@
+# Weakly Supported Knowledge
+
+**Accumulated knowledge**: The Evidence reports 32 items, all sourced from current project state with no observation history. This means the knowledge base has no longitudinal grounding—no prior snapshots to validate whether reported facts are stable, emerging, or changing.
+
+**What each project is**: Most projects have minimal or generic purpose statements. Friday itself is described only as "Guidelines for project task completion, testing, and code style practices"—a documentation framing rather than a mission. finance-tracker is "A finance tracker project" (generic). demo-observe is "A demo observe project" (tautological). Only MindWell, Aether, and Friday V2 carry substantive purpose descriptions. The relationship claims (candidates to integrate with Friday) are stored assertions without evidence of actual integration readiness, dependency analysis, or architectural alignment.
+
+**Technology and language choices**: The Evidence shows what technologies are *used* (Python across 3 projects, TypeScript/React/Supabase across 2), but does not explain *why* those choices were made, whether they are intentional patterns, or whether there is technical coherence across the portfolio.
+
+**Long-term patterns**: Cannot be determined. The Evidence explicitly notes that "only one observation exists"—no basis for trend detection, drift analysis, or habit formation.
+
+**What is not yet determined**: 
+- The actual integration points between projects marked as "candidates"
+- Whether technology overlap (Python, TypeScript stacks) reflects architectural strategy or accidental convergence
+- Friday's own capabilities and constraints as an operating partner
+- How vivaha, MindWell, Aether, and the finance/demo projects relate to Friday's core mission
+- Whether the portfolio is coherent or diverging
+
+**Confidence: Weak.** The knowledge is current-state snapshots without temporal depth, minimal purposeful documentation, and no evidence trails for relationship claims.

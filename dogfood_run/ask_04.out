@@ -1,0 +1,13 @@
+You have seven projects organized around three strong recurring themes.
+
+**AI infrastructure** is your most coherent area. Aether is an AI-native operating system written in Rust that treats AI as a first-class kernel subsystem with direct hardware access, rather than as a separate application layer. MindWell and vivaha also carry AI infrastructure signals, though their specific roles aren't detailed in the evidence.
+
+**Developer tooling** is your second major theme. Friday, Friday V2, and Friday V3 form a lineage focused on making software engineers more capable—Friday started as guidelines for task completion, testing, and code style, while Friday V2 explicitly aims to make engineers "dramatically more capable." Finance-tracker and demo-observe also appear in this cluster, though their specific purposes aren't stated.
+
+**Mental health** appears as a secondary theme, primarily through MindWell, a platform offering anonymous storytelling, resource access, mood tracking, and community support with separate user and admin interfaces.
+
+The evidence notes weak signals around research across most projects, and commercial product potential in MindWell specifically.
+
+**Stated intent:** The clearest stated intent is making engineers capable (Friday lineage) and building AI systems that integrate deeply with infrastructure rather than sitting on top of it (Aether). MindWell suggests you're also exploring mental health as a product space.
+
+I'm missing detected technologies for Friday V2 and demo-observe, and I don't have your full observation history. Running `friday observe` would show recent activity signals to indicate where momentum is highest.

@@ -1,0 +1,10 @@
+I don't have enough evidence to answer what you're avoiding.
+
+The Evidence shows what you're *reaching for* — React/Supabase as a shared stack, library patterns as a structural choice — but those are affirmations, not avoidances. To identify what you're avoiding, I'd need to see:
+
+- Decisions you've explicitly rejected or pivoted away from (e.g., "we started with X, switched to Y")
+- Technologies present in early projects but absent in recent ones
+- Architectural patterns you've abandoned
+- Constraints or requirements you've stopped pursuing
+
+The missing observation history would help here. Run `friday observe` to capture current project states, and I can compare against your actual direction to spot what's being deliberately left behind versus what's just inactive.

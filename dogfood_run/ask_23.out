@@ -1,0 +1,3 @@
+I don't have enough evidence to answer that. The retrieval system couldn't detect technologies across your projects (0% coverage), so I can't identify which ones share technical foundations or reinforce each other through shared tooling, frameworks, or languages.
+
+To answer this question properly, I'd need technology detection data for your projects. You could help by describing which projects use which technologies, or by checking if technology metadata is available in your project configuration files (package.json, Gemfile, pom.xml, go.mod, etc.).

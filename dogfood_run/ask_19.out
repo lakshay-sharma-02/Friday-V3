@@ -1,0 +1,7 @@
+I don't have enough evidence to answer that.
+
+To measure which technologies are becoming less important, I'd need observation history showing technology adoption over time. The Evidence provides only the current state of each project—no prior snapshots to compare against.
+
+The missing evidence flags this directly: "observation history (run `friday observe`)."
+
+To establish drift, run `friday observe` to capture the current state, then re-run it periodically. That will give you the baselines needed to see which technologies are being adopted, maintained, or phased out across your projects.

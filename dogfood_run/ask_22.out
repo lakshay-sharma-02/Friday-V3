@@ -1,0 +1,5 @@
+I don't have enough evidence to answer that.
+
+The Evidence shows current state snapshots for each project but explicitly notes "No observation history to measure drift against." Drift—what has remained stable versus what has changed—requires comparing a project's direction or state over time. Without historical observations, I can only see where things are now, not where they've been or how they've moved.
+
+To answer this question properly, you'd need to run `friday observe` to build an observation history, then compare it against current state.

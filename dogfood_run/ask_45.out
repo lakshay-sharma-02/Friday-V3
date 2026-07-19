@@ -1,0 +1,15 @@
+Friday V3 is a CLI tool with a modular Python architecture spanning four packages: `friday`, `friday/context`, `friday/knowledge`, and `friday/observation` across 92 source files.
+
+**Architecture.** The tool follows a layered pattern: user invokes the CLI via argument parser, which routes to command handlers. Code is isolated from tests using a standard `src/` + `tests/` separation. No circular dependencies were detected, suggesting clean package boundaries.
+
+**Components.** Three major functional areas are present:
+- Authentication, handled through `src/friday/context/session.py`
+- LLM interface in `src/friday/llm.py` with corresponding tests
+- An automated test suite using pytest
+
+**Entry points.** The tool exposes multiple entry mechanisms:
+- A CLI console script declared in the manifest
+- An executable script at `dogfood_run/run.sh`
+- Two `main()` entry functions: one in `src/friday/architecture.py` and one in `src/friday/cli.py`, both with `__main__` guards
+
+Confidence: Medium. Component and entry point detection is based on file naming and structural patterns rather than explicit documentation. The architecture is well-organized but the specific purpose and interaction between entry points would benefit from clarification.

@@ -1,0 +1,14 @@
+I can't answer this question based on the Evidence provided.
+
+The recommendation names projects that should merge (Aether, Friday V2, Friday V3, MindWell, finance-tracker, vivaha) and clusters them by theme (AI infrastructure, Developer tooling, Operating systems, Mental health). But it doesn't explain *which pairs or groups* should actually merge—only that there's thematic convergence.
+
+To give you a grounded answer on merge candidates, I'd need to know:
+
+- The actual purpose and scope of each project (not just theme labels)
+- How they interact or depend on each other today
+- Whether they serve the same users or solve the same problem in different ways
+- What barriers or benefits a merge would create
+
+The Evidence also flags missing data: Friday V2 and demo-observe lack detected technologies, and there's no observation history. That gaps your visibility into the full picture.
+
+My suggestion: Run `friday observe` to fill the gaps, then ask again with the full Evidence. Or if you already have strong opinions about why certain projects overlap, tell me which pairs you're considering and I can help you think through the tradeoffs.
