@@ -668,3 +668,64 @@ class CLIWorker(Worker):
             passed=passed,
             reason="exit_code==0 and stdout non-empty" if passed
             else "exit_code!=0 or empty stdout")
+
+
+# ---------------------------------------------------------------------------
+# External AI CLI adapters — auto-detected via PATH
+# ---------------------------------------------------------------------------
+
+def _resolve_binary(name: str) -> str:
+    """Full PATH to a binary if present, else the bare name (so discovery and
+    reporting work without launching a missing tool)."""
+    return shutil.which(name) or name
+
+
+class ClaudeCodeWorker(CLIWorker):
+    worker_id = "worker:claude"
+    def build_invocation(self, task):
+        return Invocation(argv=[_resolve_binary("claude"), "--print",
+                                 _payload(task)], timeout=_DEFAULT_TIMEOUT)
+
+
+class CodexWorker(CLIWorker):
+    worker_id = "worker:codex"
+    def build_invocation(self, task):
+        return Invocation(argv=[_resolve_binary("codex"), _payload(task)],
+                           timeout=_DEFAULT_TIMEOUT)
+
+
+class GeminiWorker(CLIWorker):
+    worker_id = "worker:gemini"
+    def build_invocation(self, task):
+        return Invocation(argv=[_resolve_binary("gemini"), _payload(task)],
+                           timeout=_DEFAULT_TIMEOUT)
+
+
+class OpenCodeWorker(CLIWorker):
+    worker_id = "worker:opencode"
+    def build_invocation(self, task):
+        return Invocation(argv=[_resolve_binary("opencode"), _payload(task)],
+                           timeout=_DEFAULT_TIMEOUT)
+
+
+class AiderWorker(CLIWorker):
+    worker_id = "worker:aider"
+    def build_invocation(self, task):
+        return Invocation(argv=[_resolve_binary("aider"), "--message",
+                                 _payload(task)], timeout=_DEFAULT_TIMEOUT)
+
+
+class DeepSeekWorker(CLIWorker):
+    worker_id = "worker:deepseek"
+    def build_invocation(self, task):
+        if shutil.which("deepseek"):
+            return Invocation(argv=[_resolve_binary("deepseek"), _payload(task)],
+                               timeout=_DEFAULT_TIMEOUT)
+        # API mode (HTTP) would override execute(); here we still produce a
+        # valid Invocation shape so verification can report unavailability
+        # gracefully rather than crashing.
+        return Invocation(argv=[_resolve_binary("deepseek")], timeout=_DEFAULT_TIMEOUT)
+
+    def is_available(self) -> bool:
+        return shutil.which("deepseek") is not None or bool(
+            os.environ.get("DEEPSEEK_API_KEY"))

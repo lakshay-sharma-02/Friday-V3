@@ -32,6 +32,25 @@ from friday.worker.engine import WorkerRegistry, BUILTIN_WORKERS
 
 
 from friday.runtime.workers import CLIWorker, Invocation, VerificationResult
+from friday.runtime.workers import (
+    ClaudeCodeWorker, CodexWorker, GeminiWorker, OpenCodeWorker,
+    AiderWorker, DeepSeekWorker)
+
+
+def test_external_adapters_build_invocation():
+    for W in (ClaudeCodeWorker, CodexWorker, GeminiWorker, OpenCodeWorker,
+              AiderWorker, DeepSeekWorker):
+        w = W()
+        inv = w.build_invocation(_task("do the thing"))
+        assert isinstance(inv, Invocation)
+        assert inv.argv  # non-empty command
+
+
+def test_deepseek_is_available_no_crash(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    w = DeepSeekWorker()
+    # is_available() must be callable and return a bool without raising
+    assert isinstance(w.is_available(), bool)
 
 
 class _EchoWorker(CLIWorker):
