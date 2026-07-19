@@ -47,6 +47,7 @@ from .cli_runtime import (
     cmd_runtime_show,
     cmd_runtime_export,
 )
+from .cli_capability import cmd_capability
 from .context import ContextEngine, TimelineEntry, summarize_day
 from .db import connect
 from .ingest import ingest_paths
@@ -691,6 +692,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_review.add_argument("--id", help="Graph or session ID (alternative to position).")
     p_review.set_defaults(func=cmd_review)
+
+    p_capability = sub.add_parser(
+        "capability", help="Capability discovery, registry, health, benchmark.")
+    p_capability.add_argument(
+        "token", nargs="?", default="list",
+        choices=["discover", "list", "info", "benchmark"])
+    p_capability.add_argument(
+        "--worker", help="Worker name for 'info'.")
+    p_capability.set_defaults(func=cmd_capability)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -941,6 +941,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # M9.8: snapshots gains head_sha + manifest_hash to store the
     # ingest-independent change signature used by `friday observe --changed`.
     _ensure_snapshots_signature_cols(conn)
+    # M10: worker availability + manifest_ref columns for runtime install state.
+    # Additive; safe on DBs created before these columns existed in SCHEMA
+    # (CREATE IF NOT EXISTS does not backfill columns onto pre-existing tables).
+    worker_cols = {r["name"] for r in conn.execute("PRAGMA table_info(workers)")}
+    if "availability" not in worker_cols:
+        conn.execute(
+            "ALTER TABLE workers ADD COLUMN availability TEXT NOT NULL DEFAULT 'available'")
+    if "manifest_ref" not in worker_cols:
+        conn.execute("ALTER TABLE workers ADD COLUMN manifest_ref TEXT")
     conn.commit()
 
 
