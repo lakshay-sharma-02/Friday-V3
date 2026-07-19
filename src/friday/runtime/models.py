@@ -92,6 +92,10 @@ class ExecutionResult:
     exit_code: Optional[int] = None
     duration_ms: int = 0
     error: str = ""              # exception message if the worker raised
+    worker_id: Optional[str] = None      # provenance
+    started_at: Optional[str] = None     # provenance
+    ended_at: Optional[str] = None       # provenance
+    metadata: dict = field(default_factory=dict)  # provenance
 
     def to_dict(self) -> dict:
         return {
@@ -102,6 +106,10 @@ class ExecutionResult:
             "exit_code": self.exit_code,
             "duration_ms": self.duration_ms,
             "error": self.error,
+            "worker_id": self.worker_id,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "metadata": dict(self.metadata),
         }
 
 

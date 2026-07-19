@@ -3,6 +3,17 @@ import pytest
 from dataclasses import FrozenInstanceError
 
 from friday.worker.models import WorkerManifest, VerificationResult, Worker, WorkerKind
+from friday.runtime.models import ExecutionResult
+
+
+def test_execution_result_provenance():
+    r = ExecutionResult(
+        success=True, worker_id="worker:claude",
+        started_at="2026-07-19T00:00:00Z", ended_at="2026-07-19T00:00:01Z",
+        metadata={"tool": "claude"})
+    assert r.worker_id == "worker:claude"
+    assert r.started_at.endswith("Z")
+    assert r.metadata["tool"] == "claude"
 
 
 def test_worker_availability_persisted():
