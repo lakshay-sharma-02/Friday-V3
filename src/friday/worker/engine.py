@@ -32,6 +32,7 @@ from ..db import (
     insert_worker_history,
     insert_worker_version,
     update_worker_status,
+    update_worker_availability,
     update_worker_version,
     worker_history_for,
     worker_versions_for,
@@ -166,7 +167,7 @@ class WorkerRegistry:
             if raw and raw.strip() and raw not in ptypes:
                 rejected.append(f"plan_type: {raw}")
 
-        wid = worker._generate_id()
+        wid = worker.id or worker._generate_id()
         prev = self.worker_by_id(wid)
 
         # Build the validated worker (unknown fields dropped).
@@ -249,6 +250,27 @@ class WorkerRegistry:
                 f"manifest schema_version {declared!r} != current {SCHEMA_VERSION!r}")
         worker = _worker_from_manifest(manifest)
         return self.register(worker)
+
+    def sync_availability(self, discovery) -> int:
+        """Update ONLY the availability column from a DiscoveryResult. Workers are
+        already registered; this synchronizes runtime state without touching
+        static metadata. DiscoveryResult is imported locally to avoid a
+        runtime<->worker import cycle."""
+        from ..runtime.discovery import DiscoveryResult
+        if not isinstance(discovery, DiscoveryResult):
+            raise TypeError("sync_availability expects a DiscoveryResult")
+        updated = 0
+        for wid in discovery.unavailable:
+            w = self.worker_by_id(wid)
+            if w is not None and w.availability != "unavailable":
+                update_worker_availability(self.conn, wid, "unavailable")
+                updated += 1
+        for wid in discovery.available:
+            w = self.worker_by_id(wid)
+            if w is not None and w.availability != "available":
+                update_worker_availability(self.conn, wid, "available")
+                updated += 1
+        return updated
 
     def enable(self, name: str) -> bool:
         """Enable a worker (live-row status mutation; history preserved)."""
@@ -349,6 +371,7 @@ def _worker_from_manifest(m: dict) -> Worker:
         confidence=m.get("confidence", "medium"),
         version=m.get("version", "1.0.0"),
         status=m.get("status", "active"),
+        id=m.get("id"),
     )
 
 

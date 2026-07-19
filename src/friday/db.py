@@ -3831,6 +3831,16 @@ def update_worker_version(
     conn.commit()
 
 
+def update_worker_availability(conn: sqlite3.Connection, worker_id: str,
+                               availability: str) -> None:
+    """Update ONLY the availability column (runtime install state). Distinct
+    from `status` (active/disabled); availability is available|unavailable|error."""
+    conn.execute(
+        "UPDATE workers SET availability = ? WHERE id = ?",
+        (availability, worker_id))
+    conn.commit()
+
+
 def insert_worker_history(conn: sqlite3.Connection, rows: List[WorkerHistoryRow]) -> None:
     """Append a snapshot of worker state per registration/upgrade/disable event.
     Idempotent on (registered_at, worker_id)."""
