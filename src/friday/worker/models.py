@@ -20,6 +20,42 @@ from typing import List, Optional
 from ..db import WorkerRow
 
 
+@dataclass(frozen=True)
+class WorkerManifest:
+    """Immutable capability declaration. Single source of truth for a worker's
+    static identity. The registry row is BUILT FROM a manifest at registration
+    time; a worker never mutates its own manifest at runtime."""
+    name: str
+    implementation: str            # native|cli|api|mcp|plugin
+    provider: str                  # anthropic|openai|google|deepseek|local|friday
+    origin: str                    # builtin|external|generated
+    capabilities: list
+    requirements: list             # PATH binaries or env vars the worker needs
+    supported_task_types: list
+    supported_plan_types: list
+    supported_languages: list = field(default_factory=list)
+    description: str = ""
+    supports_workspace: bool = False
+    supports_streaming: bool = False
+    supports_files: bool = False
+    supports_patch: bool = False
+    estimated_speed: str = "unknown"
+    estimated_cost: str = "unknown"
+    confidence: str = "medium"
+    version: str = "1.0.0"
+
+    def __post_init__(self):
+        # Closed vocabulary: capabilities must be registry-valid canonical forms.
+        object.__setattr__(self, "capabilities", validate_capabilities(self.capabilities))
+
+
+@dataclass
+class VerificationResult:
+    """Objective correctness verdict from a worker's verify() step."""
+    passed: bool
+    reason: str = ""
+
+
 # Contract version (Law 24).
 SCHEMA_VERSION = "1.0"
 
@@ -232,6 +268,8 @@ class Worker:
     confidence: str = "medium"                 # registry-assigned, deterministic
     version: str = "1.0.0"
     status: str = "active"                     # 'active' | 'disabled'
+    availability: str = "available"            # available|unavailable|error
+    manifest_ref: Optional[str] = None         # id of the WorkerManifest it was built from
     schema_version: str = SCHEMA_VERSION       # contract version (Law 24)
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
