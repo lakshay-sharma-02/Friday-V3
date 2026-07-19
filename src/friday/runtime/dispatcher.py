@@ -21,6 +21,7 @@ import time
 from typing import Callable, Dict, Optional
 
 from .models import ExecutionResult, RuntimeTask, Worker
+from ..worker.models import VerificationResult
 
 
 # Maps a registry worker_id (from the schedule) to a Worker adapter instance.
@@ -54,4 +55,15 @@ def dispatch(task: RuntimeTask, worker: Optional[Worker]) -> ExecutionResult:
             success=False, stdout="", stderr=str(e),
             exit_code=None, duration_ms=dur, error=f"{type(e).__name__}: {e}")
     result.duration_ms = int((time.monotonic() - t0) * 1000)
+    # Verification: objective correctness, worker-owned. Always runs before
+    # any review. Record outcome in metadata (provenance). The engine owns
+    # persistence and any review step.
+    try:
+        vres = worker.verify(task, result)
+    except Exception as e:  # verify must never break execution reporting
+        vres = VerificationResult(passed=False,
+                                  reason=f"verify raised: {type(e).__name__}: {e}")
+    result.metadata = {**result.metadata,
+                       "verified": vres.passed,
+                       "verify_reason": vres.reason}
     return result

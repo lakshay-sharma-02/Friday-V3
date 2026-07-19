@@ -133,6 +133,14 @@ class Worker:
     def execute(self, task) -> ExecutionResult:
         raise NotImplementedError
 
+    def verify(self, task, result: "ExecutionResult") -> "VerificationResult":
+        """Default verification: trust the worker's own success flag. Subclasses
+        (e.g. CLIWorker) override with objective checks. The dispatcher calls
+        this after execute(); review runs later, only if verify passes."""
+        from ..worker.models import VerificationResult
+        return VerificationResult(passed=result.success,
+                                  reason="no custom verify; success flag")
+
 
 class MockWorker(Worker):
     """Deterministic, in-memory worker for tests and dogfooding.

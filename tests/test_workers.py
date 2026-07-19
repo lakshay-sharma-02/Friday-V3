@@ -36,6 +36,9 @@ from friday.runtime.workers import (
     ClaudeCodeWorker, CodexWorker, GeminiWorker, OpenCodeWorker,
     AiderWorker, DeepSeekWorker)
 
+from friday.runtime.dispatcher import dispatch
+from friday.runtime.models import RuntimeTask
+
 
 def test_external_adapters_build_invocation():
     for W in (ClaudeCodeWorker, CodexWorker, GeminiWorker, OpenCodeWorker,
@@ -431,3 +434,18 @@ def test_runtime_uses_real_worker_resolver(conn, tmp_path):
     # The documentation task must have executed and written the README.
     assert (repo / "README.md").exists()
     assert report.failed == 0
+
+
+class _EchoVerifyWorker(CLIWorker):
+    worker_id = "worker:echov"
+    def build_invocation(self, task):
+        return Invocation(argv=["printf", "%s", (task.runtime_payload or "")])
+
+
+def test_dispatch_runs_verify_and_records_metadata():
+    t = _task("ok")
+    res = dispatch(t, _EchoVerifyWorker())
+    assert res.success is True
+    # verification ran and its outcome is recorded in metadata
+    assert "verified" in res.metadata
+    assert res.metadata["verified"] is True
