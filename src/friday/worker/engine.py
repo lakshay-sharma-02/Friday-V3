@@ -251,6 +251,19 @@ class WorkerRegistry:
         worker = _worker_from_manifest(manifest)
         return self.register(worker)
 
+    def register_external(self) -> int:
+        """Register the declared external AI adapters from their manifests.
+        Idempotent: re-registering the same worker id REPLACES the row (per
+        register()'s upsert semantics). Returns count registered."""
+        created = 0
+        for m in _EXTERNAL_MANIFESTS:
+            res = self.register_from_manifest(dict(m))
+            created += res.created
+        # Sync availability against reality (discovery scan).
+        from ..runtime.discovery import discover
+        self.sync_availability(discover(_EXTERNAL_MANIFESTS))
+        return created
+
     def sync_availability(self, discovery) -> int:
         """Update ONLY the availability column from a DiscoveryResult. Workers are
         already registered; this synchronizes runtime state without touching
@@ -569,4 +582,34 @@ BUILTIN_WORKERS: List[Worker] = [
         network=False, filesystem=True, git=False, python=True, shell=False,
         confidence="strong",
     ),
+]
+
+
+_EXTERNAL_MANIFESTS = [
+    {"worker_id": "worker:claude", "name": "Claude Code", "implementation": "cli",
+     "provider": "anthropic", "origin": "external",
+     "capabilities": ["Refactoring", "Documentation", "Architecture Review", "Testing"],
+     "requirements": ["claude"],
+     "supported_task_types": ["refactor", "documentation", "review", "testing"],
+     "supported_plan_types": ["feature", "architecture"]},
+    {"worker_id": "worker:codex", "name": "Codex CLI", "implementation": "cli",
+     "provider": "openai", "origin": "external",
+     "capabilities": ["Refactoring", "Testing"], "requirements": ["codex"],
+     "supported_task_types": ["refactor", "testing"], "supported_plan_types": ["feature"]},
+    {"worker_id": "worker:gemini", "name": "Gemini CLI", "implementation": "cli",
+     "provider": "google", "origin": "external",
+     "capabilities": ["Research", "Large Context"], "requirements": ["gemini"],
+     "supported_task_types": ["research"], "supported_plan_types": ["research"]},
+    {"worker_id": "worker:opencode", "name": "OpenCode", "implementation": "cli",
+     "provider": "local", "origin": "external",
+     "capabilities": ["Refactoring"], "requirements": ["opencode"],
+     "supported_task_types": ["refactor"], "supported_plan_types": ["feature"]},
+    {"worker_id": "worker:aider", "name": "Aider", "implementation": "cli",
+     "provider": "local", "origin": "external",
+     "capabilities": ["Refactoring", "Documentation"], "requirements": ["aider"],
+     "supported_task_types": ["refactor", "documentation"], "supported_plan_types": ["feature"]},
+    {"worker_id": "worker:deepseek", "name": "DeepSeek", "implementation": "api",
+     "provider": "deepseek", "origin": "external",
+     "capabilities": ["Reasoning"], "requirements": ["DEEPSEEK_API_KEY"],
+     "supported_task_types": ["research"], "supported_plan_types": ["research"]},
 ]

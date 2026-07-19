@@ -120,6 +120,20 @@ def test_register_builtin_has_six_execution_workers(conn):
         assert wid in ids
 
 
+def test_external_workers_registered_via_manifest():
+    from friday.worker.engine import WorkerRegistry
+    conn = connect(":memory:")
+    reg = WorkerRegistry(conn)
+    reg.register_external()
+    names = {w.name for w in reg.all_workers()}
+    assert "Claude Code" in names
+    assert "DeepSeek" in names
+    # availability synced: in this env these binaries are absent -> unavailable
+    claude = reg.worker_by_name("Claude Code")
+    assert claude is not None
+    assert claude.availability in ("available", "unavailable")
+
+
 # ===================================================================
 # Lookup / resolution
 # ===================================================================

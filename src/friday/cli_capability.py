@@ -3,39 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 from .db import connect
-from .worker.engine import WorkerRegistry
+from .worker.engine import WorkerRegistry, _EXTERNAL_MANIFESTS
 from .runtime.discovery import discover
 from .runtime.benchmark import BenchmarkRunner, BenchmarkTask
-
-
-_EXTERNAL_MANIFESTS = [
-    {"worker_id": "worker:claude", "name": "Claude Code", "implementation": "cli",
-     "provider": "anthropic", "origin": "external",
-     "capabilities": ["Refactoring", "Documentation", "Architecture Review", "Testing"],
-     "requirements": ["claude"],
-     "supported_task_types": ["refactor", "documentation", "review", "testing"],
-     "supported_plan_types": ["feature", "architecture"]},
-    {"worker_id": "worker:codex", "name": "Codex CLI", "implementation": "cli",
-     "provider": "openai", "origin": "external",
-     "capabilities": ["Refactoring", "Testing"], "requirements": ["codex"],
-     "supported_task_types": ["refactor", "testing"], "supported_plan_types": ["feature"]},
-    {"worker_id": "worker:gemini", "name": "Gemini CLI", "implementation": "cli",
-     "provider": "google", "origin": "external",
-     "capabilities": ["Research", "Large Context"], "requirements": ["gemini"],
-     "supported_task_types": ["research"], "supported_plan_types": ["research"]},
-    {"worker_id": "worker:opencode", "name": "OpenCode", "implementation": "cli",
-     "provider": "local", "origin": "external",
-     "capabilities": ["Refactoring"], "requirements": ["opencode"],
-     "supported_task_types": ["refactor"], "supported_plan_types": ["feature"]},
-    {"worker_id": "worker:aider", "name": "Aider", "implementation": "cli",
-     "provider": "local", "origin": "external",
-     "capabilities": ["Refactoring", "Documentation"], "requirements": ["aider"],
-     "supported_task_types": ["refactor", "documentation"], "supported_plan_types": ["feature"]},
-    {"worker_id": "worker:deepseek", "name": "DeepSeek", "implementation": "api",
-     "provider": "deepseek", "origin": "external",
-     "capabilities": ["Reasoning"], "requirements": ["DEEPSEEK_API_KEY"],
-     "supported_task_types": ["research"], "supported_plan_types": ["research"]},
-]
 
 
 def cmd_capability(args: argparse.Namespace, conn=None) -> int:
