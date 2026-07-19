@@ -29,7 +29,7 @@ class WorkerManifest:
     implementation: str            # native|cli|api|mcp|plugin
     provider: str                  # anthropic|openai|google|deepseek|local|friday
     origin: str                    # builtin|external|generated
-    capabilities: list
+    capabilities: List[str]
     requirements: list             # PATH binaries or env vars the worker needs
     supported_task_types: list
     supported_plan_types: list
@@ -307,6 +307,8 @@ class Worker:
             schema_version=self.schema_version,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            availability=self.availability,
+            manifest_ref=self.manifest_ref,
         )
 
     @classmethod
@@ -336,6 +338,8 @@ class Worker:
             schema_version=getattr(row, "schema_version", None) or SCHEMA_VERSION,
             created_at=row.created_at,
             updated_at=row.updated_at,
+            availability=getattr(row, "availability", None) or "available",
+            manifest_ref=getattr(row, "manifest_ref", None),
         )
 
     def to_summary(self) -> str:
@@ -419,6 +423,8 @@ class Worker:
             "schema_version": self.schema_version,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "availability": self.availability,
+            "manifest_ref": self.manifest_ref,
         }
 
 

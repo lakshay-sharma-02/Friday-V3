@@ -546,7 +546,9 @@ CREATE TABLE IF NOT EXISTS workers (
     status                  TEXT NOT NULL DEFAULT 'active',
     schema_version          TEXT NOT NULL DEFAULT '1.0',
     created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL
+    updated_at              TEXT NOT NULL,
+    availability            TEXT NOT NULL DEFAULT 'available',
+    manifest_ref            TEXT
 );
 
 -- Normalized one-row-per-(worker,capability) so the future Capability Resolver
@@ -3678,6 +3680,8 @@ class WorkerRow:
     schema_version: str = "1.0"
     created_at: str = ""
     updated_at: str = ""
+    availability: str = "available"
+    manifest_ref: Optional[str] = None
 
 
 @dataclass
@@ -3716,8 +3720,8 @@ def insert_worker(conn: sqlite3.Connection, w: WorkerRow) -> None:
              estimated_speed, estimated_cost, context_window, parallelism,
              requires_network, requires_filesystem, requires_git,
              requires_python, requires_shell, confidence, version, status,
-             schema_version, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             schema_version, created_at, updated_at, availability, manifest_ref)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, kind=excluded.kind, description=excluded.description,
             capabilities=excluded.capabilities,
@@ -3732,7 +3736,8 @@ def insert_worker(conn: sqlite3.Connection, w: WorkerRow) -> None:
             requires_git=excluded.requires_git, requires_python=excluded.requires_python,
             requires_shell=excluded.requires_shell, confidence=excluded.confidence,
             version=excluded.version, status=excluded.status,
-            schema_version=excluded.schema_version, updated_at=excluded.updated_at
+            schema_version=excluded.schema_version, updated_at=excluded.updated_at,
+            availability=excluded.availability, manifest_ref=excluded.manifest_ref
         """,
         (
             w.id, w.name, w.kind, w.description, w.capabilities,
@@ -3741,7 +3746,7 @@ def insert_worker(conn: sqlite3.Connection, w: WorkerRow) -> None:
             w.parallelism, int(w.requires_network), int(w.requires_filesystem),
             int(w.requires_git), int(w.requires_python), int(w.requires_shell),
             w.confidence, w.version, w.status, w.schema_version,
-            w.created_at, w.updated_at,
+            w.created_at, w.updated_at, w.availability, w.manifest_ref,
         ),
     )
     # Re-sync normalized capability rows.
@@ -3903,6 +3908,8 @@ def _row_to_worker(r) -> WorkerRow:
         status=r["status"] or "active",
         created_at=r["created_at"] or "",
         updated_at=r["updated_at"] or "",
+        availability=r["availability"] or "available",
+        manifest_ref=r["manifest_ref"],
     )
 
 

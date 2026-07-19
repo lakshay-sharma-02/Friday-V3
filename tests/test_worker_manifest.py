@@ -1,5 +1,25 @@
 # tests/test_worker_manifest.py
-from friday.worker.models import WorkerManifest, VerificationResult, Worker
+import pytest
+from dataclasses import FrozenInstanceError
+
+from friday.worker.models import WorkerManifest, VerificationResult, Worker, WorkerKind
+
+
+def test_worker_availability_persisted():
+    from friday.db import connect, get_worker_by_name, insert_worker
+    conn = connect(":memory:")
+    w = Worker(name="PersistTest", kind=WorkerKind.TOOL,
+               capabilities=["Shell Commands"], availability="unavailable",
+               manifest_ref="manifest:claude")
+    insert_worker(conn, w.to_row())
+    row = get_worker_by_name(conn, "PersistTest")
+    assert row is not None
+    assert row.availability == "unavailable"
+    assert row.manifest_ref == "manifest:claude"
+    # round-trip via from_row
+    w2 = Worker.from_row(row)
+    assert w2.availability == "unavailable"
+    assert w2.manifest_ref == "manifest:claude"
 
 
 def test_manifest_is_frozen():
@@ -8,11 +28,8 @@ def test_manifest_is_frozen():
         origin="external", capabilities=["Refactoring", "Documentation"],
         requirements=["claude"], supported_task_types=["refactor", "documentation"],
         supported_plan_types=["feature"])
-    try:
-        m.name = "x"  # type: ignore[misc]
-        assert False, "manifest must be immutable"
-    except Exception:
-        pass
+    with pytest.raises(FrozenInstanceError):
+        m.name = "x"
 
 
 def test_manifest_validates_capabilities():
