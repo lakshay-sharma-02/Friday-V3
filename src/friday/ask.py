@@ -46,8 +46,8 @@ from typing import Callable, Optional
 from . import query as q
 from .db import Repository, get_technologies
 from .identity import explain_project_from_conn
-from .llm import _enabled as llm_enabled
-from .llm import _call
+from .services.llm import _enabled as llm_enabled
+from .services.llm import _call
 from . import objective as obj_mod
 
 # Objectives the online LLM understanding can produce from a noisy bag that we

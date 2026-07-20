@@ -20,8 +20,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Dict, Optional
 
-from .models import ExecutionResult, RuntimeTask, Worker
-from ..worker.models import VerificationResult
+from .models import ExecutionResult, RuntimeTask, VerificationResult, Worker
 
 
 # Maps a registry worker_id (from the schedule) to a Worker adapter instance.

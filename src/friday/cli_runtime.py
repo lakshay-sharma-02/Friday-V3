@@ -22,7 +22,8 @@ from .planning import TaskGraphEngine
 from .resolver import CapabilityResolver
 from .scheduler import TaskScheduler, CycleDetectedError, \
     MissingAssignmentError, InvalidGraphError
-from .runtime import RuntimeEngine, MockWorker
+from .runtime import RuntimeEngine, resolve_executor, MockWorker
+from .runtime.executors import BuiltinShellWorker
 from .runtime.models import SCHEMA_VERSION
 
 
@@ -56,15 +57,14 @@ def cmd_runtime(args: argparse.Namespace) -> int:
     #    rather than fabricating success. The working directory defaults to
     #    the process cwd, overridable via FRIDAY_WORKSPACE.
     import os
-    from .runtime.workers import resolve_worker, BuiltinShellWorker
     workspace = os.environ.get("FRIDAY_WORKSPACE") or os.getcwd()
 
     def _resolve_any(wid):
-        # Real execution adapter for the 6 built-in workers. LLM-only provider
+        # Real execution adapter for the 6 built-in executors. LLM-only provider
         # ids (no adapter) are delegated to the shell tool, which performs real,
         # verifiable repo evidence-gathering — the actual behavior of analysis/
         # design/coordination tasks in this system. No fabricated success.
-        w = resolve_worker(wid or "worker:mock", workspace=workspace)
+        w = resolve_executor(wid or "worker:mock", workspace=workspace)
         if w is None:
             w = BuiltinShellWorker(workspace=workspace)
         return w

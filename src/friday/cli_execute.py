@@ -21,8 +21,7 @@ from .db import connect
 from .planning import TaskGraphEngine
 from .resolver import CapabilityResolver
 from .scheduler.engine import TaskScheduler
-from .runtime.engine import RuntimeEngine
-from .runtime.workers import resolve_worker
+from .runtime import RuntimeEngine, resolve_executor
 
 
 def cmd_execute(args: argparse.Namespace, conn=None) -> int:
@@ -54,10 +53,10 @@ def cmd_execute(args: argparse.Namespace, conn=None) -> int:
         conn.close()
         return 2
 
-    # 4. Execute via the Runtime. Worker adapters resolved lazily from the
+    # 4. Execute via the Runtime. Executor adapters resolved lazily from the
     #    registry id -> execution adapter (native + external M10 adapters).
     def _resolve(wid: str):
-        return resolve_worker(wid, workspace)
+        return resolve_executor(wid, workspace)
 
     engine = RuntimeEngine(conn, worker_resolver=_resolve)
     report = engine.run(sched_result.schedule)

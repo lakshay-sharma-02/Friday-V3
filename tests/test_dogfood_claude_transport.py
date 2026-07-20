@@ -11,7 +11,7 @@ so nobody "optimizes" it back into argv six months from now.
 
 from __future__ import annotations
 
-from friday.runtime.workers import ClaudeCodeWorker
+from friday.runtime.executors import ClaudeCodeWorker
 
 
 def _fake_task(title="Implement backend logic",

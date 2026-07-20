@@ -35,6 +35,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+from ..confidence.calculator import (
+    agreement_factor as _shared_agreement_factor,
+    make_explain_score as _shared_make_explain_score,
+)
 from .models import (
     UnderstandingConfidence,
     UnderstandingStatus,
@@ -115,10 +119,7 @@ def confidence_band(conf: UnderstandingConfidence) -> int:
 
 
 def agreement_factor(contributors: List[Contributor]) -> float:
-    if not contributors:
-        return 1.0
-    agreeing = sum(1 for c in contributors if c.agrees)
-    return 1.0 if agreeing == len(contributors) else 0.6
+    return _shared_agreement_factor(contributors)
 
 
 def cross_source_multiplier(contributors: List[Contributor]) -> float:
@@ -132,10 +133,7 @@ def explain_score(contributors: List[Contributor]) -> Tuple[float, Dict[str, flo
     """Return (score, breakdown) so the CLI can show how confidence was derived."""
     total = sum(c.weight for c in contributors)
     cross = cross_source_multiplier(contributors)
-    agree = agreement_factor(contributors)
-    score = total * cross * agree
-    return score, {
-        "total_contributor_weight": float(total),
-        "cross_source_multiplier": round(cross, 2),
-        "agreement_factor": agree,
-    }
+    agree = _shared_agreement_factor(contributors)
+    return _shared_make_explain_score(
+        total, cross, agree, multiplier_label="cross_source_multiplier",
+    )

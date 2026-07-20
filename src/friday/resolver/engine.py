@@ -132,9 +132,9 @@ class CapabilityResolver:
         # (worker:claude llm, worker:gpt llm, worker:search llm, etc.).
         # Custom user-registered workers without an adapter are still eligible
         # (they may have an adapter registered later or available at runtime).
-        from ..runtime.workers import resolve_worker
+        from ..runtime import resolve_executor
         workers = [w for w in workers
-                   if resolve_worker(w.id) is not None
+                   if resolve_executor(w.id) is not None
                    or not (w.id.endswith(" llm") or w.kind.value == "service")]
         hist_counts = self._successful_history()
 

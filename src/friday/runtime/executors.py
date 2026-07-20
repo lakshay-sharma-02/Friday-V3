@@ -39,8 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from .models import ExecutionResult, Worker
-from ..worker.models import VerificationResult
+from .models import ExecutionResult, Executor, VerificationResult
 
 
 # Honour a global timeout (seconds) for any external process.
@@ -75,6 +74,27 @@ def _ok(stdout: str, stderr: str, exit_code: int, dur: int,
         duration_ms=dur, artifacts=artifacts or [])
 
 
+def _filename_from_goal(goal: str, default_title: str, ext: str) -> str:
+    """Derive a workspace filename from the user goal.
+
+    When the goal explicitly names a file (e.g. "calculator.py"), use it.
+    Otherwise fall back to a slug of the task title.
+    """
+    # Look for an explicit 'filename.ext' in the goal.
+    for word in goal.split():
+        word = word.strip(".,;:'\"!?")
+        if word.count(".") == 1 and not word.startswith(".") and not word.endswith("."):
+            _, suffix = word.rsplit(".", 1)
+            if suffix.lower() in ("py", "md", "txt", "sh", "ts", "js", "rs", "go",
+                                   "rb", "java", "c", "h", "cpp", "hpp", "rs",
+                                   "toml", "json", "yaml", "yml", "sql", "html",
+                                   "css", "scss", "less", "tsx", "jsx"):
+                return word
+    # Fall back to slugged title.
+    slug = "".join(c if c.isalnum() else "_" for c in default_title.lower())[:40].strip("_") or "output"
+    return f"{slug}{ext}"
+
+
 def _fail(stdout: str, stderr: str, exit_code: Optional[int], dur: int,
           error: str, artifacts: Optional[List[str]] = None) -> ExecutionResult:
     return ExecutionResult(
@@ -86,7 +106,7 @@ def _fail(stdout: str, stderr: str, exit_code: Optional[int], dur: int,
 # Shell
 # ---------------------------------------------------------------------------
 
-class BuiltinShellWorker(Worker):
+class BuiltinShellExecutor(Executor):
     """Execute shell commands; capture stdout/stderr/exit code; timeout-aware.
 
     Uses ``shell=True`` because the contract explicitly requires it for shell
@@ -135,6 +155,10 @@ class BuiltinShellWorker(Worker):
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
+
+# backward-compat alias
+BuiltinShellWorker = BuiltinShellExecutor
+
 def _is_git(ws: str) -> bool:
     try:
         out = subprocess.run(
@@ -149,7 +173,7 @@ def _is_git(ws: str) -> bool:
 # Git
 # ---------------------------------------------------------------------------
 
-class GitWorker(Worker):
+class GitExecutor(Executor):
     """Version-control operations. Never pushes. Verifies tree changes for
     mutating ops (add/restore/checkout/branch/commit)."""
 
@@ -211,11 +235,15 @@ class GitWorker(Worker):
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
+
+# backward-compat alias
+GitWorker = GitExecutor
+
 # ---------------------------------------------------------------------------
 # File
 # ---------------------------------------------------------------------------
 
-class FileWorker(Worker):
+class FileExecutor(Executor):
     """Filesystem operations via a JSON payload:
 
     {"op":"read",    "path":"..."}
@@ -322,11 +350,15 @@ class FileWorker(Worker):
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
+
+# backward-compat alias
+FileWorker = FileExecutor
+
 # ---------------------------------------------------------------------------
 # Python (also pytest-capable, since the resolver routes Testing tasks here)
 # ---------------------------------------------------------------------------
 
-class BuiltinPythonWorker(Worker):
+class BuiltinPythonExecutor(Executor):
     """Run Python source OR a pytest invocation from the payload.
 
     Auto-detects pytest: a payload starting with ``pytest`` / ``python -m
@@ -392,6 +424,10 @@ class BuiltinPythonWorker(Worker):
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
+
+# backward-compat alias
+BuiltinPythonWorker = BuiltinPythonExecutor
+
 def _looks_like_python(exe: str) -> bool:
     """Cheap name-based gate: only probe executables whose name suggests
     CPython. Avoids launching a non-Python host (e.g. an Electron AppImage
@@ -446,7 +482,7 @@ def _first_failures(*texts: str) -> str:
 # Testing (dedicated worker; exercised directly and via registration)
 # ---------------------------------------------------------------------------
 
-class TestingWorker(Worker):
+class TestingExecutor(Executor):
     """Run the test framework. Reports pass/fail with a failure summary.
 
     ``__test__ = False`` keeps pytest from collecting this as a test class
@@ -517,11 +553,15 @@ class TestingWorker(Worker):
         return shlex.split(payload)
 
 
+
+# backward-compat alias
+TestingWorker = TestingExecutor
+
 # ---------------------------------------------------------------------------
 # Documentation
 # ---------------------------------------------------------------------------
 
-class DocumentationWorker(Worker):
+class DocumentationExecutor(Executor):
     """Write documentation. Payload JSON ``{"path":..., "content":...}``.
 
     With no payload, content is derived deterministically from the task's own
@@ -582,14 +622,23 @@ class DocumentationWorker(Worker):
         return self.DEFAULT_PATH, "\n".join(lines).rstrip() + "\n"
 
 
+
+# backward-compat alias
+DocumentationWorker = DocumentationExecutor
+
 # ---------------------------------------------------------------------------
 # Worker resolution — maps a registry worker_id to its execution adapter.
 # ---------------------------------------------------------------------------
 
 def resolve_worker(worker_id: str, workspace: str = ".") -> Optional[Worker]:
+    """DEPRECATED: use resolve_executor. Kept for backward compatibility."""
+    return resolve_executor(worker_id, workspace)
+
+
+def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]:
     """Return the real execution adapter for a registry ``worker:<name>`` id.
 
-    Covers the native built-in workers AND the M10 external AI adapters
+    Covers the native built-in executors AND the M10 external AI adapters
     (Claude/Codex/Gemini/OpenCode/Aider/DeepSeek). The runtime invokes the
     adapter; unavailability is reported by the adapter's own verify() (exit
     code / missing binary), never by fabricating success. Returns None only
@@ -597,17 +646,17 @@ def resolve_worker(worker_id: str, workspace: str = ".") -> Optional[Worker]:
     """
     name = (worker_id or "").lower()
     if name == "worker:shell":
-        return BuiltinShellWorker(workspace=workspace)
+        return BuiltinShellExecutor(workspace=workspace)
     if name == "worker:git":
-        return GitWorker(workspace=workspace)
+        return GitExecutor(workspace=workspace)
     if name == "worker:filesystem":
-        return FileWorker(workspace=workspace)
+        return FileExecutor(workspace=workspace)
     if name == "worker:python":
-        return BuiltinPythonWorker(workspace=workspace)
+        return BuiltinPythonExecutor(workspace=workspace)
     if name == "worker:testing":
-        return TestingWorker(workspace=workspace)
+        return TestingExecutor(workspace=workspace)
     if name == "worker:documentation":
-        return DocumentationWorker(workspace=workspace)
+        return DocumentationExecutor(workspace=workspace)
     if name == "worker:claude":
         return ClaudeCodeWorker(workspace=workspace)
     if name == "worker:codex":
@@ -644,8 +693,8 @@ class Invocation:
     stream: bool = False
 
 
-class CLIWorker(Worker):
-    """Base for any worker invoked via a subprocess. Owns ALL subprocess
+class CLIExecutor(Executor):
+    """Base for any executor invoked via a subprocess. Owns ALL subprocess
     mechanics; subclasses implement only build_invocation(task)."""
     def __init__(self, worker_id: Optional[str] = None, workspace: str = ".",
                  timeout: int = _DEFAULT_TIMEOUT) -> None:
@@ -699,11 +748,15 @@ class CLIWorker(Worker):
         if ttype not in ("implementation", "documentation"):
             return []
         title = (getattr(task, "title", "") or "task").strip()
-        slug = "".join(c if c.isalnum() else "_" for c in title.lower())[:40].strip("_") or "output"
+        # When the task title is generic (e.g. "Implement backend logic"),
+        # derive a meaningful filename from the goal (e.g. "calculator.py"
+        # from "Create calculator.py containing a simple CLI calculator.").
+        goal = (getattr(task, "goal", "") or "").strip()
         ext = ".py" if ttype == "implementation" else ".md"
+        filename = _filename_from_goal(goal, title, ext)
         ws = self._workspace or "."
         os.makedirs(ws, exist_ok=True)
-        path = os.path.join(ws, f"{slug}{ext}")
+        path = os.path.join(ws, filename)
         try:
             with open(path, "w") as f:
                 f.write(stdout)
@@ -720,6 +773,10 @@ class CLIWorker(Worker):
             else "exit_code!=0 or empty stdout")
 
 
+# backward-compat alias
+CLIWorker = CLIExecutor
+
+
 # ---------------------------------------------------------------------------
 # External AI CLI adapters — auto-detected via PATH
 # ---------------------------------------------------------------------------
@@ -730,7 +787,7 @@ def _resolve_binary(name: str) -> str:
     return shutil.which(name) or name
 
 
-class ClaudeCodeWorker(CLIWorker):
+class ClaudeCodeWorker(CLIExecutor):
     worker_id = "worker:claude"
     def build_invocation(self, task):
         # Compose a real prompt from task fields (claude --print requires a
@@ -762,7 +819,7 @@ class ClaudeCodeWorker(CLIWorker):
             stdin=prompt, timeout=_DEFAULT_TIMEOUT)
 
 
-class CodexWorker(CLIWorker):
+class CodexWorker(CLIExecutor):
     worker_id = "worker:codex"
     def build_invocation(self, task):
         # `codex` defaults to an interactive TUI that requires a TTY and prompts
@@ -774,7 +831,7 @@ class CodexWorker(CLIWorker):
             timeout=_DEFAULT_TIMEOUT)
 
 
-class GeminiWorker(CLIWorker):
+class GeminiWorker(CLIExecutor):
     worker_id = "worker:gemini"
     def build_invocation(self, task):
         # `-p` = headless/non-interactive; `-y` = auto-approve all actions.
@@ -782,7 +839,7 @@ class GeminiWorker(CLIWorker):
                                  _payload(task)], timeout=_DEFAULT_TIMEOUT)
 
 
-class OpenCodeWorker(CLIWorker):
+class OpenCodeWorker(CLIExecutor):
     worker_id = "worker:opencode"
     def build_invocation(self, task):
         # `run` is the headless entry (no TUI).
@@ -790,14 +847,14 @@ class OpenCodeWorker(CLIWorker):
                                  _payload(task)], timeout=_DEFAULT_TIMEOUT)
 
 
-class AiderWorker(CLIWorker):
+class AiderWorker(CLIExecutor):
     worker_id = "worker:aider"
     def build_invocation(self, task):
         return Invocation(argv=[_resolve_binary("aider"), "--message",
                                  _payload(task)], timeout=_DEFAULT_TIMEOUT)
 
 
-class DeepSeekWorker(CLIWorker):
+class DeepSeekWorker(CLIExecutor):
     worker_id = "worker:deepseek"
     def build_invocation(self, task):
         if shutil.which("deepseek"):

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .discovery import Repo
-from .llm import summarize as llm_summarize
+from .services.llm import summarize as llm_summarize
 
 _README_NAMES = ("README.md", "README.rst", "README.txt", "README", "readme.md")
 

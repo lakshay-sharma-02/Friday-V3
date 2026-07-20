@@ -43,7 +43,7 @@ from .events import (
 )
 from .executor import execute_schedule
 from .history import snapshot
-from .workers import resolve_worker
+from .executors import resolve_executor
 from .models import (
     ExecutionReport,
     ExecutionResult,
@@ -83,9 +83,9 @@ class RuntimeEngine:
         elif workers is not None:
             self._resolve_worker = _default_worker_resolver(workers)
         else:
-            # Single source of truth for execution: resolve_worker maps any
+            # Single source of truth for execution: resolve_executor maps any
             # registry worker_id -> its adapter. Never a dead end.
-            self._resolve_worker = resolve_worker
+            self._resolve_worker = resolve_executor
 
     # --- public ------------------------------------------------------------
 
@@ -146,18 +146,19 @@ class RuntimeEngine:
         # Cheap read-only lookup: planning task metadata (type/title) so
         # workers (e.g. CLIWorker) can persist file artifacts correctly.
         meta = {}
+        goal = ""
         try:
             for row in self.conn.execute(
                 "SELECT id, task_type, title FROM tasks"):
                 meta[row["id"]] = (row["task_type"] or "", row["title"] or "")
+            g = self.conn.execute(
+                "SELECT goal FROM task_graphs WHERE id=?",
+                (schedule.schedule_id,)).fetchone()
+            if g:
+                goal = g["goal"] or ""
         except Exception:
             pass
         for st in schedule.tasks:
-            # A task the Scheduler already BLOCKED (no assignment / disabled
-            # worker) has no worker to run it. The Runtime never re-assigns;
-            # it cancels such tasks up front (recorded by run()).
-            # `runtime_payload` (optional execution input, e.g. a code snippet)
-            # is carried through if the task carries one.
             ttype, title = meta.get(st.task_id, ("", ""))
             out.append(RuntimeTask(
                 execution_id=f"{schedule.schedule_id}:{st.task_id}",
@@ -170,6 +171,7 @@ class RuntimeEngine:
                 runtime_payload=getattr(st, "runtime_payload", "") or "",
                 task_type=ttype,
                 title=title,
+                goal=goal,
             ))
         return out
 

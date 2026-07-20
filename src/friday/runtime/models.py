@@ -117,13 +117,20 @@ class ExecutionResult:
 # Generic worker interface. THE contract the Runtime depends on.
 # ---------------------------------------------------------------------------
 
-class Worker:
+@dataclass
+class VerificationResult:
+    """Objective correctness verdict from a worker/executor's verify() step."""
+    passed: bool
+    reason: str = ""
+
+
+class Executor:
     """Generic execution backend. The Runtime calls `execute(task)` and nothing
     else. Concrete adapters subclass this; the Runtime never branches on which
     one it received.
 
     `task` is the `RuntimeTask` the Runtime hands in (carrying the scheduled
-    task's structured fields). The worker decides HOW to run it.
+    task's structured fields). The executor decides HOW to run it.
     """
 
     #: registry id this adapter executes for (e.g. "worker:mock"). The Runtime
@@ -133,17 +140,19 @@ class Worker:
     def execute(self, task) -> ExecutionResult:
         raise NotImplementedError
 
-    def verify(self, task, result: "ExecutionResult") -> "VerificationResult":
-        """Default verification: trust the worker's own success flag. Subclasses
+    def verify(self, task, result: "ExecutionResult") -> VerificationResult:
+        """Default verification: trust the executor's own success flag. Subclasses
         (e.g. CLIWorker) override with objective checks. The dispatcher calls
         this after execute(); review runs later, only if verify passes."""
-        from ..worker.models import VerificationResult
         return VerificationResult(passed=result.success,
                                   reason="no custom verify; success flag")
 
 
-class MockWorker(Worker):
-    """Deterministic, in-memory worker for tests and dogfooding.
+Worker = Executor  # backward-compat alias
+
+
+class MockExecutor(Executor):
+    """Deterministic, in-memory executor for tests and dogfooding.
 
     Honours a `fail` flag (set per-task via `task.runtime_hint`) so failure
     paths can be exercised without real side effects. Never touches the FS
@@ -159,7 +168,7 @@ class MockWorker(Worker):
         if should_fail:
             return ExecutionResult(
                 success=False, stdout="", stderr="mock failure",
-                exit_code=1, duration_ms=1, error="mock worker forced failure")
+                exit_code=1, duration_ms=1, error="mock executor forced failure")
         return ExecutionResult(
             success=True,
             stdout=f"executed {task.task_id}",
@@ -170,7 +179,11 @@ class MockWorker(Worker):
         )
 
 
-class PythonWorker(Worker):
+# backward-compat alias
+MockWorker = MockExecutor
+
+
+class PythonExecutor(Executor):
     """Executes a Python snippet/file described by the task, locally.
 
     Reads the snippet from `task.runtime_payload` (a string of Python source).
@@ -206,7 +219,11 @@ class PythonWorker(Worker):
                 exit_code=None, duration_ms=dur, error=str(e))
 
 
-class ShellWorker(Worker):
+# backward-compat alias
+PythonWorker = PythonExecutor
+
+
+class ShellExecutor(Executor):
     """Executes a shell command described by the task, locally."""
 
     def __init__(self, worker_id: str = "worker:shell") -> None:
@@ -232,6 +249,10 @@ class ShellWorker(Worker):
             return ExecutionResult(
                 success=False, stdout="", stderr=str(e),
                 exit_code=None, duration_ms=dur, error=str(e))
+
+
+# backward-compat alias
+ShellWorker = ShellExecutor
 
 
 # NOTE: ClaudeWorker / GeminiWorker / CodexWorker / FutureWorker are intentionally
@@ -268,6 +289,7 @@ class RuntimeTask:
     runtime_hint: str = ""      # e.g. "fail" to force a mock failure
     task_type: str = ""          # copied from the planning task for workers
     title: str = ""               # copied from the planning task for workers
+    goal: str = ""                 # original user goal (copied from graph)
 
     def to_dict(self) -> dict:
         return {

@@ -24,19 +24,25 @@ from .events import (
     task_finished,
     task_started,
 )
+from .executors import resolve_executor
 from .executor import execute_schedule
 from .history import load as load_history, snapshot
 from .models import (
     ExecutionReport,
     ExecutionResult,
+    Executor,
+    MockExecutor,
     MockWorker,
+    PythonExecutor,
     PythonWorker,
     RunState,
     RuntimeEvent,
     RuntimeTask,
     SCHEMA_VERSION,
     SessionState,
+    ShellExecutor,
     ShellWorker,
+    VerificationResult,
     Worker,
 )
 from .state import (
@@ -51,10 +57,15 @@ __all__ = [
     "execute_schedule",
     "dispatch",
     "WorkerResolver",
+    "Executor",
     "Worker",
+    "MockExecutor",
     "MockWorker",
+    "PythonExecutor",
     "PythonWorker",
+    "ShellExecutor",
     "ShellWorker",
+    "VerificationResult",
     "ExecutionResult",
     "RuntimeTask",
     "RuntimeEvent",
@@ -62,6 +73,7 @@ __all__ = [
     "RunState",
     "SessionState",
     "SCHEMA_VERSION",
+    "resolve_executor",
     "blocked_descendants",
     "can_transition",
     "mark_cancelled",

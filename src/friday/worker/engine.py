@@ -251,7 +251,7 @@ class WorkerRegistry:
         worker = _worker_from_manifest(manifest)
         return self.register(worker)
 
-    def register_external(self) -> int:
+    def register_external(self, discovery=None) -> int:
         """Register the declared external AI adapters from their manifests.
         Idempotent: re-registering the same worker id REPLACES the row (per
         register()'s upsert semantics). Returns count registered."""
@@ -259,26 +259,27 @@ class WorkerRegistry:
         for m in _EXTERNAL_MANIFESTS:
             res = self.register_from_manifest(dict(m))
             created += res.created
-        # Sync availability against reality (discovery scan).
-        from ..runtime.discovery import discover
-        self.sync_availability(discover(_EXTERNAL_MANIFESTS))
+        if discovery is not None:
+            self.sync_availability(discovery)
         return created
 
     def sync_availability(self, discovery) -> int:
         """Update ONLY the availability column from a DiscoveryResult. Workers are
         already registered; this synchronizes runtime state without touching
-        static metadata. DiscoveryResult is imported locally to avoid a
-        runtime<->worker import cycle."""
-        from ..runtime.discovery import DiscoveryResult
-        if not isinstance(discovery, DiscoveryResult):
-            raise TypeError("sync_availability expects a DiscoveryResult")
+        static metadata."""
+        # Duck-type check: accept any object with .available / .unavailable attrs.
+        available = getattr(discovery, "available", None)
+        unavailable = getattr(discovery, "unavailable", None)
+        if available is None or unavailable is None:
+            raise TypeError("sync_availability expects an object with 'available' "
+                            "and 'unavailable' list attributes")
         updated = 0
-        for wid in discovery.unavailable:
+        for wid in unavailable:
             w = self.worker_by_id(wid)
             if w is not None and w.availability != "unavailable":
                 update_worker_availability(self.conn, wid, "unavailable")
                 updated += 1
-        for wid in discovery.available:
+        for wid in available:
             w = self.worker_by_id(wid)
             if w is not None and w.availability != "available":
                 update_worker_availability(self.conn, wid, "available")
