@@ -1,5 +1,115 @@
 # FRIDAY Mission Control TUI — Design Spec
 
+**Status**: Approved (9.6/10). Refinements from review are captured below. These are design-stage definitions, not implementation scope for V1 unless explicitly marked.
+
+---
+
+## Refinements from Design Review
+
+### 1. MissionController — stateless renderer
+
+The renderer must be a pure function of state, never holding it.
+
+```
+EventBus → MissionState (owned by MissionController) → MissionRenderer.render(state)
+```
+
+`MissionRenderer` is a stateless callable. `MissionController` owns the `MissionState` and triggers re-renders. This makes the renderer trivially testable and replaceable.
+
+### 2. IDs on all view models (future-proofing)
+
+```python
+@dataclass(frozen=True)
+class WorkerView:
+    id: str                 # stable across reconnections
+    name: str
+    ...
+
+@dataclass(frozen=True)
+class TimelineEventView:
+    id: str
+    ...
+```
+
+Required for filtering, animations, worker replacement, and delta updates.
+
+### 3. Worker lifecycle (defined, not all implemented)
+
+```
+Spawned → Ready → Started → Progress → Waiting → Completed | Failed
+```
+
+Events cover the full lifecycle. `Spawned` and `Ready` may not emit in V1 but are defined to avoid adding them later.
+
+### 4. MissionPhase enum
+
+```python
+class MissionPhase(str, Enum):
+    PLANNING = "planning"
+    DISCOVERY = "discovery"
+    ANALYSIS = "analysis"
+    IMPLEMENTATION = "implementation"
+    VERIFICATION = "verification"
+    SUMMARY = "summary"
+    COMPLETE = "complete"
+```
+
+### 5. Mission hierarchy
+
+```
+Mission → Phase → Worker → Tool
+```
+
+Every event references its place in the hierarchy via mission_id + optional phase/worker/tool fields. This enables future drill-down without architectural changes.
+
+### 6. MissionContext
+
+Scope object that carries everything mission-scoped:
+
+```python
+@dataclass
+class MissionContext:
+    mission_id: str
+    goal: str
+    workspace: str
+    event_bus: EventBus
+    cancel_token: threading.Event
+    config: dict
+    started_at: datetime
+```
+
+Passed through the pipeline: `CLI → MissionController → RuntimeEngine`. Prevents parameter soup.
+
+### 7. Mission Graph widget (V1)
+
+A vertical phase progress indicator for the right column:
+
+```
+Planning     ✓
+Discovery    ✓
+Analysis     ●
+Implement    ○
+Verify       ○
+Summary      ○
+```
+
+Each phase maps to a `MissionPhase`. Current phase highlighted.
+
+### 8. Evidence concept
+
+Workers expose `Findings` — structured evidence, not raw logs. Not file-scanned counts, but derived conclusions:
+
+```
+Findings
+  • 2 circular imports detected
+  • 61 executor references found
+  • 4 duplicated implementations
+```
+
+Renderer shows findings per worker in a collapsible panel. The data flows from worker → EventBus → MissionState → WorkerView.findings. V1 can limit to a brief text summary per worker.
+
+---
+
 ## Overview
 
 Replace the current plain-text CLI with a Rich-powered presentation layer that gives users continuous situational awareness during long-running operations and premium structured output for quick commands.
@@ -36,6 +146,7 @@ src/friday/
 │       ├── workers.py
 │       ├── timeline.py
 │       ├── status.py
+│       ├── mission_graph.py   # Phase progress indicator
 │       ├── tables.py
 │       ├── trees.py
 │       └── panels.py
@@ -56,7 +167,7 @@ src/friday/
 
 ### `cli/models.py` — View models
 
-Immutable dataclasses that renderers consume. Examples:
+Immutable dataclasses that renderers consume. All view models carry stable `id` fields for future delta-update support.
 
 ```python
 @dataclass(frozen=True)
@@ -72,13 +183,16 @@ class MissionView:
 
 @dataclass(frozen=True)
 class WorkerView:
+    id: str                 # stable across reconnections
     name: str
-    status: WorkerStatus  # idle | running | completed | failed
+    status: WorkerStatus  # spawned | ready | running | waiting | completed | failed
     current_task: str
     progress: ProgressView | None
+    findings: list[str]     # structured evidence summary (see §Evidence)
 
 @dataclass(frozen=True)
 class TimelineEventView:
+    id: str
     timestamp: str
     kind: str
     message: str
@@ -93,6 +207,28 @@ class SummaryView:
     files_modified: int
     tests_passed: int
     warnings: int
+
+
+class MissionPhase(str, Enum):
+    PLANNING = "planning"
+    DISCOVERY = "discovery"
+    ANALYSIS = "analysis"
+    IMPLEMENTATION = "implementation"
+    VERIFICATION = "verification"
+    SUMMARY = "summary"
+    COMPLETE = "complete"
+
+
+@dataclass
+class MissionContext:
+    """Scope object carried through the execution pipeline."""
+    mission_id: str
+    goal: str
+    workspace: str
+    event_bus: EventBus
+    cancel_token: threading.Event
+    config: dict
+    started_at: datetime
 ```
 
 ### `cli/style.py` — Design system
@@ -324,18 +460,21 @@ This prevents terminal redraw for every `FileScanned` event while keeping the UI
 
 ## Events summary
 
-| Event | Fields | Persisted? |
-|-------|--------|-----------|
-| `MissionStarted` | goal, mission_id | Yes (runtime/events) |
-| `MissionCompleted` | result, summary, duration_ms | Yes (runtime/events) |
-| `PhaseChanged` | previous, current | No |
-| `WorkerStarted` | worker_id, name | No |
-| `WorkerProgress` | worker_id, current, total, message | No |
-| `WorkerCompleted` | worker_id, success | No, unless mission terminal |
-| `WorkerFailed` | worker_id, error | No |
-| `LogMessage` | level, message | No |
-| `ToolStarted` | tool_name, args | No |
-| `ToolCompleted` | tool_name, exit_code | No |
+| Event | Extends | Key fields | Persisted? |
+|-------|---------|-----------|-----------|
+| `MissionStarted` | Event | goal, mission_id | Yes (runtime/events) |
+| `MissionCompleted` | Event | result, summary, duration_ms | Yes (runtime/events) |
+| `PhaseChanged` | Event | previous: MissionPhase, current: MissionPhase | No |
+| `WorkerSpawned` | Event | worker_id, name, capability | No |
+| `WorkerReady` | Event | worker_id | No |
+| `WorkerStarted` | Event | worker_id, task_description | No |
+| `WorkerProgress` | Event | worker_id, current, total, message | No |
+| `WorkerWaiting` | Event | worker_id, reason | No |
+| `WorkerCompleted` | Event | worker_id, success, findings | No |
+| `WorkerFailed` | Event | worker_id, error | No |
+| `ToolStarted` | Event | tool_name, args | No |
+| `ToolCompleted` | Event | tool_name, exit_code | No |
+| `LogMessage` | Event | level, message | No |
 
 ---
 
