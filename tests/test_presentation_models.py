@@ -1,7 +1,7 @@
 """Tests for cli/models.py — view model dataclasses."""
 from __future__ import annotations
 
-from friday.cli.models import (
+from friday.presentation.models import (
     MissionView, WorkerView, TimelineEventView, ProgressView,
     SummaryView, WorkerStatus, MissionPhase,
 )

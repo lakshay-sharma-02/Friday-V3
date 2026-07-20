@@ -1,11 +1,11 @@
 """Tests for cli/formatters/ — domain object to view model conversion."""
 from __future__ import annotations
 
-from friday.cli.formatters.execution import (
+from friday.presentation.formatters.execution import (
     execution_result_to_view,
     task_to_worker_view,
 )
-from friday.cli.models import MissionPhase, WorkerStatus, MissionView
+from friday.presentation.models import MissionPhase, WorkerStatus, MissionView
 
 
 def test_execution_result_to_view_has_required_fields():

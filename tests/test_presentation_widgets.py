@@ -4,18 +4,18 @@ from io import StringIO
 
 from rich.console import Console
 
-from friday.cli.models import (
+from friday.presentation.models import (
     MissionPhase, WorkerStatus,
     WorkerView, TimelineEventView, ProgressView,
 )
-from friday.cli.widgets.header import HeaderWidget
-from friday.cli.widgets.footer import FooterWidget
-from friday.cli.widgets.progress import ProgressWidget
-from friday.cli.widgets.workers import WorkersWidget
-from friday.cli.widgets.timeline import TimelineWidget
-from friday.cli.widgets.mission_graph import MissionGraphWidget
-from friday.cli.widgets.panels import info_panel, error_panel
-from friday.cli.widgets.tables import data_table, key_value_table
+from friday.presentation.widgets.header import HeaderWidget
+from friday.presentation.widgets.footer import FooterWidget
+from friday.presentation.widgets.progress import ProgressWidget
+from friday.presentation.widgets.workers import WorkersWidget
+from friday.presentation.widgets.timeline import TimelineWidget
+from friday.presentation.widgets.mission_graph import MissionGraphWidget
+from friday.presentation.widgets.panels import info_panel, error_panel
+from friday.presentation.widgets.tables import data_table, key_value_table
 
 
 def _render(renderable) -> str:

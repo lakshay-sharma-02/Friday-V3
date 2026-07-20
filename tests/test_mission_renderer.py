@@ -4,15 +4,15 @@ from io import StringIO
 
 from rich.console import Console
 
-from friday.cli.models import (
+from friday.presentation.models import (
     MissionView, WorkerView, TimelineEventView, SummaryView,
     MissionPhase, WorkerStatus,
 )
-from friday.cli.renderers.mission import (
+from friday.presentation.renderers.mission import (
     MissionRenderer,
     render_mission_view,
 )
-from friday.cli.renderers.execution import render_execution_summary
+from friday.presentation.renderers.execution import render_execution_summary
 
 
 def _render(renderable) -> str:
