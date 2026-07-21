@@ -599,7 +599,24 @@ def _p_describe(req, conn, ev, today):
     if subject is None and req.subjects:
         subject = _repo_by_name(conn, req.subjects[0])
     if subject is None or subject.id is None:
-        ev.raw["note"] = "could not identify repository"
+        # Workspace scope: list all projects with their purposes.
+        from .query import all_repositories
+        from .identity import build_identity
+        repos = all_repositories(conn)
+        if repos:
+            blocks = []
+            for r in repos:
+                # Build lightweight identity for each repo (no full explanation).
+                ident = build_identity(conn, r.id)
+                if ident and ident.purpose:
+                    blocks.append(f"{r.name}: {ident.purpose}")
+                else:
+                    blocks.append(f"{r.name}: (ingested — try `friday identity {r.name}` for details)")
+            ev.blocks = blocks
+            ev.raw["count"] = len(repos)
+            ev.raw["note"] = "workspace describe"
+        else:
+            ev.raw["note"] = "could not identify repository"
         return
     text = explain_project_from_conn(conn, subject.id, detailed=True)
     ev.blocks = [text]
@@ -1839,7 +1856,10 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
         return mk(needs=("insights",))
     if any(w in qlow for w in (
         "explain", "walk me through", "tell me about", "describe",
-        "what is", "what does", "what are", "overview of",
+        "what is", "what does", "what are", "overview of", "what's this",
+        "what's in this", "what projects", "what repositor", "which repositor",
+        "give me an overview", "list all project", "list all repositor",
+        "what do you know about", "tell me what", "show me all",
     )):
         return mk(scope="repo" if _resolve_subjects(question, conn) else "workspace",
                   subjects=_resolve_subjects(question, conn),
