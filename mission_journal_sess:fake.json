@@ -1,11 +1,12 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-07-20T18:36:19.546466+00:00",
+  "generated_at": "2026-07-21T06:17:28.994755+00:00",
   "session_id": "sess:fake",
   "graph_id": "taskgraph:plan:improve the readme",
   "mission": "Improve the README",
-  "planner_time_ms": 59,
+  "planner_time_ms": 45,
   "execution_time_ms": 5,
+  "verification_time_ms": 0,
   "summary": {
     "completed": true,
     "tasks_total": 0,
@@ -14,7 +15,97 @@
     "cancelled": 0,
     "retried": 0,
     "verification_failures": 0,
-    "workers_used": 1
+    "workers_used": 1,
+    "stopped_at": null,
+    "stop_reason": null
+  },
+  "executor_assignments": [
+    {
+      "task_id": "taskgraph:plan:improve the readme#t1",
+      "worker_id": "worker:documentation"
+    },
+    {
+      "task_id": "taskgraph:plan:improve the readme#t2",
+      "worker_id": "worker:claude"
+    },
+    {
+      "task_id": "taskgraph:plan:improve the readme#t3",
+      "worker_id": "worker:claude"
+    },
+    {
+      "task_id": "taskgraph:plan:improve the readme#t4",
+      "worker_id": "worker:claude"
+    },
+    {
+      "task_id": "taskgraph:plan:improve the readme#t5",
+      "worker_id": "worker:documentation"
+    },
+    {
+      "task_id": "taskgraph:plan:improve the readme#t6",
+      "worker_id": "worker:documentation"
+    },
+    {
+      "task_id": "taskgraph:plan:improve the readme#t7",
+      "worker_id": "worker:documentation"
+    },
+    {
+      "task_id": "taskgraph:plan:improve the readme#t8",
+      "worker_id": "worker:documentation"
+    }
+  ],
+  "graph": {
+    "nodes": [
+      "taskgraph:plan:improve the readme#t1",
+      "taskgraph:plan:improve the readme#t2",
+      "taskgraph:plan:improve the readme#t3",
+      "taskgraph:plan:improve the readme#t4",
+      "taskgraph:plan:improve the readme#t5",
+      "taskgraph:plan:improve the readme#t6",
+      "taskgraph:plan:improve the readme#t7",
+      "taskgraph:plan:improve the readme#t8"
+    ],
+    "edges": [
+      {
+        "from": "taskgraph:plan:improve the readme#t1",
+        "to": "taskgraph:plan:improve the readme#t2"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t2",
+        "to": "taskgraph:plan:improve the readme#t3"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t2",
+        "to": "taskgraph:plan:improve the readme#t4"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t3",
+        "to": "taskgraph:plan:improve the readme#t5"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t4",
+        "to": "taskgraph:plan:improve the readme#t5"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t3",
+        "to": "taskgraph:plan:improve the readme#t6"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t4",
+        "to": "taskgraph:plan:improve the readme#t6"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t5",
+        "to": "taskgraph:plan:improve the readme#t7"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t6",
+        "to": "taskgraph:plan:improve the readme#t7"
+      },
+      {
+        "from": "taskgraph:plan:improve the readme#t7",
+        "to": "taskgraph:plan:improve the readme#t8"
+      }
+    ]
   },
   "tasks": [],
   "failures": []

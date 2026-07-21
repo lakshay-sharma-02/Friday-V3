@@ -20,9 +20,16 @@ from .worker import WorkerRegistry
 from .worker.engine import RegistryError, BUILTIN_WORKERS
 
 
+def _ensure_bootstrapped(conn):
+    """Idempotently seed the registry on first read."""
+    from .worker.engine import ensure_runtime_bootstrapped
+    ensure_runtime_bootstrapped(conn)
+
+
 def cmd_workers(args: argparse.Namespace) -> int:
     """READ: list all registered workers (id, kind, status, capabilities)."""
     conn = connect()
+    _ensure_bootstrapped(conn)
     reg = WorkerRegistry(conn)
     workers = reg.all_workers()
     conn.close()
@@ -45,6 +52,7 @@ def cmd_worker_show(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
     conn = connect()
+    _ensure_bootstrapped(conn)
     reg = WorkerRegistry(conn)
     w = reg.worker_by_name(name)
     conn.close()
@@ -115,13 +123,15 @@ def cmd_worker(args: argparse.Namespace) -> int:
     `friday worker export`           -> export the registry JSON
     """
     token = getattr(args, "token", None)
-    if token == "register":
+    if token in ("register",):
         sub = getattr(args, "sub", None)
         if sub == "builtin":
             return cmd_worker_register_builtin(args)
         return cmd_worker_register(args)
     if token == "export":
         return cmd_worker_export(args)
+    if token in ("list",):
+        return cmd_workers(args)
     if token:
         # Show one worker by name.
         show_args = argparse.Namespace(name=token)

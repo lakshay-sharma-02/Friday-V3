@@ -66,55 +66,10 @@ _P_UNSUPPORTED_LANG = 5  # task needs a language the worker lacks
 _P_UNSUPPORTED_TASK = 5  # worker lacks the task_type
 _P_UNSUPPORTED_PLAN = 3  # worker lacks the plan_type
 
-# Lightweight planner-intent -> executor-id mapping. The planner emits *intent*
-# (Research, Architecture, Implementation, Testing, ...); these map to the
-# executors that can fulfil that intent. Capability *equality* is NOT required
-# — an executor is a candidate if it appears here OR matches capabilities.
-# Deterministic built-ins are listed first so they win ties.
-INTENT_TO_EXECUTORS: dict = {
-    "research":        ["worker:claude", "worker:codex", "worker:gemini",
-                        "worker:python"],
-    "architecture":    ["worker:claude", "worker:codex", "worker:gemini"],
-    "design":          ["worker:claude", "worker:codex", "worker:python"],
-    "planning":        ["worker:claude", "worker:gemini"],
-    "implementation":  ["worker:filesystem", "worker:python", "worker:claude",
-                        "worker:codex"],
-    "configuration":   ["worker:filesystem", "worker:shell", "worker:python"],
-    "documentation":   ["worker:documentation", "worker:claude"],
-    "testing":         ["worker:testing", "worker:python", "worker:shell"],
-    "verification":    ["worker:testing", "worker:python", "worker:claude"],
-    "refactor":        ["worker:python", "worker:filesystem", "worker:claude",
-                        "worker:codex"],
-    "migration":       ["worker:shell", "worker:filesystem", "worker:python"],
-    "infrastructure":  ["worker:shell", "worker:git", "worker:python"],
-    "deployment":      ["worker:shell", "worker:git"],
-    "analysis":        ["worker:python", "worker:claude", "worker:gemini"],
-    "review":          ["worker:claude", "worker:codex", "worker:python"],
-    "cleanup":         ["worker:filesystem", "worker:shell", "worker:python"],
-}
-
-# Capability token -> deterministic built-in executor id that can satisfy it.
-# Used to redirect capability-based matching away from AI executors when a
-# deterministic executor covers the same capability.
-_CAP_TO_DETERMINISTIC: dict = {
-    "python": "worker:python",
-    "testing": "worker:testing",
-    "file editing": "worker:filesystem",
-    "shell commands": "worker:shell",
-    "git operations": "worker:git",
-    "documentation": "worker:documentation",
-    "static analysis": "worker:python",
-    "backend": "worker:python",
-    "frontend": "worker:python",
-}
-
-# Intents that are inherently AI/LLM work (reasoning, open-ended research,
-# design). For these the planner INTENT, not raw capability breadth, drives
-# selection: AI executors are preferred and deterministic built-ins are the
-# fallback. All other intents are deterministic-primary.
-AI_PRIMARY_INTENTS = frozenset({
-    "research", "architecture", "design", "planning", "review",
-})
+# Intent-based executor routing has been removed. The resolver now scores
+# workers purely on capability match, task-type support, determinism, and
+# availability — all queried from the real Worker Registry. No hardcoded
+# worker IDs. See rank_workers() and select_assignment().
 
 from ..worker.models import WorkerKind as _WorkerKind  # noqa: E402
 
@@ -151,13 +106,8 @@ def is_deterministic(worker) -> bool:
 
 def _intent_for(task_required: List[str], task_type: str) -> str:
     """Derive the planner intent for a task (task_type first, else a cap)."""
-    t = (task_type or "").lower()
-    if t in INTENT_TO_EXECUTORS:
-        return t
-    for cap in task_required:
-        if cap.lower() in INTENT_TO_EXECUTORS:
-            return cap.lower()
-    return t
+    _ = None  # worker IDs no longer referenced
+    return (task_type or "").lower()
 
 
 def _langs_in_task(required: List[str]) -> List[str]:
@@ -248,40 +198,34 @@ def score_worker(
     else:
         sb.penalty += _P_DISABLED
 
-    sb.confidence = _W_CONFIDENCE.get(worker.confidence, 0)
+    # Check runtime availability, not just registry status.
+    # An active worker whose binary is missing or unavailable gets penalized
+    # at resolution time so the resolver picks a viable alternative or marks
+    # the task UNRESOLVED with a clear reason — never hands runtime a worker
+    # that will 404 at execution time.
+    if worker.availability != "available":
+        sb.penalty += _P_DISABLED
 
-    # Lightweight intent -> executor affinity: a worker listed for the task's
-    # planner intent gets a soft bonus (so intent, not raw capability breadth,
-    # drives selection). AI executors only win when no deterministic executor
-    # is listed for the intent.
-    if intent:
-        candidates = INTENT_TO_EXECUTORS.get(intent, [])
-        if worker.id in candidates:
-            sb.task_type += 8 * (len(candidates) - candidates.index(worker.id))
+    sb.confidence = _W_CONFIDENCE.get(worker.confidence, 0)
 
     # Separately record determinism preference (not a penalty on the base
     # score, so it does not distort the capability explanation).
     if missing:
         sb.penalty += _P_MISSING_CAP * len(missing)
-    _tag_executor_kind(sb, worker, intent)
+    _tag_executor_kind(sb, worker)
 
     return sb, matched, missing
 
 
 # Determinism / AI classification is recorded on the ScoreBreakdown so the
 # ranking can prefer deterministic executors without losing transparency.
-# For AI-primary intents the preference is inverted: AI executors are boosted
-# and deterministic built-ins penalized, so the planner's intent wins. The
-# preference lives in `executor_pref` (folded into total) so the capability
-# breakdown shown to the user stays pure.
 def _tag_executor_kind(sb, worker, intent: str = "") -> None:
-    ai_primary = intent in AI_PRIMARY_INTENTS
+    _ = intent  # intent-based AI routing removed; all tasks score with
+                # deterministic-first preference.
     if is_ai_executor(worker):
-        sb.executor_pref += (_W_DETERMINISTIC if ai_primary else -_W_AI_PENALTY)
+        sb.executor_pref += -_W_AI_PENALTY
     elif is_deterministic(worker):
-        sb.executor_pref += (0 if ai_primary else _W_DETERMINISTIC)
-        if ai_primary:
-            sb.penalty += _W_AI_PENALTY
+        sb.executor_pref += _W_DETERMINISTIC
 
 
 def _confidence_for(
