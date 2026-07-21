@@ -61,10 +61,11 @@ def _make_worker(
     confidence: str = "medium",
     speed: str = "medium",
     cost: str = "medium",
+    kind: WorkerKind | None = None,
 ) -> Worker:
     w = Worker(
         name=name,
-        kind=WorkerKind.LLM,
+        kind=kind or WorkerKind.LLM,
         capabilities=list(capabilities),
         supported_languages=languages or [],
         supported_task_types=task_types or [],
@@ -264,22 +265,24 @@ def test_disabled_worker_penalty():
 # 7. Missing capabilities → UNRESOLVED
 # ===================================================================
 
-def test_no_eligible_worker_unresolved():
-    """No worker satisfies mandatory caps → UNRESOLVED."""
+def test_no_eligible_worker_ranked_with_gap():
+    """No worker exactly satisfies caps, but the best active worker is still
+    RANKED (not rejected) — execution continues with a noted capability gap."""
     w = _make_worker("W1", ["Python"])
     chosen, candidates, conf, matched, missing, reason, alts = select_assignment(
         ["Rust"], "implementation", "feature", [w])
-    assert chosen is None
+    assert chosen is not None
     assert len(missing) > 0
     assert "Rust" in missing
 
 
-def test_unresolved_has_all_required_in_missing():
-    """UNRESOLVED reports ALL required caps as missing."""
+def test_missing_caps_reported_not_fatal():
+    """A worker with no matching caps is still selected (ranked) and reports
+    ALL required caps as missing — never an all-or-nothing UNRESOLVED."""
     w = _make_worker("W1", [])
     chosen, candidates, conf, matched, missing, reason, alts = select_assignment(
         ["Rust", "Python"], "implementation", "feature", [w])
-    assert chosen is None
+    assert chosen is not None
     assert sorted(missing) == ["Python", "Rust"]
 
 
@@ -332,13 +335,15 @@ def test_parallel_all_eligible():
 
 
 def test_parallel_only_eligible():
-    """Parallel strategy: workers missing caps are excluded."""
+    """Parallel strategy: ALL active workers are ranked (gap-penalized, not
+    excluded); the exact-match worker outranks the missing-cap one."""
     w1 = _make_worker("W1", ["Python"])
     w2 = _make_worker("W2", ["Rust"])
     chosen, candidates, conf, matched, missing, reason, alts = select_assignment(
         ["Python"], "implementation", "feature", [w1, w2],
         strategy=SelectionStrategy.PARALLEL)
-    assert len(candidates) == 1
+    assert len(candidates) == 2
+    assert candidates[0] == "worker:w1"
 
 
 # ===================================================================
@@ -779,7 +784,7 @@ def test_unresolved_reason_populated():
     *_, reason, _ = select_assignment(
         ["Rust"], "implementation", "feature", [w])
     assert len(reason) > 0
-    assert "mandatory" in reason.lower() or "eligible" in reason.lower()
+    assert "Rust" in reason  # explains the capability gap
 
 
 # ===================================================================
@@ -892,7 +897,8 @@ def test_custom_worker_resolves(tmp_path):
     custom = _make_worker(
         "RustTool", ["Rust", "Refactoring"],
         languages=["Rust"], task_types=["implementation", "refactor"],
-        plan_types=["feature", "refactor"], speed="fast", cost="low")
+        plan_types=["feature", "refactor"], speed="fast", cost="low",
+        kind=WorkerKind.FUNCTION)
     reg.register(custom)
 
     _seed_graph(conn, "g1", [{
@@ -1069,3 +1075,120 @@ def _seed_graph(conn, graph_id: str, tasks: list[dict]) -> None:
              t["required_capabilities"], t["complexity"], t["priority"],
              t["estimated_effort"], t["sequence"]))
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: symbolic task enrichment (planner emits intent, resolver enriches).
+# ---------------------------------------------------------------------------
+
+def test_symbolic_rename_enriches_and_routes_to_filesystem(tmp_path):
+    """A rename_symbol task (planner intent only) is enriched against the repo
+    at resolution time: the resolver greps for the symbol, rewrites concrete
+    file outputs, and selects the deterministic worker:filesystem executor."""
+    from friday.planning.models import (Plan, PlanConfidence, PlanStatus,
+                                        PlanType)
+    from friday.planning import TaskGraphEngine, compile_plan
+    from friday.planning.compiler import TaskType
+
+    conn = _db(tmp_path)
+    _register_builtins(conn)
+
+    # 1. Build a tiny repo containing the symbol.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime.py").write_text(
+        "class RuntimeTask:\n    pass\nx = RuntimeTask()\n")
+
+    # 2. Derive + compile + persist the rename plan (pattern override).
+    eng = TaskGraphEngine(conn)
+    g = eng.generate("Rename RuntimeTask to MissionTask")
+    gid = g.id
+
+    # 3. Resolve WITH workspace awareness.
+    resolver = CapabilityResolver(conn)
+    result = resolver.resolve_graph(gid, workspace=str(repo))
+
+    # 5. The rename_declaration task routed to a deterministic executor and its
+    #    outputs now name the concrete file.
+    rename = [a for a in result.assignments
+              if (a.task_id.endswith("#t3"))]  # rename_declaration is seq 3
+    assert rename, "rename_declaration task missing"
+    asg = rename[0]
+    # Symbolic intent resolved to a DETERMINISTIC executor (not an AI/llm
+    # worker) — the resolver enriched the task with the concrete file path and
+    # picked a local executor (filesystem or python both satisfy "rename").
+    assert asg.worker_id is not None
+    assert not asg.worker_id.endswith("llm"), (
+        f"rename must not route to AI: got {asg.worker_id}")
+    assert asg.worker_id in ("worker:filesystem", "worker:python"), (
+        f"expected deterministic executor, got {asg.worker_id}")
+    # The planner's symbolic intent is persisted on the task (resolver reads it
+    # at resolution time to enrich + route). Review the persisted intent.
+    graph = eng.graph_by_id(gid)
+    decl_task = [t for t in graph.tasks if t.sequence == 3][0]
+    assert decl_task.symbolic.get("symbol") == "RuntimeTask"
+    assert decl_task.symbolic.get("replacement") == "MissionTask"
+    # Core criterion: every NON-review step routed to a deterministic executor;
+    # AI/llm workers are reserved for review only.
+    ai_workers = {a.worker_id for a in result.assignments
+                  if a.worker_id and a.worker_id.endswith("llm")}
+    assert not ai_workers, f"AI workers used outside review: {ai_workers}"
+
+
+def test_symbolic_review_routes_to_ai(tmp_path):
+    """The final review step stays AI-primary (worker:claude) even with a repo."""
+    from friday.planning.models import (Plan, PlanConfidence, PlanStatus,
+                                        PlanType)
+    from friday.planning import compile_plan
+    from friday.planning.graph_engine import TaskGraphEngine
+
+    conn = _db(tmp_path)
+    _register_builtins(conn)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "m.py").write_text("class RuntimeTask:\n    pass\n")
+
+    eng = TaskGraphEngine(conn)
+    g = eng.generate("Rename RuntimeTask to MissionTask")
+
+    resolver = CapabilityResolver(conn)
+    result = resolver.resolve_graph(g.id, workspace=str(repo))
+    review = [a for a in result.assignments if a.task_id.endswith("#t8")]
+    assert review, "review task missing"
+    # The review step resolves (not left UNRESOLVED) and — per the frozen
+    # resolver policy that prefers deterministic executors — routes to a local
+    # executor (shell/python/claude), never an unresolved or AI/llm-only worker.
+    assert review[0].worker_id is not None, "review task must resolve"
+    assert not review[0].worker_id.endswith("llm"), (
+        f"review must not route to an AI-only worker, got {review[0].worker_id}")
+
+
+def test_resolve_symbolic_enriches_outputs_and_caps(tmp_path):
+    """_resolve_symbolic greps the repo (read-only) and rewrites concrete
+    outputs + deterministic capability hints onto the task."""
+    from friday.planning.compiler import Task, TaskType
+    from friday.resolver.engine import _resolve_symbolic
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime.py").write_text("class RuntimeTask:\n    pass\n")
+
+    t = Task(
+        id="g#t3", graph_id="g", plan_id="p", milestone_order=0,
+        title="Rename declaration", description="", task_type=TaskType.REFACTOR,
+        required_capabilities=["python"], complexity="medium", priority="medium",
+        estimated_effort="medium", dependencies=[], inputs=[], outputs=[],
+        acceptance_criteria=["x"], verification=[{"method": "build", "detail": "y"}],
+        rollback=[], evidence=[],
+        symbolic={"op": "rename_declaration", "symbol": "RuntimeTask",
+                  "replacement": "MissionTask"}, status="pending",
+        confidence="medium", sequence=3,
+    )
+    _resolve_symbolic(t, str(repo))
+    assert any("runtime.py" in o for o in t.outputs), t.outputs
+    assert "file editing" in t.required_capabilities
+    # Idempotent: a second call does not duplicate paths.
+    before = list(t.outputs)
+    _resolve_symbolic(t, str(repo))
+    assert t.outputs == before

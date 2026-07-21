@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from .models import Plan, now_iso
+from .patterns import classify
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,7 @@ class Task:
     verification: List[dict]
     rollback: List[dict]
     evidence: List[str]
+    symbolic: dict = field(default_factory=dict)  # Phase 3: symbolic op intent
     status: str = "pending"
     confidence: str = "medium"
     sequence: int = 0
@@ -207,6 +209,7 @@ class Task:
             "verification": list(self.verification),
             "rollback": list(self.rollback),
             "evidence": list(self.evidence),
+            "symbolic": dict(self.symbolic),
             "status": self.status,
             "confidence": self.confidence,
             "sequence": self.sequence,
@@ -479,6 +482,71 @@ _OUTPUTS: Dict[str, List[str]] = {
 }
 
 
+# File extensions that unambiguously name a real artifact (vs a bare word).
+_ARTIFACT_EXT = {
+    "py", "md", "txt", "sh", "ts", "tsx", "jsx", "js", "rs", "go", "rb", "java",
+    "c", "h", "cpp", "hpp", "json", "yaml", "yml", "sql", "html", "css", "scss",
+    "toml", "cfg", "ini", "lock", "env", "pdf", "csv", "xml",
+}
+
+
+def _expected_artifacts(task_type: str, title: str, goal: str) -> List[str]:
+    """Derive the explicit, machine-checkable artifact contract for a task.
+
+    Phase 1.5: the planner now STAMPS the expected file paths onto the task so
+    the runtime verifies an explicit contract instead of guessing from prose.
+    Deterministic: looks for `name.ext` tokens in the task title and the goal
+    (the goal/title name the very file the mission wants). Returns [] for task
+    types that are not artifact-producing (analysis, research, design, ...).
+    """
+    if task_type not in _CREATION_TASK_TYPES:
+        return []
+    out: List[str] = []
+    seen = set()
+    for text in (title, goal):
+        for word in (text or "").split():
+            word = word.strip(".,;:'\"!?()[]{}")
+            if "." in word and not word.startswith(".") and not word.endswith("."):
+                ext = word.rsplit(".", 1)[1].lower()
+                if ext in _ARTIFACT_EXT and word not in seen:
+                    seen.add(word)
+                    out.append(word)
+    return out
+
+
+# Task types whose purpose is to PRODUCE a file on disk. For these the planner
+# emits an explicit artifact path into the contract.
+_CREATION_TASK_TYPES = frozenset({
+    TaskType.IMPLEMENTATION, TaskType.DOCUMENTATION, TaskType.TESTING,
+    TaskType.CONFIGURATION, TaskType.CLEANUP, TaskType.MIGRATION,
+    TaskType.INFRASTRUCTURE, TaskType.DEPLOYMENT,
+})
+
+
+def _cap_for_symbolic(task_type: str) -> List[str]:
+    """Capability hints for a symbolic task type (Resolver refines these).
+
+    Must use the FROZEN capability vocabulary shared with graph_schema
+    validation (python/testing/configuration/...), NOT the Resolver's
+    worker-capability strings (file editing/shell commands/...). The Resolver's
+    repo enrichment adds the worker-side hints at resolution time, where the
+    graph schema is no longer re-validated. This keeps the compiled graph
+    schema-valid while still biasing toward deterministic executors."""
+    return {
+        "analysis": ["python"],
+        "refactor": ["python"],
+        "implementation": ["python"],
+        "cleanup": ["python"],
+        "configuration": ["configuration"],
+        "testing": ["testing"],
+        "verification": ["testing"],
+        # Review has no capability in the frozen vocabulary; a valid token keeps
+        # the task's capability contract non-empty (the resolver routes review by
+        # task_type, not capability, so this is cosmetic).
+        "review": ["research"],
+    }.get(task_type, [])
+
+
 def _evidence_for(milestone: dict, plan: Plan) -> List[str]:
     """Ground each task in the evidence kind its milestone referenced. No
     hallucinated ids — only valid lower-layer ids the plan already cites."""
@@ -703,6 +771,14 @@ class TaskGraphCompiler:
         gid = _graph_id(plan)
         pid = plan.id or plan._generate_id()
 
+        # Phase 3: engineering-pattern pre-pass. A recognized software-engineering
+        # mission (rename/extract/refactor/feature/bugfix/maintenance) overrides
+        # the whole graph with an explicit deterministic workflow. Unrecognized
+        # goals fall through to the frozen generic milestone expansion below.
+        pattern = classify(plan.goal, plan)
+        if pattern is not None:
+            return self._compile_pattern(gid, pid, plan, pattern, generated_at)
+
         milestones = sorted(plan.milestones, key=lambda m: m.get("order", 0))
         if not milestones:
             raise ValueError(f"plan {pid} has no milestones to compile")
@@ -762,7 +838,10 @@ class TaskGraphCompiler:
                 estimated_effort=plan.estimated_effort or "medium",
                 dependencies=[],
                 inputs=list(_INPUTS.get(tt, ["Plan goal"])),
-                outputs=list(_OUTPUTS.get(tt, [])),
+                # Phase 1.5: emit the explicit artifact contract (file paths)
+                # alongside the human-readable description, so the runtime can
+                # verify WHAT must exist after execution. Deduplicated.
+                outputs=list(_OUTPUTS.get(tt, [])) + _expected_artifacts(tt, title, plan.goal),
                 acceptance_criteria=_acceptance_criteria(tt, title, plan),
                 verification=_task_verification(tt, plan),
                 rollback=_task_rollback(tt, plan),
@@ -837,6 +916,101 @@ class TaskGraphCompiler:
             parallel_groups=pgroups, parallel_tasks=ptasks,
         )
         return g
+
+    def _compile_pattern(self, gid: str, pid: str, plan: Plan,
+                          pattern, generated_at: str) -> TaskGraph:
+        """Build a deterministic engineering task graph from a PatternPlan.
+
+        Reuses the SAME edge/level/critical-path/priority machinery as the
+        generic path — only the task source differs (symbolic tasks instead of
+        expanded milestones). A pattern task that is `parallel_next` runs in
+        parallel with the following task within the same linear phase.
+        """
+        specs = pattern.tasks
+        n = len(specs)
+        tasks: List[Task] = []
+        seq_to_id: List[str] = []
+
+        for i, spec in enumerate(specs, start=1):
+            tt = TaskType.from_str(spec.task_type)
+            # Symbolic capability hints + language caps inferred from the goal
+            # (reuses the frozen language vocabulary so e.g. "Rust" still
+            # surfaces on an extract/rename graph, preserving prior behaviour).
+            caps = _cap_for_symbolic(spec.task_type) + _infer_language_caps(plan.goal)
+            # De-dup, preserve order.
+            _seen = set()
+            caps = [c for c in caps if not (c in _seen or _seen.add(c))]
+            desc = spec.symbolic.get("goal") or plan.goal
+            t = Task(
+                id=f"{gid}#t{i}",
+                graph_id=gid, plan_id=pid, milestone_order=0,
+                title=spec.title, description=desc, task_type=tt,
+                required_capabilities=caps,
+                complexity="medium", priority="medium",
+                estimated_effort=plan.estimated_effort or "medium",
+                dependencies=[], inputs=["Plan goal"],
+                outputs=list(_OUTPUTS.get(tt, [])),
+                acceptance_criteria=list(spec.acceptance_criteria),
+                verification=list(spec.verification),
+                rollback=_task_rollback(tt, plan),
+                evidence=[],
+                symbolic=dict(spec.symbolic),
+                status="pending",
+                confidence=(plan.confidence.value if plan.confidence else "medium"),
+                sequence=i,
+            )
+            tasks.append(t)
+            seq_to_id.append(t.id)
+
+        # Linear chain; a `parallel_next` task gets NO edge to its successor.
+        edges: List[dict] = []
+        for i in range(1, n):
+            if not specs[i - 1].parallel_next:
+                edges.append({"from": seq_to_id[i], "to": seq_to_id[i - 1],
+                              "kind": "depends_on"})
+        # De-dup edges.
+        seen = set()
+        deduped = []
+        for e in edges:
+            key = (e["from"], e["to"])
+            if key not in seen:
+                seen.add(key)
+                deduped.append(e)
+        edges = deduped
+
+        task_ids = [t.id for t in tasks]
+        if _detect_cycle(edges, task_ids):
+            raise CycleError(
+                f"pattern graph {gid} contains a cycle; rejected")
+
+        levels = _compute_levels(edges, task_ids)
+        cpath = _critical_path(edges, tasks)
+        pgroups, ptasks = _parallel_groups(levels)
+        on_crit = set(cpath)
+        max_level = max(levels.values()) if levels else 0
+
+        preds: Dict[str, List[str]] = {t.id: [] for t in tasks}
+        for e in edges:
+            preds.setdefault(e["from"], []).append(e["to"])
+        dependents: Dict[str, int] = {t.id: 0 for t in tasks}
+        for e in edges:
+            dependents[e["to"]] = dependents.get(e["to"], 0) + 1
+
+        for t in tasks:
+            t.dependencies = sorted(preds.get(t.id, []))
+            t.complexity = _complexity(t.task_type, len(t.dependencies),
+                                       plan.estimated_complexity)
+            t.priority = _priority(t.task_type, levels.get(t.id, 0),
+                                   dependents.get(t.id, 0),
+                                   t.id in on_crit, max_level)
+
+        return TaskGraph(
+            id=gid, goal=plan.goal, plan_id=pid, plan_type=plan.plan_type.value,
+            tasks=tasks, edges=edges, status="compiled",
+            created_at=generated_at, updated_at=generated_at,
+            critical_path=cpath, levels=levels,
+            parallel_groups=pgroups, parallel_tasks=ptasks,
+        )
 
     @staticmethod
     def _milestone_for(phase: int, milestones: List[dict]) -> dict:

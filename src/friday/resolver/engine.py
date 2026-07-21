@@ -90,6 +90,66 @@ def _strategy_for_task(task, graph) -> SelectionStrategy:
     return SelectionStrategy.SINGLE
 
 
+def _resolve_symbolic(task, workspace: str) -> None:
+    """Enrich a symbolic task with repository knowledge (READ-ONLY).
+
+    Greps the workspace for the target symbol/file and rewrites the task's
+    concrete outputs (file paths) + capability hints so the existing
+    ``select_assignment`` routes to a deterministic executor (filesystem/git/
+    python/testing). Never writes to the repo. Idempotent: skips if already
+    enriched (outputs already contain a path).
+    """
+    sym = task.symbolic or {}
+    op = sym.get("op", "")
+    symbol = sym.get("symbol") or sym.get("target") or sym.get("module") or ""
+    if not symbol:
+        return
+    # Already enriched (a prior pass added concrete paths).
+    if any("/" in o or o.endswith(".py") for o in task.outputs):
+        return
+
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["grep", "-rIl", "--include=*.py", "-e", symbol, workspace],
+            capture_output=True, text=True, timeout=20)
+        files = [p.strip() for p in out.stdout.splitlines() if p.strip()]
+    except Exception:
+        files = []
+
+    if not files:
+        return
+
+    # Concrete artifact contract: the files that must change.
+    seen = set(task.outputs)
+    for f in files:
+        if f not in seen:
+            task.outputs.append(f)
+            seen.add(f)
+
+    # Capability hints so a deterministic executor wins over AI.
+    hints = {
+        "rename_declaration": ["file editing", "python"],
+        "rename_imports": ["file editing", "python"],
+        "update_references": ["file editing", "python"],
+        "move_code": ["file editing", "python"],
+        "update_imports": ["file editing", "python"],
+        "remove_safely": ["file editing", "python"],
+        "modify_implementation": ["file editing", "python"],
+        "create_module": ["file editing", "python"],
+        "run_formatter": ["file editing", "shell commands"],
+        "run_tests": ["testing"],
+        "run_regression_tests": ["testing"],
+        "verify_fix": ["testing"],
+    }.get(op)
+    if hints:
+        caps = list(task.required_capabilities)
+        for h in hints:
+            if h not in caps:
+                caps.append(h)
+        task.required_capabilities = caps
+
+
 class CapabilityResolver:
     """Reads Task Graph + Worker Registry, writes Assignments only."""
 
@@ -119,12 +179,27 @@ class CapabilityResolver:
     # --- WRITE (resolution) -------------------------------------------------
 
     def resolve_graph(self, graph_id: str,
-                      strategy: Optional[SelectionStrategy] = None
+                      strategy: Optional[SelectionStrategy] = None,
+                      workspace: Optional[str] = None
                       ) -> ResolveResult:
-        """Resolve every task in a graph to a worker. Atomic, idempotent."""
+        """Resolve every task in a graph to a worker. Atomic, idempotent.
+
+        When `workspace` is given, symbolic tasks (emitted by the engineering
+        planner) are enriched with repository-specific information (which files
+        contain the target symbol, whether imports need updating) BEFORE
+        executor selection. The resolver only READS the repo (grep) — it never
+        mutates it. This keeps planning deterministic (intent-only) while letting
+        the resolver choose a concrete deterministic executor at resolution time.
+        """
         g = self._graph_eng.graph_by_id(graph_id)
         if g is None:
             raise ValueError(f"unknown graph_id: {graph_id}")
+
+        # Phase 3: enrich symbolic tasks with repo knowledge (read-only).
+        if workspace:
+            for task in g.tasks:
+                if getattr(task, "symbolic", None):
+                    _resolve_symbolic(task, workspace)
 
         workers = self._registry.active_workers()
         # Exclude reasoning-service profiles that have no execution adapter.
@@ -153,6 +228,7 @@ class CapabilityResolver:
                         workers,
                         strategy=task_strategy,
                         successful_history=hist_counts,
+                        expected_artifacts=list(task.outputs),
                     )
                 res = self._build_result(
                     task, chosen, candidates, conf, matched, missing,
@@ -190,7 +266,8 @@ class CapabilityResolver:
             confidence=conf, reason=reason,
             matched_capabilities=matched, missing_capabilities=missing,
             selection_strategy=strategy,
-            candidates=candidates, alternatives=alts)
+            candidates=candidates, alternatives=alts,
+            expected_artifacts=list(task.outputs))
 
     def _persist_assignment(self, graph_id, task, res: ResolutionResult,
                             resolved_at: str) -> Assignment:

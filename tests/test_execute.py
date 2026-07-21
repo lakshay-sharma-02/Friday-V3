@@ -10,9 +10,15 @@ from friday.cli_execute import cmd_execute
 
 class _FakeReport:
     session_id = "sess:fake"
+    state = "finished"
+    verification_time_ms = 0
+    stopped_at = None
+    stop_reason = None
     executed = 1
     succeeded = 1
     failed = 0
+    cancelled = 0
+    workers_used = 1
     duration_ms = 5
     tasks = [{"task_id": "t1", "status": "success", "error": ""}]
 

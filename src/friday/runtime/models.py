@@ -96,6 +96,10 @@ class ExecutionResult:
     started_at: Optional[str] = None     # provenance
     ended_at: Optional[str] = None       # provenance
     metadata: dict = field(default_factory=dict)  # provenance
+    # The executor's own contract check (after execute()). None until verified.
+    # Separates "process exited 0" (success) from "contract satisfied"
+    # (verification_passed). Truthful mission reporting keys off this.
+    verification_passed: Optional[bool] = None
 
     def to_dict(self) -> dict:
         return {
@@ -110,6 +114,7 @@ class ExecutionResult:
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "metadata": dict(self.metadata),
+            "verification_passed": self.verification_passed,
         }
 
 
@@ -122,6 +127,9 @@ class VerificationResult:
     """Objective correctness verdict from a worker/executor's verify() step."""
     passed: bool
     reason: str = ""
+    # Structured evidence behind the verdict (test summary, git diff presence,
+    # symbol counts...). Persisted to the journal so the mission is provable.
+    evidence: dict = field(default_factory=dict)
 
 
 class Executor:
@@ -290,6 +298,14 @@ class RuntimeTask:
     task_type: str = ""          # copied from the planning task for workers
     title: str = ""               # copied from the planning task for workers
     goal: str = ""                 # original user goal (copied from graph)
+    # Phase 1.5 execution contract (carried from the planning Task so the
+    # runtime verifies an explicit contract instead of guessing from prose).
+    outputs: List[str] = field(default_factory=list)
+    acceptance_criteria: List[str] = field(default_factory=list)
+    verification: List[dict] = field(default_factory=list)
+    # Phase 3/4: symbolic engineering intent (op + target). The runtime
+    # translates this into a concrete executor payload at execution time.
+    symbolic: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -300,6 +316,13 @@ class RuntimeTask:
             "worker_id": self.worker_id,
             "wave": self.wave,
             "dependencies": list(self.dependencies),
+            "task_type": self.task_type,
+            "title": self.title,
+            "goal": self.goal,
+            "outputs": list(self.outputs),
+            "acceptance_criteria": list(self.acceptance_criteria),
+            "verification": list(self.verification),
+            "symbolic": dict(self.symbolic),
         }
 
 
@@ -345,6 +368,9 @@ class ExecutionReport:
     finished_at: str
     wave_count: int = 0
     duration_ms: int = 0
+    verification_time_ms: int = 0
+    stopped_at: Optional[str] = None     # task_id where a blocking failure ended
+    stop_reason: Optional[str] = None    # truthful "why the mission stopped"
     executed: int = 0
     succeeded: int = 0
     failed: int = 0
@@ -362,6 +388,9 @@ class ExecutionReport:
             "finished_at": self.finished_at,
             "wave_count": self.wave_count,
             "duration_ms": self.duration_ms,
+            "verification_time_ms": self.verification_time_ms,
+            "stopped_at": self.stopped_at,
+            "stop_reason": self.stop_reason,
             "executed": self.executed,
             "succeeded": self.succeeded,
             "failed": self.failed,

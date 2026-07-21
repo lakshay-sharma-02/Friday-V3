@@ -32,16 +32,132 @@ _W_PLAN_TYPE = 3         # worker supports the plan's plan_type
 _W_AVAILABLE = 5         # worker is active
 _W_CONFIDENCE = {"high": 5, "medium": 2, "low": 0}
 
-_P_MISSING_CAP = 20      # per missing mandatory capability (also rejects)
+# Determinism preference: a *deterministic* built-in executor (local,
+# reproducible) is preferred over an AI executor, which is only used when a
+# deterministic executor cannot satisfy the task. This is the inverse of the
+# old "_PREFERRED_WORKERS = (worker:claude,)" behaviour that routed everything
+# to Claude.
+_W_DETERMINISTIC = 50    # bonus for a deterministic (non-AI) executor
+_W_AI_PENALTY = 40       # penalty for an AI executor (LLM/service/agent)
+
+# Phase 1.5: explicit artifact contract -> capability. When the planner declares
+# an expected artifact (e.g. "calculator.py"), an executor whose capability
+# covers that artifact kind is transparently boosted. This keeps selection
+# CAPABILITY-DRIVEN (no hardcoded worker:claude routing) — the boost reuses the
+# worker's own declared capabilities, so a deterministic worker that genuinely
+# covers the artifact wins on evidence.
+_ARTIFACT_CAP: dict = {
+    "py": "python", "pyi": "python", "ipynb": "python",
+    "md": "documentation", "rst": "documentation", "txt": "documentation",
+    "json": "file editing", "yaml": "file editing", "yml": "file editing",
+    "toml": "file editing", "cfg": "file editing", "ini": "file editing",
+    "sh": "shell commands", "bash": "shell commands",
+    "sql": "git operations",   # schema/migration artifacts usually git-tracked
+    "rs": "rust", "go": "go", "ts": "typescript", "tsx": "typescript",
+    "js": "typescript", "jsx": "typescript", "java": "java",
+    "c": "c", "h": "c", "cpp": "cpp", "hpp": "cpp",
+}
+_W_ARTIFACT_MATCH = 8      # transparent bonus when a worker covers the contract
+
+
+_P_MISSING_CAP = 20      # per missing mandatory capability (penalized, not fatal)
 _P_DISABLED = 20         # disabled worker
 _P_UNSUPPORTED_LANG = 5  # task needs a language the worker lacks
 _P_UNSUPPORTED_TASK = 5  # worker lacks the task_type
 _P_UNSUPPORTED_PLAN = 3  # worker lacks the plan_type
 
-# Workers explicitly preferred by the operator (deterministic, not historical).
-# Final tiebreak so accumulated resolution history never overrides an explicit
-# reliability preference. Lower rank = chosen first on ties.
-_PREFERRED_WORKERS = ("worker:claude",)
+# Lightweight planner-intent -> executor-id mapping. The planner emits *intent*
+# (Research, Architecture, Implementation, Testing, ...); these map to the
+# executors that can fulfil that intent. Capability *equality* is NOT required
+# — an executor is a candidate if it appears here OR matches capabilities.
+# Deterministic built-ins are listed first so they win ties.
+INTENT_TO_EXECUTORS: dict = {
+    "research":        ["worker:claude", "worker:codex", "worker:gemini",
+                        "worker:python"],
+    "architecture":    ["worker:claude", "worker:codex", "worker:gemini"],
+    "design":          ["worker:claude", "worker:codex", "worker:python"],
+    "planning":        ["worker:claude", "worker:gemini"],
+    "implementation":  ["worker:filesystem", "worker:python", "worker:claude",
+                        "worker:codex"],
+    "configuration":   ["worker:filesystem", "worker:shell", "worker:python"],
+    "documentation":   ["worker:documentation", "worker:claude"],
+    "testing":         ["worker:testing", "worker:python", "worker:shell"],
+    "verification":    ["worker:testing", "worker:python", "worker:claude"],
+    "refactor":        ["worker:python", "worker:filesystem", "worker:claude",
+                        "worker:codex"],
+    "migration":       ["worker:shell", "worker:filesystem", "worker:python"],
+    "infrastructure":  ["worker:shell", "worker:git", "worker:python"],
+    "deployment":      ["worker:shell", "worker:git"],
+    "analysis":        ["worker:python", "worker:claude", "worker:gemini"],
+    "review":          ["worker:claude", "worker:codex", "worker:python"],
+    "cleanup":         ["worker:filesystem", "worker:shell", "worker:python"],
+}
+
+# Capability token -> deterministic built-in executor id that can satisfy it.
+# Used to redirect capability-based matching away from AI executors when a
+# deterministic executor covers the same capability.
+_CAP_TO_DETERMINISTIC: dict = {
+    "python": "worker:python",
+    "testing": "worker:testing",
+    "file editing": "worker:filesystem",
+    "shell commands": "worker:shell",
+    "git operations": "worker:git",
+    "documentation": "worker:documentation",
+    "static analysis": "worker:python",
+    "backend": "worker:python",
+    "frontend": "worker:python",
+}
+
+# Intents that are inherently AI/LLM work (reasoning, open-ended research,
+# design). For these the planner INTENT, not raw capability breadth, drives
+# selection: AI executors are preferred and deterministic built-ins are the
+# fallback. All other intents are deterministic-primary.
+AI_PRIMARY_INTENTS = frozenset({
+    "research", "architecture", "design", "planning", "review",
+})
+
+from ..worker.models import WorkerKind as _WorkerKind  # noqa: E402
+
+# Executor ids backed by external AI CLIs / APIs. These are non-deterministic
+# and must only be used when no deterministic built-in covers the task.
+_AI_EXECUTOR_IDS = frozenset({
+    "worker:claude", "worker:codex", "worker:gemini", "worker:opencode",
+    "worker:aider", "worker:deepseek",
+})
+
+# Deterministic, local, reproducible built-in executors.
+_DETERMINISTIC_EXECUTOR_IDS = frozenset({
+    "worker:shell", "worker:git", "worker:filesystem", "worker:python",
+    "worker:testing", "worker:documentation",
+})
+
+
+def is_ai_executor(worker) -> bool:
+    """True for AI/LLM/service/agent workers or external AI CLI/API adapters."""
+    if worker.id in _AI_EXECUTOR_IDS:
+        return True
+    return worker.kind.value in (_WorkerKind.LLM.value, _WorkerKind.SERVICE.value,
+                                 _WorkerKind.AGENT.value)
+
+
+def is_deterministic(worker) -> bool:
+    """True for local, reproducible built-in executors."""
+    if worker.id in _DETERMINISTIC_EXECUTOR_IDS:
+        return True
+    return worker.kind.value in (_WorkerKind.FUNCTION.value,
+                                 _WorkerKind.TOOL.value, _WorkerKind.CLI.value) \
+        and worker.id not in _AI_EXECUTOR_IDS
+
+
+def _intent_for(task_required: List[str], task_type: str) -> str:
+    """Derive the planner intent for a task (task_type first, else a cap)."""
+    t = (task_type or "").lower()
+    if t in INTENT_TO_EXECUTORS:
+        return t
+    for cap in task_required:
+        if cap.lower() in INTENT_TO_EXECUTORS:
+            return cap.lower()
+    return t
 
 
 def _langs_in_task(required: List[str]) -> List[str]:
@@ -53,11 +169,26 @@ def _langs_in_task(required: List[str]) -> List[str]:
     return [c for c in required if is_valid_language(c)]
 
 
+def _artifact_capabilities(expected_artifacts: List[str]) -> List[str]:
+    """Map declared expected-artifact paths to the capabilities that produce them."""
+    caps: List[str] = []
+    for a in expected_artifacts or []:
+        a = (a or "").strip()
+        if "." in a and not a.endswith(".") and not a.startswith("."):
+            ext = a.rsplit(".", 1)[1].lower()
+            cap = _ARTIFACT_CAP.get(ext)
+            if cap and cap not in caps:
+                caps.append(cap)
+    return caps
+
+
 def score_worker(
     task_required: List[str],
     task_type: str,
     plan_type: str,
     worker: Worker,
+    intent: str = "",
+    expected_artifacts: Optional[List[str]] = None,
 ) -> Tuple[ScoreBreakdown, List[str], List[str]]:
     """Score one (task, worker) pair.
 
@@ -88,6 +219,14 @@ def score_worker(
     sb = ScoreBreakdown()
     sb.capability = _W_CAPABILITY * len(matched)
 
+    # Phase 1.5: explicit artifact-contract signal. If the planner declared an
+    # expected artifact whose producing capability this worker actually has,
+    # boost it. Capability-driven (reuses worker.capabilities), not a hardcoded
+    # route to any specific executor.
+    for ac in _artifact_capabilities(expected_artifacts or []):
+        if ac in have and ac not in matched:
+            sb.capability += _W_ARTIFACT_MATCH
+
     task_langs = _langs_in_task(required)
     if task_langs and set(task_langs) & set(worker.supported_languages):
         sb.language = _W_LANGUAGE
@@ -111,10 +250,38 @@ def score_worker(
 
     sb.confidence = _W_CONFIDENCE.get(worker.confidence, 0)
 
+    # Lightweight intent -> executor affinity: a worker listed for the task's
+    # planner intent gets a soft bonus (so intent, not raw capability breadth,
+    # drives selection). AI executors only win when no deterministic executor
+    # is listed for the intent.
+    if intent:
+        candidates = INTENT_TO_EXECUTORS.get(intent, [])
+        if worker.id in candidates:
+            sb.task_type += 8 * (len(candidates) - candidates.index(worker.id))
+
+    # Separately record determinism preference (not a penalty on the base
+    # score, so it does not distort the capability explanation).
     if missing:
         sb.penalty += _P_MISSING_CAP * len(missing)
+    _tag_executor_kind(sb, worker, intent)
 
     return sb, matched, missing
+
+
+# Determinism / AI classification is recorded on the ScoreBreakdown so the
+# ranking can prefer deterministic executors without losing transparency.
+# For AI-primary intents the preference is inverted: AI executors are boosted
+# and deterministic built-ins penalized, so the planner's intent wins. The
+# preference lives in `executor_pref` (folded into total) so the capability
+# breakdown shown to the user stays pure.
+def _tag_executor_kind(sb, worker, intent: str = "") -> None:
+    ai_primary = intent in AI_PRIMARY_INTENTS
+    if is_ai_executor(worker):
+        sb.executor_pref += (_W_DETERMINISTIC if ai_primary else -_W_AI_PENALTY)
+    elif is_deterministic(worker):
+        sb.executor_pref += (0 if ai_primary else _W_DETERMINISTIC)
+        if ai_primary:
+            sb.penalty += _W_AI_PENALTY
 
 
 def _confidence_for(
@@ -126,7 +293,7 @@ def _confidence_for(
     successful_history: int,
 ) -> str:
     return derive_confidence(ConfidenceInputs(
-        capability_coverage=(len(matched) / len(matched) + len(missing))
+        capability_coverage=(len(matched) / (len(matched) + len(missing)))
         if (matched or missing) else 1.0,
         task_supported=task_type in worker.supported_task_types,
         plan_supported=plan_type in worker.supported_plan_types,
@@ -142,24 +309,34 @@ def rank_workers(
     plan_type: str,
     workers: List[Worker],
     successful_history: Optional[dict] = None,
+    expected_artifacts: Optional[List[str]] = None,
 ) -> List[Tuple[Worker, ScoreBreakdown, List[str], List[str], str]]:
     """Score + rank workers for a task, deterministically.
 
-    Rejects (excludes) any worker missing a MANDATORY capability. The remaining
-    workers are ranked by:
-      tie-break 1) capability score, 2) confidence, 3) estimated speed,
-      4) estimated cost, 5) alphabetical worker id.
+    RANKS rather than rejecting: a worker missing a capability is heavily
+    penalized but still considered, so selection degrades gracefully instead of
+    an all-or-nothing UNRESOLVED. Disabled workers are excluded (never runnable).
+
+    Ranking (best-first):
+      1) total score (capability + determinism bonus - penalties),
+      2) confidence,
+      3) estimated speed,
+      4) estimated cost,
+      5) alphabetical worker id.
 
     Returns a list of (worker, score, matched, missing, confidence) sorted
-    best-first. Empty if no worker satisfied mandatory capabilities.
+    best-first. Empty only when there are no active workers at all.
     """
+    intent = _intent_for(task_required, task_type)
     hist = successful_history or {}
     scored = []
     for w in workers:
         sb, matched, missing = score_worker(
-            task_required, task_type, plan_type, w)
-        # Reject disabled workers and workers missing mandatory capabilities.
-        if w.status != "active" or missing:
+            task_required, task_type, plan_type, w, intent=intent,
+            expected_artifacts=expected_artifacts)
+        # Disabled workers can never run — exclude. Missing caps are NOT fatal;
+        # the penalty already pushes them below capable workers.
+        if w.status != "active":
             continue
         conf = _confidence_for(
             matched, missing, task_type, plan_type, w,
@@ -172,14 +349,12 @@ def rank_workers(
             w.estimated_speed, 3)
         cost_rank = {"low": 0, "medium": 1, "high": 2, "unknown": 3}.get(
             w.estimated_cost, 3)
-        pref_rank = _PREFERRED_WORKERS.index(w.id) if w.id in _PREFERRED_WORKERS else len(_PREFERRED_WORKERS)
         return (
-            -sb.capability,          # 1) capability score (higher better)
+            -sb.total,               # 1) net score (higher better)
             _conf_rank(conf),        # 2) confidence (high=0 best, low=2 worst)
             speed_rank,              # 3) estimated speed (faster better)
             cost_rank,               # 4) estimated cost (cheaper better)
-            pref_rank,               # 5) operator-preferred worker (explicit)
-            w.id,                    # 6) alphabetical worker id
+            w.id,                    # 5) alphabetical worker id
         )
 
     return sorted(scored, key=sort_key)
@@ -196,6 +371,7 @@ def select_assignment(
     workers: List[Worker],
     strategy: SelectionStrategy = SelectionStrategy.SINGLE,
     successful_history: Optional[dict] = None,
+    expected_artifacts: Optional[List[str]] = None,
 ) -> Tuple[Optional[Worker], List[Worker], str, List[str], List[str], str, List[dict]]:
     """Pick the assignment for a task.
 
@@ -207,7 +383,8 @@ def select_assignment(
     mandatory capabilities (UNRESOLVED). Workers are NEVER invented.
     """
     ranked = rank_workers(
-        task_required, task_type, plan_type, workers, successful_history)
+        task_required, task_type, plan_type, workers, successful_history,
+        expected_artifacts=expected_artifacts)
 
     if not ranked:
         return (None, [], "low", [], list(task_required),
@@ -236,10 +413,22 @@ def select_assignment(
     ]
 
     matched = ranked[0][2]
+    missing = ranked[0][3]
     conf = ranked[0][4]
-    reason = (
-        f"Best capability match ({len(matched)}/{len(task_required)} "
-        f"required) among {len(ranked)} eligible worker(s); "
-        f"confidence={conf}."
-    )
-    return (chosen, candidates, conf, matched, [], reason, alternatives)
+
+    # Transparent, spec-format diagnostic: why this executor was selected.
+    deterministic = is_deterministic(chosen)
+    why = [f"✓ supports {', '.join(matched)}" if matched
+           else "no direct capability match"]
+    why.append("deterministic" if deterministic else "ai executor")
+    why.append("highest score")
+    if deterministic:
+        reason = f"{chosen.id} selected — " + "; ".join(why) + \
+                 (f" (missing: {', '.join(missing)})" if missing else "")
+    else:
+        reason = (
+            f"{chosen.id} selected (AI fallback) — " + "; ".join(why) +
+            (f" (missing: {', '.join(missing)})" if missing else
+             "; no deterministic executor covered this intent")
+        )
+    return (chosen, candidates, conf, matched, missing, reason, alternatives)

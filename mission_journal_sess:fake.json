@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-20T18:36:19.546466+00:00",
+  "session_id": "sess:fake",
+  "graph_id": "taskgraph:plan:improve the readme",
+  "mission": "Improve the README",
+  "planner_time_ms": 59,
+  "execution_time_ms": 5,
+  "summary": {
+    "completed": true,
+    "tasks_total": 0,
+    "succeeded": 1,
+    "failed": 0,
+    "cancelled": 0,
+    "retried": 0,
+    "verification_failures": 0,
+    "workers_used": 1
+  },
+  "tasks": [],
+  "failures": []
+}

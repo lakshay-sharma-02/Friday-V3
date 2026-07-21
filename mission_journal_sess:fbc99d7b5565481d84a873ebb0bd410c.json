@@ -1,0 +1,243 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-21T05:09:55.901020+00:00",
+  "session_id": "sess:fbc99d7b5565481d84a873ebb0bd410c",
+  "graph_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory",
+  "mission": "Create a python hello world file in /home/lakshay/Projects/Yes/ directory",
+  "planner_time_ms": 162,
+  "execution_time_ms": 18119,
+  "verification_time_ms": 0,
+  "summary": {
+    "completed": true,
+    "tasks_total": 8,
+    "succeeded": 8,
+    "failed": 0,
+    "cancelled": 0,
+    "retried": 0,
+    "verification_failures": 0,
+    "workers_used": [
+      "worker:claude",
+      "worker:documentation",
+      "worker:python",
+      "worker:shell",
+      "worker:testing"
+    ],
+    "stopped_at": null,
+    "stop_reason": null
+  },
+  "executor_assignments": [
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t1",
+      "worker_id": "worker:python"
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t2",
+      "worker_id": "worker:claude"
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t3",
+      "worker_id": "worker:python"
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t4",
+      "worker_id": "worker:python"
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t5",
+      "worker_id": "worker:testing"
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t6",
+      "worker_id": "worker:testing"
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t7",
+      "worker_id": "worker:documentation"
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t8",
+      "worker_id": "worker:shell"
+    }
+  ],
+  "graph": {
+    "nodes": [
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t1",
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t2",
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t3",
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t4",
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t5",
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t6",
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t7",
+      "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t8"
+    ],
+    "edges": [
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t1",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t2"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t2",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t3"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t2",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t4"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t3",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t5"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t4",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t5"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t3",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t6"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t4",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t6"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t5",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t7"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t6",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t7"
+      },
+      {
+        "from": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t7",
+        "to": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t8"
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t1",
+      "worker_id": "worker:python",
+      "wave": 1,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 53,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [],
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t2",
+      "worker_id": "worker:claude",
+      "wave": 2,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 13100,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [],
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t3",
+      "worker_id": "worker:python",
+      "wave": 3,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 76,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [],
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t4",
+      "worker_id": "worker:python",
+      "wave": 3,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 73,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [],
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t5",
+      "worker_id": "worker:testing",
+      "wave": 4,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 695,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [],
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t6",
+      "worker_id": "worker:testing",
+      "wave": 4,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 690,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [],
+      "evidence": {
+        "exit_code": 0
+      }
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t7",
+      "worker_id": "worker:documentation",
+      "wave": 5,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 3,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [
+        "/home/lakshay/Projects/Friday V3/README.md"
+      ],
+      "evidence": {
+        "artifacts": [
+          "/home/lakshay/Projects/Friday V3/README.md"
+        ]
+      }
+    },
+    {
+      "task_id": "taskgraph:plan:create a python hello world file in /home/lakshay/projects/yes/ directory#t8",
+      "worker_id": "worker:shell",
+      "wave": 6,
+      "status": "success",
+      "attempts": 1,
+      "duration_ms": 9,
+      "exit_code": 0,
+      "error": "",
+      "verification_passed": true,
+      "artifacts": [],
+      "evidence": {
+        "exit_code": 0
+      }
+    }
+  ],
+  "failures": []
+}

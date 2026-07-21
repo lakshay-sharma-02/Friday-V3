@@ -476,6 +476,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     verification            TEXT NOT NULL DEFAULT '[]',
     rollback                TEXT NOT NULL DEFAULT '[]',
     evidence                TEXT NOT NULL DEFAULT '[]',
+    symbolic                TEXT NOT NULL DEFAULT '{}',
     status                  TEXT NOT NULL DEFAULT 'pending',
     confidence              TEXT NOT NULL DEFAULT 'medium',
     sequence                INTEGER NOT NULL DEFAULT 0
@@ -777,6 +778,8 @@ CREATE TABLE IF NOT EXISTS runtime_results (
     exit_code            INTEGER,
     duration_ms          INTEGER NOT NULL DEFAULT 0,
     error                TEXT NOT NULL DEFAULT '',
+    verification_passed  INTEGER,
+    verification_evidence TEXT NOT NULL DEFAULT '{}',
     recorded_at          TEXT NOT NULL
 );
 
@@ -950,6 +953,24 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE workers ADD COLUMN availability TEXT NOT NULL DEFAULT 'available'")
     if "manifest_ref" not in worker_cols:
         conn.execute("ALTER TABLE workers ADD COLUMN manifest_ref TEXT")
+    # Phase 3: symbolic task intent (planner emits engineering op, resolver
+    # enriches with repo info). Additive JSON column on tasks.
+    task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+    if "symbolic" not in task_cols:
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN symbolic TEXT NOT NULL DEFAULT '{}'")
+    # Phase 1.5: execution-contract result (executor's own contract check,
+    # distinct from process exit code). Additive; backfilled as NULL.
+    rr_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runtime_results)")}
+    if "verification_passed" not in rr_cols:
+        conn.execute(
+            "ALTER TABLE runtime_results ADD COLUMN verification_passed INTEGER")
+    # Phase 4: structured verification evidence (test summary, git diff, symbol
+    # counts) proving the verdict. Additive JSON column.
+    if "verification_evidence" not in rr_cols:
+        conn.execute(
+            "ALTER TABLE runtime_results ADD COLUMN verification_evidence "
+            "TEXT NOT NULL DEFAULT '{}'")
     conn.commit()
 
 
@@ -1046,7 +1067,8 @@ _FK_TABLE_DDL = {
         "dependencies TEXT NOT NULL DEFAULT '', inputs TEXT NOT NULL DEFAULT '[]', "
         "outputs TEXT NOT NULL DEFAULT '[]', acceptance_criteria TEXT NOT NULL DEFAULT '[]', "
         "verification TEXT NOT NULL DEFAULT '[]', rollback TEXT NOT NULL DEFAULT '[]', "
-        "evidence TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'pending', "
+        "evidence TEXT NOT NULL DEFAULT '[]', symbolic TEXT NOT NULL DEFAULT '{}', "
+        "status TEXT NOT NULL DEFAULT 'pending', "
         "confidence TEXT NOT NULL DEFAULT 'medium', sequence INTEGER NOT NULL DEFAULT 0)"
     ),
     "task_edges": (
@@ -3312,9 +3334,10 @@ class TaskRow:
     verification: str
     rollback: str
     evidence: str
-    status: str
-    confidence: str
-    sequence: int
+    symbolic: str = "{}"
+    status: str = "pending"
+    confidence: str = "medium"
+    sequence: int = 0
 
 
 @dataclass
@@ -3396,9 +3419,9 @@ def insert_task_graph(conn: sqlite3.Connection, graphs: List[TaskGraphRow],
                     (id, graph_id, plan_id, milestone_order, title, description,
                      task_type, required_capabilities, complexity, priority,
                      estimated_effort, dependencies, inputs, outputs,
-                     acceptance_criteria, verification, rollback, evidence, status,
-                     confidence, sequence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     acceptance_criteria, verification, rollback, evidence,
+                     symbolic, status, confidence, sequence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     graph_id=excluded.graph_id, plan_id=excluded.plan_id,
                     milestone_order=excluded.milestone_order, title=excluded.title,
@@ -3410,14 +3433,15 @@ def insert_task_graph(conn: sqlite3.Connection, graphs: List[TaskGraphRow],
                     outputs=excluded.outputs,
                     acceptance_criteria=excluded.acceptance_criteria,
                     verification=excluded.verification, rollback=excluded.rollback,
-                    evidence=excluded.evidence, status=excluded.status,
+                    evidence=excluded.evidence, symbolic=excluded.symbolic,
+                    status=excluded.status,
                     confidence=excluded.confidence, sequence=excluded.sequence
                 """,
                 (t.id, t.graph_id, t.plan_id, t.milestone_order, t.title,
                  t.description, t.task_type, t.required_capabilities, t.complexity,
                  t.priority, t.estimated_effort, t.dependencies, t.inputs, t.outputs,
                  t.acceptance_criteria, t.verification, t.rollback, t.evidence,
-                 t.status, t.confidence, t.sequence),
+                 t.symbolic, t.status, t.confidence, t.sequence),
             )
         for e in edges:
             conn.execute(
@@ -3558,8 +3582,8 @@ def _row_to_task(r) -> TaskRow:
         inputs=r["inputs"], outputs=r["outputs"],
         acceptance_criteria=r["acceptance_criteria"],
         verification=r["verification"], rollback=r["rollback"],
-        evidence=r["evidence"], status=r["status"], confidence=r["confidence"],
-        sequence=r["sequence"],
+        evidence=r["evidence"], symbolic=r["symbolic"], status=r["status"],
+        confidence=r["confidence"], sequence=r["sequence"],
     )
 
 
@@ -4461,14 +4485,16 @@ def insert_runtime_result(conn: sqlite3.Connection, row: dict) -> None:
         """
         INSERT INTO runtime_results
             (execution_id, session_id, task_id, worker_id, success, stdout,
-             stderr, artifacts, exit_code, duration_ms, error, recorded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             stderr, artifacts, exit_code, duration_ms, error,
+             verification_passed, verification_evidence, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (row["execution_id"], row["session_id"], row["task_id"],
          row.get("worker_id"),
          1 if row.get("success") else 0,
          row.get("stdout", ""), row.get("stderr", ""), row.get("artifacts", "[]"),
          row.get("exit_code"), row.get("duration_ms", 0), row.get("error", ""),
+         row.get("verification_passed"), row.get("verification_evidence", "{}"),
          row["recorded_at"]),
     )
 

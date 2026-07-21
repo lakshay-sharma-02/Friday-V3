@@ -60,6 +60,10 @@ class ScoreBreakdown:
     availability: int = 0
     confidence: int = 0
     penalty: int = 0
+    # Executor-kind preference (deterministic vs AI). Kept separate from
+    # `capability` so the capability explanation stays pure; folded into `total`
+    # so ranking prefers deterministic executors without distorting diagnostics.
+    executor_pref: int = 0
 
     @property
     def total(self) -> int:
@@ -70,6 +74,7 @@ class ScoreBreakdown:
             + self.plan_type
             + self.availability
             + self.confidence
+            + self.executor_pref
             - self.penalty
         )
 
@@ -82,6 +87,7 @@ class ScoreBreakdown:
             "availability": self.availability,
             "confidence": self.confidence,
             "penalty": self.penalty,
+            "executor_pref": self.executor_pref,
             "total": self.total,
         }
 
@@ -163,6 +169,7 @@ class ResolutionResult:
     score: ScoreBreakdown = field(default_factory=ScoreBreakdown)
     candidates: List[str] = field(default_factory=list)   # eligible worker ids
     alternatives: List[dict] = field(default_factory=list)  # ranked runners-up
+    expected_artifacts: List[str] = field(default_factory=list)  # explicit contract
 
     def to_dict(self) -> dict:
         return {
@@ -180,4 +187,5 @@ class ResolutionResult:
             "score": self.score.to_dict(),
             "candidates": list(self.candidates),
             "alternatives": list(self.alternatives),
+            "expected_artifacts": list(self.expected_artifacts),
         }

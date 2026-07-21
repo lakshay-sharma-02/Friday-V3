@@ -149,8 +149,10 @@ def test_builtin_no_duplicate_ids(reg):
     reg.register_builtins()
     ids = [w.id for w in reg.all_workers()]
     assert len(ids) == len(set(ids))
-    # ids are deterministic: worker:<name>
-    assert reg.worker_by_name("Codex").id == "worker:codex"
+    # ids are deterministic: the LLM builtin named "Codex" maps to its
+    # "worker:<name> llm" id (the external CLI adapter, worker:codex, comes
+    # from a separate manifest and is not registered by register_builtins).
+    assert reg.worker_by_name("Codex").id == "worker:codex llm"
 
 
 # ---------------------------------------------------------------------------

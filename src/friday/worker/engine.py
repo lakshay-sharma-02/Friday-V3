@@ -345,6 +345,25 @@ def _version_note(prev: Optional[Worker], event_type: str) -> str:
     return f"{event_type} (was v{prev.version})"
 
 
+def ensure_runtime_bootstrapped(conn) -> int:
+    """Idempotently seed the Worker Registry so a fresh database is immediately
+    executable. Registers the built-in capability profiles and the external AI
+    adapter manifests. Both paths are upserts on worker id, so re-running never
+    duplicates rows (history/version rows are append-only and cheap).
+
+    Fast + safe: only performs work when the registry is empty, but re-running
+    after a partial registration still completes the set. Returns the number of
+    workers present after bootstrapping.
+    """
+    reg = WorkerRegistry(conn)
+    if reg.count() == 0:
+        reg.register_builtins()
+    # External AI adapter manifests are always reconciled (idempotent upsert),
+    # so a built-ins-only DB still gains its AI executors on first execution.
+    reg.register_external()
+    return reg.count()
+
+
 def _bump_version(v: str) -> str:
     """Deterministic semantic-version patch bump (no randomness)."""
     parts = (v or "1.0.0").split(".")

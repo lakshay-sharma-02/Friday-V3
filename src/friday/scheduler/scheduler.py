@@ -97,13 +97,15 @@ def compute_waves(task_ids: List[str], edges: List[dict],
 def _root_depths(task_ids: List[str], edges: List[dict]) -> Dict[str, int]:
     """Forward longest-path distance from a root (root = 0) for each task.
 
-    Edge A->B means B depends on A, so A is a predecessor of B. Deterministic.
+    Edge A->B has kind 'depends_on', meaning A depends on B, so B is a
+    predecessor of A (B runs first). Hence B is the predecessor stored under A.
+    Deterministic.
     """
     preds: Dict[str, List[str]] = {t: [] for t in task_ids}
     for e in edges:
         f, to = e.get("from"), e.get("to")
         if f in preds and to in preds:
-            preds[to].append(f)
+            preds[f].append(to)
 
     depth: Dict[str, int] = {}
 
@@ -134,7 +136,7 @@ def compute_dependency_count(task_ids: List[str],
     for e in edges:
         f, to = e.get("from"), e.get("to")
         if f in preds and to in preds:
-            preds[to].append(f)
+            preds[f].append(to)
 
     seen: Dict[str, int] = {}
 
@@ -171,8 +173,8 @@ def compute_critical_path(task_ids: List[str],
     for e in edges:
         f, to = e.get("from"), e.get("to")
         if f in succ and to in succ:
-            succ[f].append(to)
-            preds[to].append(f)
+            succ[to].append(f)
+            preds[f].append(to)
 
     best: Dict[str, int] = {}
     nxt: Dict[str, Optional[str]] = {}
@@ -285,12 +287,13 @@ def build_schedule(
 
     # Direct predecessors per task (in-edges), derived from edges so the
     # Scheduler's notion of dependencies does not depend on how the Task Graph
-    # persisted the `dependencies` column.
+    # persisted the `dependencies` column. Edge from->to (kind depends_on)
+    # means `from` depends on `to`, so `to` is a predecessor of `from`.
     deps: Dict[str, List[str]] = {t: [] for t in task_ids}
     for e in edges:
         f, to = e.get("from"), e.get("to")
-        if f in deps and to in deps and f not in deps[to]:
-            deps[to].append(f)
+        if f in deps and to in deps and to not in deps[f]:
+            deps[f].append(to)
 
     scheduled: List[ScheduledTask] = []
     worker_util: Dict[str, int] = {}

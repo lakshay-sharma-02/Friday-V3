@@ -65,4 +65,6 @@ def dispatch(task: RuntimeTask, worker: Optional[Worker]) -> ExecutionResult:
     result.metadata = {**result.metadata,
                        "verified": vres.passed,
                        "verify_reason": vres.reason}
+    # Typed contract check (Phase 1.5): persists as runtime_results.verification_passed.
+    result.verification_passed = vres.passed
     return result

@@ -344,6 +344,88 @@ class FileExecutor(Executor):
                 if not dst.exists():
                     return _fail("", "", None, 0, f"{op} failed: {dst}")
                 return _ok("", "", 0, 0, [str(dst)])
+            if op == "noop":
+                # Honest no-op: the symbolic op had nothing to do in this
+                # workspace (e.g. no matching symbol). Report success with no
+                # artifact so verification can fail on evidence if required.
+                return _ok("", "", 0, 0, [])
+            if op == "replace_all":
+                # Rename a symbol across one or more files (Phase 4 symbolic
+                # rename). Deterministic and verifiable. Any file with no match
+                # is left untouched; at least one replacement must occur.
+                symbol = obj.get("symbol", "")
+                replacement = obj.get("replacement", "")
+                files = obj.get("files") or []
+                if not symbol or not files:
+                    return _fail("", "", None, 0,
+                                 "replace_all needs symbol + files")
+                done = 0
+                import shutil as _sh
+                for f in files:
+                    p = Path(f)
+                    if not p.exists() or not p.is_file():
+                        continue
+                    text = p.read_text(encoding="utf-8")
+                    if symbol not in text:
+                        continue
+                    new = text.replace(symbol, replacement)
+                    p.write_text(new, encoding="utf-8")
+                    done += 1
+                if done == 0:
+                    return _fail("", "", None, 0,
+                                 f"replace_all: no occurrences of {symbol}")
+                return _ok("", "", 0, 0, [str(f) for f in files])
+            if op == "delete_symbol":
+                # Remove every occurrence of a dead-code symbol across files.
+                symbol = obj.get("symbol", "")
+                files = obj.get("files") or []
+                if not symbol or not symbol.strip():
+                    return _fail("", "", None, 0,
+                                 "delete_symbol needs a non-empty symbol")
+                if not files:
+                    return _fail("", "", None, 0,
+                                 "delete_symbol needs symbol + files")
+                done = 0
+                for f in files:
+                    p = Path(f)
+                    if not p.exists() or not p.is_file():
+                        continue
+                    text = p.read_text(encoding="utf-8")
+                    if symbol not in text:
+                        continue
+                    # Drop the whole statement block: the line(s) containing the
+                    # symbol AND the immediately-following indented body, so a
+                    # dead `def DEAD_FN():` leaves no dangling `return` body
+                    # behind. A blank line or dedented line ends the block.
+                    kept = []
+                    lines = text.splitlines()
+                    i = 0
+                    while i < len(lines):
+                        ln = lines[i]
+                        if symbol in ln:
+                            # Remove this line; skip following more-indented
+                            # lines (the def/class body) until dedent/blank.
+                            base_indent = len(ln) - len(ln.lstrip())
+                            i += 1
+                            while i < len(lines):
+                                nxt = lines[i]
+                                if nxt.strip() == "":
+                                    i += 1
+                                    continue
+                                nxt_indent = len(nxt) - len(nxt.lstrip())
+                                if nxt_indent > base_indent:
+                                    i += 1
+                                    continue
+                                break
+                            continue
+                        kept.append(ln)
+                        i += 1
+                    p.write_text("\n".join(kept) + "\n", encoding="utf-8")
+                    done += 1
+                if done == 0:
+                    return _fail("", "", None, 0,
+                                 f"delete_symbol: no occurrences of {symbol}")
+                return _ok("", "", 0, 0, [str(f) for f in files])
             return _fail("", "", None, 0, f"unknown file op: {op}")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
@@ -678,6 +760,108 @@ BUILTIN_EXECUTION_IDS = (
     "worker:testing", "worker:documentation",
 )
 
+# External AI executor ids (non-deterministic; used only as a fallback when no
+# deterministic built-in covers the task).
+AI_EXECUTOR_IDS = (
+    "worker:claude", "worker:codex", "worker:gemini",
+    "worker:opencode", "worker:aider", "worker:deepseek",
+)
+
+# Configurable AI-executor timeout (seconds). External AI CLIs can hang in
+# headless mode; a bounded timeout prevents indefinite waits. Override via the
+# FRIDAY_AI_TIMEOUT env var.
+AI_TIMEOUT = int(os.environ.get("FRIDAY_AI_TIMEOUT", "120"))
+
+# Deterministic built-in fallback order used when an AI executor fails/hangs.
+_DETERMINISTIC_FALLBACKS = (
+    "worker:python", "worker:filesystem", "worker:shell", "worker:git",
+    "worker:testing", "worker:documentation",
+)
+
+
+def _is_ai_executor_id(worker_id: str) -> bool:
+    return (worker_id or "").lower() in AI_EXECUTOR_IDS
+
+
+def fallback_chain(worker_id: str) -> List[str]:
+    """Ordered executor ids to try for a task initially assigned to `worker_id`.
+
+    - Deterministic built-in: only itself (it is the terminal fallback).
+    - AI executor: itself, then the other AI executors, then deterministic
+      built-ins. One failure never terminates the mission unless every
+      candidate fails.
+    """
+    primary = (worker_id or "").lower()
+    if not _is_ai_executor_id(primary):
+        return [primary]
+    others = [w for w in AI_EXECUTOR_IDS if w != primary]
+    return [primary, *others, *_DETERMINISTIC_FALLBACKS]
+
+
+def execute_with_fallback(task, primary_id: str, workspace: str = ".",
+                          worker_resolver=None) -> ExecutionResult:
+    """Run `task` via `primary_id`, falling back across candidates on failure.
+
+    Each candidate is invoked; the first success wins. A failed/hung executor
+    (timeout, non-zero exit, raised exception) is skipped and the next tried.
+    Only if ALL candidates fail (or none exist) is an overall failure returned,
+    carrying the last error. Mission execution therefore continues whenever any
+    viable alternative exists. Idempotent-friendly: never fabricates success.
+
+    `worker_resolver`, when given, maps a candidate id to its executor and
+    overrides the registry lookup (resolve_executor). The runtime always passes
+    its own resolver here so injected test mocks are honored on the fallback
+    path too — never reaching a live model behind the resolver's back.
+    """
+    chain = fallback_chain(primary_id)
+    last: Optional[ExecutionResult] = None
+    last_error = f"no executor for {primary_id}"
+    tried: List[str] = []
+    for wid in chain:
+        exe = worker_resolver(wid) if worker_resolver else resolve_executor(wid, workspace)
+        if exe is None:
+            last_error = f"{wid} has no execution adapter"
+            continue
+        # Bound AI executors to AI_TIMEOUT so a headless hang cannot stall the
+        # whole mission; deterministic built-ins keep their own timeout.
+        if _is_ai_executor_id(wid) and getattr(exe, "_timeout", None):
+            try:
+                exe._timeout = AI_TIMEOUT
+            except Exception:
+                pass
+        tried.append(wid)
+        try:
+            result = exe.execute(task)
+        except Exception as e:  # defensive: a crashing adapter is just a skip
+            last_error = f"{wid} raised: {type(e).__name__}: {e}"
+            last = ExecutionResult(
+                success=False, stdout="", stderr=str(e), exit_code=None,
+                duration_ms=0, error=last_error)
+            continue
+        # Phase 1.5: run the executor's own contract check (mirrors the
+        # dispatcher) so verification_passed is populated on the fallback path
+        # too, not just the direct dispatch path.
+        try:
+            vres = exe.verify(task, result)
+            result.verification_passed = vres.passed
+            result.metadata = {**result.metadata,
+                               "verified": vres.passed,
+                               "verify_reason": vres.reason}
+        except Exception:
+            pass
+        if result.success:
+            return result
+        last = result
+        last_error = result.error or f"{wid} failed (exit {result.exit_code})"
+    return ExecutionResult(
+        success=False,
+        stdout=(last.stdout if last else ""),
+        stderr=(last.stderr if last else last_error),
+        exit_code=(last.exit_code if last else None),
+        duration_ms=(last.duration_ms if last else 0),
+        error=f"all executors failed [{', '.join(tried)}]: {last_error}",
+    )
+
 
 # ---------------------------------------------------------------------------
 # CLIWorker — generic subprocess base
@@ -813,10 +997,41 @@ class ClaudeCodeWorker(CLIExecutor):
         # headless file-writing goals run unattended. Prompt via
         # stdin (multiline argv also hangs). See M10.1 dogfooding
         # regression.
+        # --output-format json yields a structured result we verify explicitly
+        # (is_error / result) instead of trusting only the exit code.
         return Invocation(
             argv=[_resolve_binary("claude"), "--print",
+                   "--output-format", "json",
                    "--dangerously-skip-permissions"],
-            stdin=prompt, timeout=_DEFAULT_TIMEOUT)
+            stdin=prompt, timeout=AI_TIMEOUT)
+
+    def verify(self, task, result: "ExecutionResult") -> "VerificationResult":
+        """Verify a Claude run from its STRUCTURED JSON result, not just exit 0.
+
+        The CLI emits `{ "type": "result", "is_error": bool, "result": "..." }`
+        on stdout (--output-format json). A 0 exit with is_error:true is a real
+        failure; we never report success on an error payload. Non-JSON output
+        (older CLI / streaming) falls back to the parent's exit-code rule so the
+        adapter degrades gracefully.
+        """
+        import json as _json
+        if not result.success:
+            return VerificationResult(
+                passed=False,
+                reason=result.error or f"claude exited {result.exit_code}")
+        text = (result.stdout or "").strip()
+        try:
+            obj = _json.loads(text)
+        except (ValueError, TypeError):
+            # Not JSON: fall back to the generic "exit 0 + non-empty stdout".
+            return VerificationResult(
+                passed=bool(text),
+                reason=("exit 0 and non-empty stdout (non-JSON output)"
+                        if text else "exit 0 but empty stdout"))
+        if isinstance(obj, dict) and obj.get("is_error"):
+            msg = obj.get("result") or obj.get("subtype") or "claude reported error"
+            return VerificationResult(passed=False, reason=f"claude is_error: {msg}")
+        return VerificationResult(passed=True, reason="claude result OK (is_error=false)")
 
 
 class CodexWorker(CLIExecutor):
@@ -828,7 +1043,7 @@ class CodexWorker(CLIExecutor):
         return Invocation(
             argv=[_resolve_binary("codex"), "exec",
                   "--dangerously-bypass-approvals-and-sandbox", _payload(task)],
-            timeout=_DEFAULT_TIMEOUT)
+            timeout=AI_TIMEOUT)
 
 
 class GeminiWorker(CLIExecutor):
@@ -836,7 +1051,7 @@ class GeminiWorker(CLIExecutor):
     def build_invocation(self, task):
         # `-p` = headless/non-interactive; `-y` = auto-approve all actions.
         return Invocation(argv=[_resolve_binary("gemini"), "-p", "-y",
-                                 _payload(task)], timeout=_DEFAULT_TIMEOUT)
+                                 _payload(task)], timeout=AI_TIMEOUT)
 
 
 class OpenCodeWorker(CLIExecutor):
@@ -844,14 +1059,14 @@ class OpenCodeWorker(CLIExecutor):
     def build_invocation(self, task):
         # `run` is the headless entry (no TUI).
         return Invocation(argv=[_resolve_binary("opencode"), "run",
-                                 _payload(task)], timeout=_DEFAULT_TIMEOUT)
+                                 _payload(task)], timeout=AI_TIMEOUT)
 
 
 class AiderWorker(CLIExecutor):
     worker_id = "worker:aider"
     def build_invocation(self, task):
         return Invocation(argv=[_resolve_binary("aider"), "--message",
-                                 _payload(task)], timeout=_DEFAULT_TIMEOUT)
+                                 _payload(task)], timeout=AI_TIMEOUT)
 
 
 class DeepSeekWorker(CLIExecutor):
@@ -859,11 +1074,11 @@ class DeepSeekWorker(CLIExecutor):
     def build_invocation(self, task):
         if shutil.which("deepseek"):
             return Invocation(argv=[_resolve_binary("deepseek"), _payload(task)],
-                               timeout=_DEFAULT_TIMEOUT)
+                               timeout=AI_TIMEOUT)
         # API mode (HTTP) would override execute(); here we still produce a
         # valid Invocation shape so verification can report unavailability
         # gracefully rather than crashing.
-        return Invocation(argv=[_resolve_binary("deepseek")], timeout=_DEFAULT_TIMEOUT)
+        return Invocation(argv=[_resolve_binary("deepseek")], timeout=AI_TIMEOUT)
 
     def is_available(self) -> bool:
         return shutil.which("deepseek") is not None or bool(

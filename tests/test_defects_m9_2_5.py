@@ -27,6 +27,8 @@ from friday.worker.models import validate_capabilities, is_valid_capability
 from friday.planning.derive import plan, Evidence
 from friday.ask import ask
 from friday.strategy import strategy_platform
+
+from tests.conftest import skip_unless_live
 from friday.knowledge.store import get_all_knowledge
 
 
@@ -97,6 +99,7 @@ def _run_runtime(tmp_path, monkeypatch, capsys):
     return sid
 
 
+@skip_unless_live
 def test_runtime_show_filters_by_session_id(tmp_path, monkeypatch, capsys):
     sid1 = _run_runtime(tmp_path, monkeypatch, capsys)
     # A second real session to prove the filter excludes the other one.
@@ -115,6 +118,7 @@ def test_runtime_show_filters_by_session_id(tmp_path, monkeypatch, capsys):
     assert sid2 not in out
 
 
+@skip_unless_live
 def test_runtime_show_unknown_id_errors(tmp_path, monkeypatch, capsys):
     _run_runtime(tmp_path, monkeypatch, capsys)
     capsys.readouterr()
@@ -123,6 +127,7 @@ def test_runtime_show_unknown_id_errors(tmp_path, monkeypatch, capsys):
     assert rc == 2
 
 
+@skip_unless_live
 def test_runtime_export_is_json(tmp_path, monkeypatch, capsys):
     _run_runtime(tmp_path, monkeypatch, capsys)
     capsys.readouterr()

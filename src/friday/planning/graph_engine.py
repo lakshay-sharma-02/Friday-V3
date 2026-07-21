@@ -112,7 +112,8 @@ class TaskGraphEngine:
             acceptance_criteria=_loads(r.acceptance_criteria),
             verification=_loads(r.verification),
             rollback=_loads(r.rollback), evidence=_loads(r.evidence),
-            status=r.status, confidence=r.confidence, sequence=r.sequence,
+            symbolic=_loads_dict(r.symbolic), status=r.status, confidence=r.confidence,
+            sequence=r.sequence,
         )
 
     @staticmethod
@@ -191,7 +192,8 @@ class TaskGraphEngine:
                 acceptance_criteria=_dumps(t.acceptance_criteria),
                 verification=_dumps(t.verification),
                 rollback=_dumps(t.rollback), evidence=_dumps(t.evidence),
-                status=t.status, confidence=t.confidence, sequence=t.sequence,
+                symbolic=_dumps(t.symbolic), status=t.status,
+                confidence=t.confidence, sequence=t.sequence,
             ))
         edge_rows: List[TaskEdgeRow] = []
         for i, e in enumerate(g.edges):
@@ -257,3 +259,14 @@ def _loads(s: str) -> list:
         return out if isinstance(out, list) else []
     except (TypeError, ValueError):
         return []
+
+
+def _loads_dict(s: str) -> dict:
+    """Parse a JSON object column (e.g. a task's symbolic intent)."""
+    if not s:
+        return {}
+    try:
+        out = json.loads(s)
+        return out if isinstance(out, dict) else {}
+    except (TypeError, ValueError):
+        return {}
