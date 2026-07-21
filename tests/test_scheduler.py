@@ -116,10 +116,14 @@ def _seed_graph(conn, graph_id, tasks, edges=None, critical_path=None):
             (t["id"], graph_id, "plan:test", t["id"], t["req"],
              t.get("priority", "medium"), levels.get(t["id"], 0) + 1))
     for i, e in enumerate(edges):
+        # The seed helper takes edges in intuitive "earlier -> later" form;
+        # the Scheduler (and compiler) store them as depends_on, i.e.
+        # `from` DEPENDS ON `to` (later depends on earlier), so `from`=later,
+        # `to`=earlier. Swap so stored edges match the canonical convention.
         conn.execute(
             "INSERT OR REPLACE INTO task_edges (id, graph_id, from_task, to_task, kind) "
             "VALUES (?,?,?,?, 'depends_on')",
-            (f"{graph_id}#e{i}", graph_id, e[0], e[1]))
+            (f"{graph_id}#e{i}", graph_id, e[1], e[0]))
     conn.commit()
     conn.execute("PRAGMA foreign_keys=ON")
 

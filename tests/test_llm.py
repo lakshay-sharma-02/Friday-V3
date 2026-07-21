@@ -3,7 +3,7 @@ trailing `data: [DONE]` some proxies append after a JSON object."""
 
 from __future__ import annotations
 
-from friday.llm import _extract_content
+from friday.services.llm import _extract_content
 
 
 def test_single_object():

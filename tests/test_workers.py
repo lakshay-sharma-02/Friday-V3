@@ -19,22 +19,25 @@ import pytest
 from friday.db import connect
 from friday.runtime import dispatch
 from friday.runtime.models import RuntimeTask, RunState, ExecutionResult
-from friday.runtime.workers import (
+from friday.runtime.executors import (
     BuiltinPythonWorker,
     BuiltinShellWorker,
     DocumentationWorker,
     FileWorker,
     GitWorker,
     TestingWorker,
+    ClaudeCodeWorker,
+    CodexWorker,
+    GeminiWorker,
+    OpenCodeWorker,
+    AiderWorker,
+    DeepSeekWorker,
     resolve_worker,
+    CLIWorker,
+    Invocation,
+    VerificationResult,
 )
 from friday.worker.engine import WorkerRegistry, BUILTIN_WORKERS
-
-
-from friday.runtime.workers import CLIWorker, Invocation, VerificationResult
-from friday.runtime.workers import (
-    ClaudeCodeWorker, CodexWorker, GeminiWorker, OpenCodeWorker,
-    AiderWorker, DeepSeekWorker)
 
 from friday.runtime.dispatcher import dispatch
 from friday.runtime.models import RuntimeTask
@@ -148,9 +151,18 @@ def test_resolve_worker_known():
 
 
 def test_resolve_worker_unknown_returns_none():
-    # LLM provider ids have no execution adapter.
-    assert resolve_worker("worker:claude") is None
-    assert resolve_worker("worker:codex") is None
+    # Genuinely unknown ids have no execution adapter.
+    assert resolve_worker("worker:nonexistent") is None
+
+
+def test_resolve_worker_external_adapters():
+    # M10 external AI adapters resolve to real execution instances.
+    assert isinstance(resolve_worker("worker:claude"), ClaudeCodeWorker)
+    assert isinstance(resolve_worker("worker:codex"), CodexWorker)
+    assert isinstance(resolve_worker("worker:gemini"), GeminiWorker)
+    assert isinstance(resolve_worker("worker:opencode"), OpenCodeWorker)
+    assert isinstance(resolve_worker("worker:aider"), AiderWorker)
+    assert isinstance(resolve_worker("worker:deepseek"), DeepSeekWorker)
 
 
 # ===================================================================
@@ -439,7 +451,7 @@ def test_runtime_uses_real_worker_resolver(conn, tmp_path):
     # their adapter; unknown ids (e.g. LLM-only worker:search) delegate to the
     # shell worker, which performs real, verifiable repo evidence-gathering. No
     # fabricated success for unassigned tasks.
-    from friday.runtime.workers import BuiltinShellWorker
+    from friday.runtime.executors import BuiltinShellWorker
     def _resolve_any(wid):
         w = resolve_worker(wid or "worker:mock", str(repo))
         return w if w is not None else BuiltinShellWorker(workspace=str(repo))
