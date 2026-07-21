@@ -1857,10 +1857,12 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
     if any(w in qlow for w in (
         "explain", "walk me through", "tell me about", "describe",
         "what is", "what does", "what are", "overview of", "what's this",
-        "what's in this", "what projects", "what repositor", "which repositor",
-        "give me an overview", "list all project", "list all repositor",
-        "what do you know about", "tell me what", "show me all",
+        "what's in this", "what projects", "what do you know about",
+        "tell me what", "show me all",
     )):
+        # "list all project" and "which repositor" are kept out of this block
+        # to avoid catching similarity/reuse/architecture questions that also
+        # start with "which" or "list". Those are handled by their own rules.
         return mk(scope="repo" if _resolve_subjects(question, conn) else "workspace",
                   subjects=_resolve_subjects(question, conn),
                   needs=("describe",))

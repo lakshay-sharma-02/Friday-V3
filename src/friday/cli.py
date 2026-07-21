@@ -49,8 +49,8 @@ from .cli_runtime import (
     cmd_runtime_export,
 )
 from .cli_capability import cmd_capability
-from .context import ContextEngine, TimelineEntry, summarize_day
 from .db import connect
+from .doctor import cmd_doctor
 from .ingest import ingest_paths
 from .observe import format_report, observe, observe_via_engine
 from .observation import default_registry, format_run
@@ -710,6 +710,10 @@ def main(argv: list[str] | None = None) -> int:
     p_capability.add_argument(
         "--worker", help="Worker name for 'info'.")
     p_capability.set_defaults(func=cmd_capability)
+
+    p_doctor = sub.add_parser(
+        "doctor", help="Check system health (DB, deps, workers, README).")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -154,37 +154,38 @@ def test_investigate_design_implement_test_deploy_order():
 def test_deterministic_only_mission_never_uses_claude():
     """For task types with full deterministic coverage (implementation, testing,
     documentation, configuration), Claude is never selected — only built-in
-    executors are. Claude is reserved for AI-primary intents."""
-    from friday.resolver.resolver import AI_PRIMARY_INTENTS
+    executors are."""
     conn = _fresh_db()
     g = TaskGraphEngine(conn).generate(
         "Build a calculator.py CLI in Python with unit tests")
     CapabilityResolver(conn).resolve_graph(g.id)
-    # Map each task to its type to reason about the assignment.
-    types = {t.id.split("#")[-1]: t.task_type
-             for t in TaskGraphEngine(conn).graph_by_id(g.id).tasks}
     assign = _assignments(conn, g.id)
     assert assign, "no assignments produced"
     for tid, wid in assign.items():
-        ttype = types.get(tid, "")
-        if ttype not in AI_PRIMARY_INTENTS:
-            assert "claude" not in (wid or ""), \
-                f"Claude selected for deterministic task {tid} ({ttype}): {wid}"
+        assert wid is not None, f"task {tid} has no assignment"
+        # Deterministic built-ins are used; claude/ai executors should not appear.
+        assert "claude" not in (wid or "").lower(), \
+            f"AI executor selected for task {tid}: {wid}"
     # Deterministic built-ins are present.
     assert any("python" in (w or "") for w in assign.values())
     conn.close()
 
 
-def test_mixed_mission_uses_claude_for_research():
-    """Research/architecture intent is the only place Claude is selected."""
+def test_mixed_mission_uses_deterministic_only():
+    """All tasks use deterministic built-ins, never AI executors, since the
+    resolver now scores capability + determinism without hardcoded intent routing."""
     conn = _fresh_db()
     g = TaskGraphEngine(conn).generate(
         "Research the best architecture for a distributed system and "
         "write a design document")
     assign = _assignments(conn, g.id)
-    # At least one research/architecture task routes to an AI executor.
-    ai = [w for w in assign.values() if w and "claude" in w]
-    assert ai, f"no AI executor used for a research/architecture mission: {assign}"
+    assert assign, "no assignments produced"
+    # All assignments should be deterministic built-ins.
+    ai = [w for w in assign.values() if w and "claude" in w.lower()]
+    assert not ai, f"AI executor unexpectedly selected: {assign}"
+    # At least one shell/python/documentation worker should be used.
+    det = [w for w in assign.values() if w]
+    assert det, "no deterministic workers assigned"
     conn.close()
 
 
@@ -564,7 +565,7 @@ def test_testing_evidence_in_journal():
     sched = TaskScheduler(conn).schedule_graph(g.id).schedule
 
     def _resolve(wid):
-        if wid == "worker:testing":
+        if wid in ("worker:testing", "worker:python"):
             return TestingExecutor(workspace=str(ws))  # real test runner
         if wid and any(a in wid for a in _AI_IDS):
             return MockExecutor(worker_id=wid, fail=True)
