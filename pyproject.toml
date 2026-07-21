@@ -7,7 +7,7 @@ name = "friday"
 version = "0.1.0"
 description = "Friday V3 — persistent AI operating partner: workspace understanding"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["rich >= 13.0"]
 
 [project.scripts]
 friday = "friday.cli:main"
