@@ -1,0 +1,13 @@
+{
+  "id": "0003-theme-collapse",
+  "title": "'What themes keep repeating?' must synthesize across the portfolio, not dump one repo",
+  "question": "What themes keep repeating?",
+  "required_scope": "workspace",
+  "expected": {
+    "objective": "theme-repeat",
+    "min_repos_cited": 3
+  },
+  "forbidden": [],
+  "required_evidence": ["friday-v3", "aether", "vivaha"],
+  "note": "Themes question regression: evidence must span multiple repositories and use the theme-repeat objective."
+}
