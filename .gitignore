@@ -18,3 +18,6 @@ __pycache__/
 
 # mission journal run artifacts
 mission_journal_sess:*.json
+
+# historical dogfood test output
+dogfood_run/

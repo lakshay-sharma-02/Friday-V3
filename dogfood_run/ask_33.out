@@ -1,5 +1,0 @@
-I don't have enough evidence to answer that.
-
-The Evidence lacks observation history, which is what drift measurement requires. You'd need to run `friday observe` to establish a baseline and track how projects have evolved over time. Without prior snapshots, I can only see the current state (several projects have active, uncommitted work) but not what changed or why.
-
-To identify recurring bottlenecks, I'd need to see patterns across multiple observations—what slowed projects down before, whether the same constraints appear again, and how teams responded. Right now that history doesn't exist.

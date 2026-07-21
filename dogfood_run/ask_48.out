@@ -1,9 +1,0 @@
-**Center of attention:** Friday V3.
-
-**Why now:** Friday V3 has uncommitted changes ready to continue and the highest recent commit frequency (~8.5/day). It's your newest project, so momentum is active and context is fresh. This is where your engineering energy should flow.
-
-**What to deprioritize:** Don't start new work elsewhere. Multiple projects (Aether, Friday, Friday V2, demo-observe, finance-tracker) share a common blocker: thin or missing READMEs creating onboarding friction. These can wait.
-
-**Recommendation:** Commit and push the uncommitted changes in Friday V3, then continue building. Once Friday V3 stabilizes, address the README gaps across the portfolio as a batch task—that's higher-leverage than scattering effort now.
-
-*Confidence: Medium. Based on commit frequency, recency, and uncommitted-change signals across 6 of 8 repositories.*

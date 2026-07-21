@@ -1,7 +1,0 @@
-I don't have enough evidence to answer which project has become infrastructure.
-
-The Evidence mentions that MindWell is a platform candidate because it shares engineering with vivaha (React/Supabase stack), and that vivaha contributes reusable capability. However, "become infrastructure" implies a project that has transitioned into a foundational layer serving other products—not simply that two projects share a tech stack or that one is a candidate for platform growth.
-
-The Evidence doesn't show: which project was originally a product, when or how it shifted role, which other projects depend on it as infrastructure, or what specific infrastructure capabilities it provides.
-
-To answer this accurately, I'd need evidence of actual dependency relationships, architectural decisions showing infrastructure extraction, or project history showing a deliberate shift from product to platform.
