@@ -33,6 +33,10 @@ IGNORED_DIRS = {
     "node_modules", ".venv", "venv", "env", "__pycache__", "target", "dist",
     "build", ".cache", ".next", ".nuxt", ".idea", ".vscode", ".mypy_cache",
     ".pytest_cache", ".tox", ".git", ".hg", ".svn",
+    ".claude", ".zcode", "dogfood_run",
+    # site-packages is a pip-installed dependency directory (never source).
+    # && is a shell-parsing artifact directory from a prior buggy install.
+    "site-packages", "&&",
 }
 
 # File extensions we treat as source for structure / import scanning.
@@ -974,11 +978,28 @@ _IGNORED_ENTRY_DIRS = {
 # `scripts/` are maintenance/utility scripts, not application entry points.
 _UTILITY_DIRS = {"scripts"}
 
+# Root-level .py file name prefixes that are never architecture entry points.
+# Test files (test_*.py), one-off execution scripts (run_*.py), and DB-utility
+# scripts (backfill_*.py) at the project root are smoke-test/execution
+# artifacts, not part of the project's actual runtime surface. A legitimate
+# main.py or cli.py at root still counts — they don't start with these prefixes.
+_IGNORED_ROOT_ENTRY_PREFIXES = frozenset({
+    "test_", "run_", "backfill_", "reset_", "check_",
+})
+
 
 def _is_runtime_path(rel: str) -> bool:
     """True if `rel` lives somewhere we treat as a real runtime entry point."""
     top = rel.split("/")[0]
     return top not in _IGNORED_ENTRY_DIRS and top not in _UTILITY_DIRS
+
+
+def _is_root_entry_name(name: str) -> bool:
+    """True if `name` (e.g. "test_ensure_fail.py" or "backfill_initiatives.py")
+    is a root-level file whose stem starts with a known non-entry prefix.
+    Only applies to files at the repo root (no subdirectory path)."""
+    stem, _ = os.path.splitext(name)
+    return any(stem.startswith(p) for p in _IGNORED_ROOT_ENTRY_PREFIXES)
 
 
 def _entry_points(repo: Path, files: list[str], ctx: dict) -> list[EntryPoint]:
@@ -992,11 +1013,17 @@ def _entry_points(repo: Path, files: list[str], ctx: dict) -> list[EntryPoint]:
             eps.append(EntryPoint(kind=kind, detail=detail, evidence=evidence))
 
     # main() + __main__ guard (Python). Skip files under non-runtime dirs
-    # (tests, examples, fixtures, benchmarks, tools, scripts).
+    # (tests, examples, fixtures, benchmarks, tools, scripts) and root-level
+    # files matching known smoke-test name patterns (test_*, run_*, backfill_*).
     for rel in files:
         if not rel.lower().endswith(".py"):
             continue
         if not _is_runtime_path(rel):
+            continue
+        # Phase 6: skip root-level scripts whose name matches a known
+        # non-entry prefix (e.g. test_ensure_fail.py, backfill_initiatives.py).
+        # These are one-off test/execution artifacts, not real entry points.
+        if "/" not in rel and _is_root_entry_name(rel):
             continue
         t = _rel_text(repo, rel) or ""
         has_main_fn = bool(re.search(r"\bdef\s+main\s*\(", t))
@@ -1039,10 +1066,18 @@ def _entry_points(repo: Path, files: list[str], ctx: dict) -> list[EntryPoint]:
     # *.sh files in the walk. Classify by directory:
     #  - scripts/ (and tools/fixtures/etc excluded earlier): maintenance -> Utility.
     #  - bin/ and other runtime dirs: runtime -> Executable script.
+    # Root-level .py files matching _IGNORED_ROOT_ENTRY_PREFIXES are excluded
+    # from shebang detection just like they are from main() detection, so
+    # one-off utility scripts (backfill_*.py, reset_*.py) don't pollute
+    # entry point analysis.
     for rel in files:
         top = rel.split("/")[0]
         t = _rel_text(repo, rel) or ""
         if not t.startswith("#!"):
+            continue
+        # Phase 6: skip root-level .py scripts matching known non-entry
+        # prefixes (same filter as main() / __main__ loop above).
+        if "/" not in rel and rel.lower().endswith(".py") and _is_root_entry_name(rel):
             continue
         if top in _UTILITY_DIRS:
             add("Utility script", rel, f"maintenance script (shebang) {rel}")

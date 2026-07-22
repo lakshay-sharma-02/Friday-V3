@@ -139,6 +139,7 @@ def score_worker(
     worker: Worker,
     intent: str = "",
     expected_artifacts: Optional[List[str]] = None,
+    is_judgment: bool = False,
 ) -> Tuple[ScoreBreakdown, List[str], List[str]]:
     """Score one (task, worker) pair.
 
@@ -212,20 +213,26 @@ def score_worker(
     # score, so it does not distort the capability explanation).
     if missing:
         sb.penalty += _P_MISSING_CAP * len(missing)
-    _tag_executor_kind(sb, worker)
+    _tag_executor_kind(sb, worker, is_judgment=is_judgment)
 
     return sb, matched, missing
 
 
 # Determinism / AI classification is recorded on the ScoreBreakdown so the
 # ranking can prefer deterministic executors without losing transparency.
-def _tag_executor_kind(sb, worker, intent: str = "") -> None:
+def _tag_executor_kind(sb, worker, intent: str = "", is_judgment: bool = False) -> None:
     _ = intent  # intent-based AI routing removed; all tasks score with
                 # deterministic-first preference.
-    if is_ai_executor(worker):
-        sb.executor_pref += -_W_AI_PENALTY
-    elif is_deterministic(worker):
-        sb.executor_pref += _W_DETERMINISTIC
+    if is_judgment:
+        if is_ai_executor(worker):
+            sb.executor_pref += _W_DETERMINISTIC  # Give AI executors the bonus
+        elif is_deterministic(worker):
+            sb.executor_pref += -_W_AI_PENALTY  # Penalize deterministic for judgment work
+    else:
+        if is_ai_executor(worker):
+            sb.executor_pref += -_W_AI_PENALTY
+        elif is_deterministic(worker):
+            sb.executor_pref += _W_DETERMINISTIC
 
 
 def _confidence_for(
@@ -254,6 +261,7 @@ def rank_workers(
     workers: List[Worker],
     successful_history: Optional[dict] = None,
     expected_artifacts: Optional[List[str]] = None,
+    is_judgment: bool = False,
 ) -> List[Tuple[Worker, ScoreBreakdown, List[str], List[str], str]]:
     """Score + rank workers for a task, deterministically.
 
@@ -277,7 +285,7 @@ def rank_workers(
     for w in workers:
         sb, matched, missing = score_worker(
             task_required, task_type, plan_type, w, intent=intent,
-            expected_artifacts=expected_artifacts)
+            expected_artifacts=expected_artifacts, is_judgment=is_judgment)
         # Disabled workers can never run — exclude. Missing caps are NOT fatal;
         # the penalty already pushes them below capable workers.
         if w.status != "active":
@@ -316,6 +324,7 @@ def select_assignment(
     strategy: SelectionStrategy = SelectionStrategy.SINGLE,
     successful_history: Optional[dict] = None,
     expected_artifacts: Optional[List[str]] = None,
+    is_judgment: bool = False,
 ) -> Tuple[Optional[Worker], List[Worker], str, List[str], List[str], str, List[dict]]:
     """Pick the assignment for a task.
 
@@ -328,7 +337,7 @@ def select_assignment(
     """
     ranked = rank_workers(
         task_required, task_type, plan_type, workers, successful_history,
-        expected_artifacts=expected_artifacts)
+        expected_artifacts=expected_artifacts, is_judgment=is_judgment)
 
     if not ranked:
         return (None, [], "low", [], list(task_required),

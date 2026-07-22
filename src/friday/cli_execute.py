@@ -29,7 +29,6 @@ from .runtime import RuntimeEngine, resolve_executor
 def _render_report(report, goal: str) -> int:
     """Render execution report with Mission Control UI or plain text."""
     from .presentation.formatters.execution import execution_result_to_view, task_to_worker_view
-    from .presentation.renderers.execution import render_execution_summary
 
     workers = [
         task_to_worker_view(
@@ -58,6 +57,7 @@ def _render_report(report, goal: str) -> int:
         from rich.console import Console
         from rich.live import Live
         from .presentation.renderers.mission import render_mission_view
+        from .presentation.renderers.execution import render_execution_summary
 
         console = Console()
         with Live(render_mission_view(mv), refresh_per_second=15,
@@ -68,6 +68,7 @@ def _render_report(report, goal: str) -> int:
     elif use_rich:
         from rich.console import Console
         from .presentation.renderers.mission import render_mission_view
+        from .presentation.renderers.execution import render_execution_summary
 
         Console().print(render_mission_view(mv))
         Console().print(render_execution_summary(mv))
@@ -85,6 +86,74 @@ def _render_report(report, goal: str) -> int:
                     print(f"  - {t.get('task_id')}: {t.get('error') or 'execution failed'}")
 
     return 0 if report.failed == 0 else 1
+
+
+def _confirm_execution(goal: str, graph, args, label: str = "execute") -> bool:
+    """Show the execution plan and require interactive confirmation.
+
+    Prints a summary of what will happen (tasks, capabilities, file effects)
+    and prompts y/n. Returns True to proceed, False to abort.
+
+    ``--dry-run`` prints the plan and exits without executing.
+    ``--yes`` skips the prompt (opt-in, never the default).
+    """
+    dry_run = getattr(args, "dry_run", False)
+    yes = getattr(args, "yes", False)
+
+    print()
+    print("=" * 60)
+    print(f"  Friday will {label}: \"{goal}\"")
+    if dry_run:
+        print("  [DRY RUN — no changes will be made]")
+    print("=" * 60)
+    print()
+
+    # Show the full task graph summary (tasks, types, priorities, capabilities).
+    sys.stdout.write(graph.summary())
+
+    # Show per-task effects (files created, workers used).
+    print()
+    print("  Planned effects:")
+    for t in sorted(graph.tasks, key=lambda x: x.sequence):
+        parts = []
+        if t.outputs:
+            shown = [o for o in t.outputs[:2] if isinstance(o, str) and "." in o]
+            if shown:
+                parts.append(f"files: {', '.join(shown)}")
+        if t.required_capabilities:
+            parts.append(f"worker needs: {', '.join(t.required_capabilities[:2])}")
+        if parts:
+            print(f"    {t.sequence}. {t.title[:50]}")
+            for p in parts:
+                print(f"       {p}")
+        else:
+            print(f"    {t.sequence}. {t.title[:60]}")
+
+    # Dry-run: show plan and exit cleanly.
+    if dry_run:
+        print()
+        print("=" * 60)
+        print("  DRY RUN — no changes made")
+        print("=" * 60)
+        print()
+        sys.exit(0)
+
+    # --yes: bypass prompt for scripted/CI use (explicit opt-in only).
+    if yes:
+        return True
+
+    # Interactive confirmation.
+    try:
+        response = input(f"\nProceed with {label}? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        response = "n"
+
+    if response != "y":
+        print(f"{label} cancelled.")
+        return False
+
+    return True
 
 
 def _try_rich_import() -> bool:
@@ -125,6 +194,14 @@ def cmd_execute(args: argparse.Namespace, conn=None) -> int:
     # 1. Plan the goal into a task graph.
     graph_eng = TaskGraphEngine(conn)
     g = graph_eng.generate(goal)
+
+    # CONFIRMATION GATE (Phase 6 emergency patch): show the plan and require
+    # interactive y/n before any resolution, scheduling, or execution.
+    # --dry-run prints the plan and exits. --yes skips the prompt (CI use only,
+    # never the default). Declining aborts with no side effects.
+    if not _confirm_execution(goal, g, args, label="execute"):
+        conn.close()
+        return 0
 
     # 2. Resolve every task to a worker (capability evidence, deterministic).
     #    Pass the workspace so symbolic tasks are enriched against the repo.

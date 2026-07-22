@@ -14,8 +14,10 @@ invokes an LLM, never touches a repository. Execution is a future milestone.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Dict, List, Optional
+
+_LAZY_DISCOVERY_RAN = False
 
 from ..db import (
     atomic,
@@ -195,11 +197,22 @@ class CapabilityResolver:
         if g is None:
             raise ValueError(f"unknown graph_id: {graph_id}")
 
-        # Phase 3: enrich symbolic tasks with repo knowledge (read-only).
         if workspace:
             for task in g.tasks:
                 if getattr(task, "symbolic", None):
                     _resolve_symbolic(task, workspace)
+
+        global _LAZY_DISCOVERY_RAN
+        judgment_types = {"implementation", "refactor", "design", "review", "analysis", "research", "planning"}
+        needs_ai = any(
+            (t.task_type.lower() in judgment_types) and not bool(getattr(t, "symbolic", {}).get("op"))
+            for t in g.tasks
+        )
+        if needs_ai and not _LAZY_DISCOVERY_RAN:
+            from ..runtime.discovery import discover
+            from ..worker.engine import _EXTERNAL_MANIFESTS
+            self._registry.sync_availability(discover(_EXTERNAL_MANIFESTS))
+            _LAZY_DISCOVERY_RAN = True
 
         workers = self._registry.active_workers()
         # Exclude reasoning-service profiles that have no execution adapter.
@@ -220,6 +233,10 @@ class CapabilityResolver:
         with atomic(self.conn):
             for task in g.tasks:
                 task_strategy = strategy or _strategy_for_task(task, g)
+                judgment_types = {"implementation", "refactor", "design", "review", "analysis", "research", "planning"}
+                has_mechanical_op = bool(getattr(task, "symbolic", {}).get("op"))
+                is_judgment = (task.task_type.lower() in judgment_types) and not has_mechanical_op
+
                 chosen, candidates, conf, matched, missing, reason, alts = \
                     select_assignment(
                         list(task.required_capabilities),
@@ -229,6 +246,7 @@ class CapabilityResolver:
                         strategy=task_strategy,
                         successful_history=hist_counts,
                         expected_artifacts=list(task.outputs),
+                        is_judgment=is_judgment,
                     )
                 res = self._build_result(
                     task, chosen, candidates, conf, matched, missing,

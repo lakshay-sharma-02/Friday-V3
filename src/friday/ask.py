@@ -2383,7 +2383,23 @@ def _deterministic_answer(question: str, ev: Evidence, label: str,
         # in the right order; this keeps any supporting evidence from jumping the
         # primary answer when it happens to be a single prose block.
         return "\n".join(ev.blocks)
-    return "\n".join(ev.blocks)
+    return _frame_blocks(ev.blocks)
+
+
+def _frame_blocks(blocks: list[str]) -> str:
+    """Wrap evidence blocks in lightweight framing for the deterministic path.
+
+    Single-block prose (e.g. project identity descriptions) is already
+    self-describing and passes through with minimal prefix. Multi-block
+    lists (e.g. "which projects use X") get a count header and trailing
+    evidence note so the user knows what they're looking at.
+    """
+    raw = "\n".join(blocks)
+    if len(blocks) <= 1:
+        return raw
+    return (f"I found {len(blocks)} items:\n\n{raw}\n\n"
+            f"(Deterministic answer — based on stored evidence. "
+            f"Set FRIDAY_LLM_MODEL for conversational synthesis.)")
 
 
 # ---------------------------------------------------------------------------

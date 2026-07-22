@@ -30,6 +30,10 @@ from friday.planning import TaskGraphEngine
 from friday.resolver import CapabilityResolver
 from friday.resolver.resolver import rank_workers
 from friday.scheduler.engine import TaskScheduler
+
+import friday.resolver.engine
+friday.resolver.engine._LAZY_DISCOVERY_RAN = True
+
 from friday.runtime import RuntimeEngine
 from friday.runtime.executors import (
     execute_with_fallback,
@@ -66,8 +70,8 @@ class ArtifactMock(MockExecutor):
 _AI_IDS = ("claude", "codex", "gemini", "opencode", "aider", "deepseek")
 
 
-def _fresh_db() -> "sqlite3.Connection":
-    d = Path(tempfile.mkdtemp())
+def _fresh_db(tmp_path) -> "sqlite3.Connection":
+    d = tmp_path
     conn = connect(d / "friday.db")
     # Phase 4: the runtime auto-bootstraps the registry on initialization; the
     # test mirrors that so a fresh DB is immediately executable.
@@ -100,9 +104,9 @@ def _assignments(conn, graph_id: str) -> dict:
 # Phase 1 — Scheduler dependency direction
 # ===================================================================
 
-def test_linear_chain_exact_order():
+def test_linear_chain_exact_order(tmp_path):
     """T1 -> T2 -> T3 -> T4 must execute T1, T2, T3, T4 (never reversed)."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "implement then test then deploy then document")
     CapabilityResolver(conn).resolve_graph(g.id)
@@ -116,9 +120,9 @@ def test_linear_chain_exact_order():
     conn.close()
 
 
-def test_diamond_fanout_waves():
+def test_diamond_fanout_waves(tmp_path):
     """T1 / T2 T3 / T4 fan-out -> waves 1, 2 (T2,T3), 3."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "design backend and frontend then integrate them")
     CapabilityResolver(conn).resolve_graph(g.id)
@@ -133,9 +137,9 @@ def test_diamond_fanout_waves():
     conn.close()
 
 
-def test_investigate_design_implement_test_deploy_order():
+def test_investigate_design_implement_test_deploy_order(tmp_path):
     """investigate -> design -> implement -> test -> deploy executes in order."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "Build a calculator with tests and deploy it")
     CapabilityResolver(conn).resolve_graph(g.id)
@@ -151,45 +155,44 @@ def test_investigate_design_implement_test_deploy_order():
 # Phase 2 — Executor capability model (no more "everything to Claude")
 # ===================================================================
 
-def test_deterministic_only_mission_never_uses_claude():
-    """For task types with full deterministic coverage (implementation, testing,
-    documentation, configuration), Claude is never selected — only built-in
-    executors are."""
-    conn = _fresh_db()
+def test_judgment_mission_prefers_ai_primary(tmp_path):
+    """For feature tasks (judgment tasks), AI executors are preferred over deterministic ones."""
+    conn = _fresh_db(tmp_path)
+    # Ensure external workers (AI) are in the registry for this test.
+    from friday.worker.engine import WorkerRegistry
+    WorkerRegistry(conn).register_external()
+    
     g = TaskGraphEngine(conn).generate(
         "Build a calculator.py CLI in Python with unit tests")
     CapabilityResolver(conn).resolve_graph(g.id)
     assign = _assignments(conn, g.id)
     assert assign, "no assignments produced"
-    for tid, wid in assign.items():
-        assert wid is not None, f"task {tid} has no assignment"
-        # Deterministic built-ins are used; claude/ai executors should not appear.
-        assert "claude" not in (wid or "").lower(), \
-            f"AI executor selected for task {tid}: {wid}"
-    # Deterministic built-ins are present.
-    assert any("python" in (w or "") for w in assign.values())
+    
+    # In Phase 3, these non-symbolic tasks are judgment tasks and should route to Claude
+    ai_assigned = any("claude" in (w or "").lower() for w in assign.values())
+    assert ai_assigned, f"AI executor was not selected for judgment tasks: {assign}"
     conn.close()
 
 
-def test_mixed_mission_uses_deterministic_only():
-    """All tasks use deterministic built-ins, never AI executors, since the
-    resolver now scores capability + determinism without hardcoded intent routing."""
-    conn = _fresh_db()
+def test_mixed_mission_uses_ai_for_judgment(tmp_path):
+    """Judgment tasks (like research and design without symbolic ops) route to AI."""
+    conn = _fresh_db(tmp_path)
+    from friday.worker.engine import WorkerRegistry
+    WorkerRegistry(conn).register_external()
+    
     g = TaskGraphEngine(conn).generate(
         "Research the best architecture for a distributed system and "
         "write a design document")
     assign = _assignments(conn, g.id)
     assert assign, "no assignments produced"
-    # All assignments should be deterministic built-ins.
+    
+    # In Phase 3, these tasks route to AI because they lack symbolic ops
     ai = [w for w in assign.values() if w and "claude" in w.lower()]
-    assert not ai, f"AI executor unexpectedly selected: {assign}"
-    # At least one shell/python/documentation worker should be used.
-    det = [w for w in assign.values() if w]
-    assert det, "no deterministic workers assigned"
+    assert ai, f"AI executor unexpectedly NOT selected: {assign}"
     conn.close()
 
 
-def test_resolver_prefers_deterministic_over_ai():
+def test_resolver_prefers_deterministic_over_ai(tmp_path):
     """Given a Python task, the deterministic python executor wins over claude."""
     from friday.resolver.resolver import rank_workers
     from friday.worker.models import Worker, WorkerKind
@@ -208,7 +211,7 @@ def test_resolver_prefers_deterministic_over_ai():
 # Phase 3 — Robust executor fallback
 # ===================================================================
 
-def test_fallback_chain_ai_to_deterministic():
+def test_fallback_chain_ai_to_deterministic(tmp_path):
     chain = fallback_chain("worker:claude")
     assert chain[0] == "worker:claude"
     assert "worker:python" in chain
@@ -216,11 +219,11 @@ def test_fallback_chain_ai_to_deterministic():
     assert chain[-1] == "worker:documentation"
 
 
-def test_fallback_chain_deterministic_is_terminal():
+def test_fallback_chain_deterministic_is_terminal(tmp_path):
     assert fallback_chain("worker:python") == ["worker:python"]
 
 
-def test_execute_with_fallback_succeeds_on_deterministic():
+def test_execute_with_fallback_succeeds_on_deterministic(tmp_path):
     """When the AI primary fails, fallback to a deterministic executor wins."""
 
     from friday.runtime.models import MockExecutor
@@ -244,14 +247,14 @@ def test_execute_with_fallback_succeeds_on_deterministic():
     ex.resolve_executor = fake
     try:
         res = execute_with_fallback(PyTask(), "worker:claude",
-                                    str(Path(tempfile.mkdtemp())))
+                                    str(tmp_path))
     finally:
         ex.resolve_executor = orig
     assert res.success
     assert "fallback-ok" in res.stdout
 
 
-def test_execute_with_fallback_all_fail_reports_error():
+def test_execute_with_fallback_all_fail_reports_error(tmp_path):
     """If every candidate fails, a single clean failure is returned."""
 
     from friday.runtime.models import MockExecutor
@@ -271,25 +274,25 @@ def test_execute_with_fallback_all_fail_reports_error():
     ex.resolve_executor = fake
     try:
         res = execute_with_fallback(AnyTask(), "worker:claude",
-                                    str(Path(tempfile.mkdtemp())))
+                                    str(tmp_path))
     finally:
         ex.resolve_executor = orig
     assert res.success is False
     assert "all executors failed" in (res.error or "")
 
 
-def test_claude_unavailable_still_executes():
+def test_claude_unavailable_still_executes(tmp_path):
     """A mission whose research task wants Claude still runs end-to-end when the
     AI executor fails: the fallback chain degrades to deterministic built-ins,
     which produce the expected artifacts and the mission reports success (no
     crash, no permanent block)."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "Research the best architecture for a distributed system")
     CapabilityResolver(conn).resolve_graph(g.id)
     sched = TaskScheduler(conn).schedule_graph(g.id).schedule
 
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
 
     def _resolve(wid):
         # Claude resolves to a failing mock (simulating an unavailable/hung AI
@@ -312,8 +315,8 @@ def test_claude_unavailable_still_executes():
 # Phase 4 — Fresh DB auto-bootstraps executors
 # ===================================================================
 
-def test_fresh_db_has_builtin_executors():
-    conn = _fresh_db()
+def test_fresh_db_has_builtin_executors(tmp_path):
+    conn = _fresh_db(tmp_path)
     reg = WorkerRegistry(conn)
     assert reg.count() > 0, "fresh DB has no workers registered"
     ids = {w.id for w in reg.all_workers()}
@@ -323,7 +326,7 @@ def test_fresh_db_has_builtin_executors():
     conn.close()
 
 
-def test_fresh_db_execute_works():
+def test_fresh_db_execute_works(tmp_path):
     """rm friday.db then friday execute must work immediately (Phase 4 + 6).
 
     Fresh DB auto-bootstraps executors (no manual seeding) and every task runs
@@ -331,9 +334,9 @@ def test_fresh_db_execute_works():
     references, so truthful verification passes and the mission reports success
     — proving the orchestration path is wired correctly end-to-end.
     """
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
 
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "Build a calculator.py CLI in Python with tests")
     CapabilityResolver(conn).resolve_graph(g.id)
@@ -358,9 +361,9 @@ def test_fresh_db_execute_works():
     conn.close()
 
 
-def test_bootstrap_idempotent():
+def test_bootstrap_idempotent(tmp_path):
     """Running bootstrap twice does not duplicate worker rows."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     from friday.worker.engine import ensure_runtime_bootstrapped
     n1 = ensure_runtime_bootstrapped(conn)
     n2 = ensure_runtime_bootstrapped(conn)
@@ -372,14 +375,14 @@ def test_bootstrap_idempotent():
 # Phase 6 — combined end-to-end (real path)
 # ===================================================================
 
-def test_end_to_end_deterministic_mission():
-    conn = _fresh_db()
+def test_end_to_end_deterministic_mission(tmp_path):
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "Build a calculator.py CLI in Python with tests")
     CapabilityResolver(conn).resolve_graph(g.id)
     sched = TaskScheduler(conn).schedule_graph(g.id).schedule
 
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
 
     def _resolve(wid):
         # Claude fails fast (no interactive binary in CI); deterministic
@@ -401,7 +404,7 @@ def test_end_to_end_deterministic_mission():
 # Phase 3 — Truthful verification: failure path must NOT crash
 # ===================================================================
 
-def test_verification_failure_cancels_descendants():
+def test_verification_failure_cancels_descendants(tmp_path):
     """A task that reports success but produces no expected artifact must be
     flipped to FAILED and its descendants CANCELLED — without crashing the
     runtime (regression: _cancel_descendants referenced a non-existent
@@ -410,7 +413,7 @@ def test_verification_failure_cancels_descendants():
 
     # A mock that always reports success (claims the file was written) but
     # actually writes nothing => verification must catch the lie.
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "Create hello.py printing Hello World")
     CapabilityResolver(conn).resolve_graph(g.id)
@@ -420,7 +423,7 @@ def test_verification_failure_cancels_descendants():
         # Every worker is a success-claiming mock that produces no artifact.
         return MockExecutor(worker_id=wid, fail=False)
 
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
     eng = RuntimeEngine(conn, worker_resolver=_resolve,
                         workspace=str(ws), fallback=True)
     # Must not raise; mission is reported truthfully as failed.
@@ -475,7 +478,7 @@ def _spy_resolver(worker_id, fail_transient=False, succeed=False):
     return _W(worker_id)
 
 
-def test_blocking_failure_cancels_descendants():
+def test_blocking_failure_cancels_descendants(tmp_path):
     """A BLOCKING failure (testing task) cancels its dependents; the mission
     stops on that branch."""
     seen = {}
@@ -494,7 +497,7 @@ def test_blocking_failure_cancels_descendants():
     assert states["t2"] == RunState.CANCELLED, "blocking failure must cancel dependent"
 
 
-def test_nonblocking_failure_continues_mission():
+def test_nonblocking_failure_continues_mission(tmp_path):
     """A NON-blocking failure (formatter/linter, task_type=configuration) is
     recorded as FAILED but its dependents still execute — mission continues."""
     seen = {}
@@ -515,7 +518,7 @@ def test_nonblocking_failure_continues_mission():
         "non-blocking failure must not cancel dependents"
 
 
-def test_transient_failure_is_retried_then_succeeds():
+def test_transient_failure_is_retried_then_succeeds(tmp_path):
     """A transient failure (timeout/connection) is retried up to MAX_ATTEMPTS
     and succeeds on a later attempt — no mission stop."""
     seen = {}
@@ -531,7 +534,7 @@ def test_transient_failure_is_retried_then_succeeds():
     assert seen["t1"][1] == 3, "final attempt should be 3"
 
 
-def test_recovery_attempt_count_recorded():
+def test_recovery_attempt_count_recorded(tmp_path):
     """Each attempt is persisted with its attempt number so the journal can
     show the retry trail (attempt > 1 => retried)."""
     attempts = []
@@ -544,7 +547,7 @@ def test_recovery_attempt_count_recorded():
     assert max(attempts) == 3, "retry trail must record attempt 3"
 
 
-def test_testing_evidence_in_journal():
+def test_testing_evidence_in_journal(tmp_path):
     """A real TestingExecutor failure is captured as a test_summary in the
     journal's per-task evidence — mission success is derived from evidence, not
     executor status alone. Runs offline (no AI backend)."""
@@ -553,13 +556,13 @@ def test_testing_evidence_in_journal():
     from friday.runtime.executors import TestingExecutor
     from friday.runtime.journal import build_journal
 
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
     (ws / "sched.py").write_text(
         "def order(items):\n    return items\n")
     (ws / "test_sched.py").write_text(
-        "def test_order():\n    assert order([3,1,2]) == [1,2,3]\n")
+        "def test_order(tmp_path):\n    assert order([3,1,2]) == [1,2,3]\n")
 
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate("Fix failing scheduler tests")
     CapabilityResolver(conn).resolve_graph(g.id)
     sched = TaskScheduler(conn).schedule_graph(g.id).schedule

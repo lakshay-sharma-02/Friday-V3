@@ -1192,3 +1192,79 @@ def test_resolve_symbolic_enriches_outputs_and_caps(tmp_path):
     before = list(t.outputs)
     _resolve_symbolic(t, str(repo))
     assert t.outputs == before
+
+# ===================================================================
+# 36. Judgment vs Mechanical Routing (Phase 2)
+# ===================================================================
+
+def test_judgment_routing_prefers_ai(tmp_path):
+    """A judgment task prefers an AI worker over a deterministic one."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    
+    w_det = _make_worker("W_Det", ["python"], kind=WorkerKind.CLI)
+    w_ai = _make_worker("W_AI", ["python"], kind=WorkerKind.LLM)
+    
+    chosen, _, _, _, _, _, _ = select_assignment(
+        ["python"], "implementation", "feature", [w_det, w_ai], is_judgment=True
+    )
+    assert chosen is not None
+    assert chosen.id == w_ai.id
+    
+def test_mechanical_routing_prefers_deterministic(tmp_path):
+    """A mechanical task prefers a deterministic worker over an AI one."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    
+    w_det = _make_worker("W_Det", ["python"], kind=WorkerKind.CLI)
+    w_ai = _make_worker("W_AI", ["python"], kind=WorkerKind.LLM)
+    
+    chosen, _, _, _, _, _, _ = select_assignment(
+        ["python"], "implementation", "feature", [w_det, w_ai], is_judgment=False
+    )
+    assert chosen is not None
+    assert chosen.id == w_det.id
+
+def test_engine_resolves_judgment_task(tmp_path):
+    """CapabilityResolver identifies judgment tasks correctly."""
+    from friday.planning.compiler import TaskType
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    reg.register_external()
+    
+    _seed_graph(conn, "g1", [{
+        "id": "t1", "title": "Refactor codebase",
+        "task_type": "refactor", "required_capabilities": "python",
+        "plan_type": "feature", "sequence": 1, "complexity": "medium",
+        "priority": "medium", "estimated_effort": "medium",
+    }])
+    
+    resolver = CapabilityResolver(conn)
+    r = resolver.resolve_graph("g1")
+    
+    import json
+    for res in r.results:
+        print(f"Chosen: {res.worker_id} (Score: {res.score.to_dict()})")
+        print("Alternatives:")
+        for alt in res.alternatives:
+            print(f"  {alt['worker_id']}: {alt['score']}")
+            
+    assert r.results[0].worker_id == "worker:claude"
+
+    
+def test_engine_resolves_mechanical_task(tmp_path):
+    """CapabilityResolver identifies mechanical tasks (symbolic set)."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    
+    _seed_graph(conn, "g1", [{
+        "id": "t1", "title": "Refactor with exact op",
+        "task_type": "refactor", "required_capabilities": "python",
+        "plan_type": "feature", "sequence": 1, "complexity": "medium",
+        "priority": "medium", "estimated_effort": "medium",
+        "symbolic": json.dumps({"op": "rename_declaration"}),
+    }])
+    
+    resolver = CapabilityResolver(conn)
+    r = resolver.resolve_graph("g1")
+    assert r.results[0].worker_id == "worker:python"

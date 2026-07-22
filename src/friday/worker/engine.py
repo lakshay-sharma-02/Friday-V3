@@ -449,7 +449,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["Huge repository rewrites", "Very long-running builds"],
         speed="medium", cost="high", context_window=200000,
         parallelism=1, network=True, filesystem=True, git=True, python=True,
-        shell=True, confidence="strong", worker_id="worker:claude llm",
+        shell=True, confidence="high", worker_id="worker:claude llm",
     ),
     _builtin_worker(
         "Codex", KIND_LLM, "Code-specialized LLM for implementation tasks.",
@@ -463,7 +463,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["Large architectural redesign", "Open-ended research"],
         speed="fast", cost="medium", context_window=128000,
         parallelism=1, network=True, filesystem=True, git=True, python=True,
-        shell=True, confidence="strong", worker_id="worker:codex llm",
+        shell=True, confidence="high", worker_id="worker:codex llm",
     ),
     _builtin_worker(
         "Gemini", KIND_LLM, "Long-context multimodal LLM.",
@@ -517,7 +517,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["Documentation generation", "Architecture reasoning"],
         speed="fast", cost="low", context_window=0, parallelism=1,
         network=False, filesystem=True, git=False, python=True, shell=False,
-        confidence="strong",
+        confidence="high",
     ),
     _builtin_worker(
         "Shell", KIND_CLI, "Local shell for command execution and ops.",
@@ -531,7 +531,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["Code generation", "Comprehension of unfamiliar code"],
         speed="fast", cost="low", context_window=0, parallelism=1,
         network=False, filesystem=True, git=True, python=False, shell=True,
-        confidence="strong",
+        confidence="high",
     ),
     _builtin_worker(
         "Git", KIND_TOOL, "Version-control operations across repositories.",
@@ -542,7 +542,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["Non-VCS filesystem changes", "Code comprehension"],
         speed="fast", cost="low", context_window=0, parallelism=1,
         network=False, filesystem=True, git=True, python=False, shell=True,
-        confidence="strong",
+        confidence="high",
     ),
     _builtin_worker(
         "Filesystem", KIND_TOOL, "Local file read/write/move operations.",
@@ -553,7 +553,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["No network access", "No execution semantics"],
         speed="fast", cost="low", context_window=0, parallelism=1,
         network=False, filesystem=True, git=False, python=False, shell=False,
-        confidence="strong",
+        confidence="high",
     ),
     _builtin_worker(
         "Search", KIND_SERVICE,
@@ -591,7 +591,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["No code execution", "No repo analysis"],
         speed="fast", cost="low", context_window=0, parallelism=1,
         network=False, filesystem=True, git=False, python=False, shell=False,
-        confidence="strong",
+        confidence="high",
     ),
     _builtin_worker(
         "Testing", KIND_FUNCTION,
@@ -603,7 +603,7 @@ BUILTIN_WORKERS: List[Worker] = [
         limitations=["No production deployment", "No code generation"],
         speed="fast", cost="low", context_window=0, parallelism=1,
         network=False, filesystem=True, git=False, python=True, shell=False,
-        confidence="strong",
+        confidence="high",
     ),
 ]
 
@@ -623,7 +623,7 @@ _EXTERNAL_MANIFESTS = [
      "supported_plan_types": ["feature", "architecture", "refactor",
                                "research", "documentation", "infrastructure"],
      "estimated_speed": "fast", "estimated_cost": "medium",
-     "confidence": "strong"},
+     "confidence": "high"},
     {"worker_id": "worker:codex", "name": "Codex CLI", "implementation": "cli",
      "provider": "openai", "origin": "external",
      "capabilities": ["Refactoring", "Testing", "Reasoning", "Research",

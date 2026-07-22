@@ -19,6 +19,10 @@ Regression cases required by the spec:
 - No hallucination (semantic goals, evidence-backed)
 - No duplicate plans
 - Valid evidence references
+
+Phase 1 additions:
+- Trivial pattern detection (file creation, command execution)
+- _generate_milestones fallback chain
 """
 
 from __future__ import annotations
@@ -387,6 +391,150 @@ def test_plan_never_executes(db):
     assert "os.system" not in text
     assert "subprocess" not in text
     assert "def " not in text  # no code generation
+
+
+# --------------------------------------------------------------------------
+# Phase 1 — trivial pattern detection + fallback chain
+# --------------------------------------------------------------------------
+
+def test_trivial_milestone_create_file():
+    from src.friday.planning.derive import _trivial_milestones
+    goal = "create a file named hello.txt containing the text 'hello world'"
+    ms = _trivial_milestones(goal)
+    assert ms is not None
+    assert len(ms) == 1
+    assert ms[0]["task_type"] == "implementation"
+    assert ms[0]["symbolic"]["op"] == "create_file"
+    assert ms[0]["symbolic"]["path"] == "hello.txt"
+    assert ms[0]["symbolic"]["content"] == "hello world"
+    assert "File hello.txt exists" in ms[0]["acceptance_criteria"]
+
+
+def test_trivial_milestone_create_file_variants():
+    from src.friday.planning.derive import _trivial_milestones
+    for goal in [
+        "write a file named x.txt containing test",
+        "make the file output.log with content debug",
+        "create file called data.json containing {\"a\": 1}",
+    ]:
+        ms = _trivial_milestones(goal)
+        assert ms is not None, f"failed to match: {goal}"
+        assert ms[0]["symbolic"]["op"] == "create_file"
+
+
+def test_trivial_milestone_run_command():
+    from src.friday.planning.derive import _trivial_milestones
+    ms = _trivial_milestones("run ruff check .")
+    assert ms is not None
+    assert len(ms) == 1
+    assert ms[0]["task_type"] == "configuration"
+    assert ms[0]["symbolic"]["op"] == "run_command"
+    assert ms[0]["symbolic"]["command"] == "ruff check ."
+
+
+def test_trivial_milestone_no_match():
+    from src.friday.planning.derive import _trivial_milestones
+    assert _trivial_milestones("refactor the auth module") is None
+    assert _trivial_milestones("implement OAuth") is None
+    assert _trivial_milestones("") is None
+
+
+def test_generate_milestones_trivial_path():
+    """_generate_milestones returns trivial path when LLM unavailable + pattern matches."""
+    from src.friday.planning.derive import _generate_milestones, Evidence
+    from src.friday.planning.models import PlanType
+    ev = Evidence()
+    ms = _generate_milestones(
+        "create a file named x.txt containing test",
+        PlanType.FEATURE, ev, [], [], [], [])
+    assert ms is not None
+    assert len(ms) == 1
+    assert ms[0]["symbolic"]["op"] == "create_file"
+
+
+def test_generate_milestones_fallback_template():
+    """_generate_milestones falls through to template for non-trivial goals."""
+    from src.friday.planning.derive import _generate_milestones, Evidence
+    from src.friday.planning.models import PlanType
+    ev = Evidence()
+    ms = _generate_milestones(
+        "refactor the auth module",
+        PlanType.REFACTOR, ev, [], [], [], [])
+    assert ms is not None
+    assert len(ms) >= 4  # template always produces milestones
+    # Should have characterization step for refactor
+    titles = [m["title"].lower() for m in ms]
+    assert any("characterize" in t for t in titles)
+
+
+def test_llm_milestones_returns_none_when_disabled():
+    """_llm_milestones returns None when LLM is not configured (env vars absent)."""
+    from src.friday.planning.derive import _llm_milestones, Evidence
+    # Clear the cached import side effect by testing through the function itself
+    # (it catches ImportError internally, but we can't un-import llm module)
+    import os
+    old_key = os.environ.get("FRIDAY_LLM_API_KEY")
+    old_model = os.environ.get("FRIDAY_LLM_MODEL")
+    if old_key: del os.environ["FRIDAY_LLM_API_KEY"]
+    if old_model: del os.environ["FRIDAY_LLM_MODEL"]
+    try:
+        result = _llm_milestones("do a thing", Evidence())
+        assert result is None
+    finally:
+        if old_key: os.environ["FRIDAY_LLM_API_KEY"] = old_key
+        if old_model: os.environ["FRIDAY_LLM_MODEL"] = old_model
+
+
+# --------------------------------------------------------------------------
+# Phase 1 — compiler symbolic/ac pass-through
+# --------------------------------------------------------------------------
+
+def test_compiler_passes_symbolic_ac_from_milestone():
+    """Compiler propagates symbolic + acceptance_criteria from LLM/trivial milestones."""
+    from src.friday.planning.models import Plan, PlanType, PlanConfidence, PlanStatus
+    from src.friday.planning.compiler import TaskGraphCompiler
+    plan = Plan(
+        goal="create a file named x.txt containing test",
+        plan_type=PlanType.FEATURE,
+        confidence=PlanConfidence.MEDIUM,
+        status=PlanStatus.PLANNED,
+        milestones=[{
+            "order": 1,
+            "title": "Create x.txt",
+            "detail": "Create file x.txt with specified content.",
+            "evidence": "goal",
+            "task_type": "implementation",
+            "symbolic": {"op": "create_file", "path": "x.txt", "content": "test"},
+            "acceptance_criteria": ["File x.txt exists"],
+        }],
+    )
+    g = TaskGraphCompiler().compile(plan)
+    assert len(g.tasks) == 1
+    assert g.tasks[0].symbolic == {"op": "create_file", "path": "x.txt", "content": "test"}
+    assert "File x.txt exists" in g.tasks[0].acceptance_criteria
+    assert "x.txt" in g.tasks[0].outputs
+
+
+def test_compiler_fallback_unknown_task_type():
+    """Compiler fallback to IMPLEMENTATION for unknown task_type from milestone."""
+    from src.friday.planning.models import Plan, PlanType, PlanConfidence, PlanStatus
+    from src.friday.planning.compiler import TaskGraphCompiler
+    plan = Plan(
+        goal="do something",
+        plan_type=PlanType.FEATURE,
+        confidence=PlanConfidence.WEAK,
+        status=PlanStatus.PLANNED,
+        milestones=[{
+            "order": 1,
+            "title": "Do the thing",
+            "detail": "",
+            "evidence": "goal",
+            "task_type": "nonexistent_type",
+        }],
+    )
+    g = TaskGraphCompiler().compile(plan)
+    assert len(g.tasks) == 1
+    assert g.tasks[0].task_type == "implementation"
 
 
 def test_no_direct_lower_layer_imports_forbidden_in_rules():

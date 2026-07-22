@@ -18,6 +18,7 @@ import sys
 from typing import Optional
 
 from .db import connect
+from .cli_execute import _confirm_execution
 from .planning import TaskGraphEngine
 from .resolver import CapabilityResolver
 from .scheduler import TaskScheduler, CycleDetectedError, \
@@ -40,6 +41,12 @@ def cmd_runtime(args: argparse.Namespace) -> int:
     # 1-3. Upstream pipeline (unchanged).
     graph_eng = TaskGraphEngine(conn)
     g = graph_eng.generate(goal)
+
+    # CONFIRMATION GATE (Phase 6 emergency patch): same as friday execute.
+    if not _confirm_execution(goal, g, args, label="runtime execution"):
+        conn.close()
+        return 0
+
     CapabilityResolver(conn).resolve_graph(g.id)
     sched = TaskScheduler(conn)
     try:

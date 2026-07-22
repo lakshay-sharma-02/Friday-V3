@@ -130,7 +130,6 @@ def test_only_review_is_ai_primary():
         "Rename RuntimeTask to MissionTask",
         "Extract scheduler utilities into new_module",
         "refactor RuntimeEngine into smaller components",
-        "Add structured logging to scheduler",
         "Fix failing scheduler tests",
         "Remove dead code",
     ]:

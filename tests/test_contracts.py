@@ -42,8 +42,8 @@ from friday.worker.engine import ensure_runtime_bootstrapped, WorkerRegistry
 from friday.worker.models import Worker, WorkerKind
 
 
-def _fresh_db():
-    d = Path(tempfile.mkdtemp())
+def _fresh_db(path=None):
+    d = path or Path(tempfile.mkdtemp())
     conn = connect(d / "friday.db")
     ensure_runtime_bootstrapped(conn)
     return conn
@@ -57,7 +57,13 @@ def _plan(conn, goal):
 
 class ArtifactMock(MockExecutor):
     """Success-claiming mock that materializes the contract's expected artifact
-    into the shared workspace, mirroring a real executor writing the file."""
+    into the shared workspace, mirroring a real executor writing the file.
+
+    When the task has symbolic content (e.g. ``{"op": "create_file",
+    "content": "..."}``), the mock writes THAT content so verification's
+    content-mismatch check passes. Falls back to ``# artifact`` for tasks
+    without symbolic intent.
+    """
 
     def __init__(self, worker_id="worker:mock", fail=False, workspace="."):
         super().__init__(worker_id=worker_id, fail=fail)
@@ -68,10 +74,16 @@ class ArtifactMock(MockExecutor):
         if res.success:
             ct = contract_for_task(task)
             targets = ct.expected_artifacts or [f"{task.task_id}.out"]
+            content = "# artifact\n"
+            # Respect symbolic content so verify_symbolic's content check
+            # (e.g. ``content not in file_text``) passes for create_file tasks.
+            sym = getattr(task, "symbolic", None) or {}
+            if sym.get("op") == "create_file" and sym.get("content"):
+                content = sym["content"]
             for p in resolve_artifact_paths(ct, self._ws) or \
                     [str(Path(self._ws) / t) for t in targets]:
                 Path(p).parent.mkdir(parents=True, exist_ok=True)
-                Path(p).write_text("# artifact\n", encoding="utf-8")
+                Path(p).write_text(content, encoding="utf-8")
                 res.artifacts = list(res.artifacts) + [p]
         return res
 
@@ -100,10 +112,10 @@ def _run(conn, sched, workspace, claude_fails=True):
 # Phase 1+2 — Planner emits an explicit artifact contract
 # ===================================================================
 
-def test_planner_emits_explicit_artifact_contract():
+def test_planner_emits_explicit_artifact_contract(tmp_path):
     """A creation task's `outputs` must contain the concrete file path named in
     the goal — the explicit contract the runtime verifies against."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate("Create hello.py printing Hello World")
     CapabilityResolver(conn).resolve_graph(g.id)
     tasks = TaskGraphEngine(conn).graph_by_id(g.id).tasks
@@ -117,9 +129,9 @@ def test_planner_emits_explicit_artifact_contract():
     conn.close()
 
 
-def test_planner_contract_non_creation_tasks_empty():
+def test_planner_contract_non_creation_tasks_empty(tmp_path):
     """Non-creation tasks (research/analysis) must NOT invent a file contract."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     g = TaskGraphEngine(conn).generate(
         "Research the best architecture for a distributed system")
     CapabilityResolver(conn).resolve_graph(g.id)
@@ -135,7 +147,7 @@ def test_planner_contract_non_creation_tasks_empty():
 # Phase 5 — Resolver uses the contract
 # ===================================================================
 
-def test_resolver_prefers_contract_matching_executor():
+def test_resolver_prefers_contract_matching_executor(tmp_path):
     """For an explicit *.py artifact, the deterministic python executor is
     boosted over an AI executor that also covers python."""
     py = Worker(name="Python", kind=WorkerKind.FUNCTION,
@@ -155,12 +167,12 @@ def test_resolver_prefers_contract_matching_executor():
 # Phase 3+4 — Executor produces artifact, verifier validates contract
 # ===================================================================
 
-def test_executor_produces_artifact_mission_success():
+def test_executor_produces_artifact_mission_success(tmp_path):
     """Happy path: executor lands the contracted file -> verification passes ->
     mission succeeds. The contract (not a guess) drives the success."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     sched = _plan(conn, "Create hello.py printing Hello World")
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
     report = _run(conn, sched, str(ws))
     assert report.failed == 0, f"contract-satisfied mission failed: {report.tasks}"
     assert (ws / "hello.py").exists(), "contracted artifact not produced"
@@ -170,14 +182,14 @@ def test_executor_produces_artifact_mission_success():
     conn.close()
 
 
-def test_missing_artifact_truthful_failure():
+def test_missing_artifact_truthful_failure(tmp_path):
     """Executor claims success but produces NO file -> contract unsatisfied ->
     task FAILED (verification_passed False), descendants CANCELLED, no crash."""
     from friday.runtime.models import MockExecutor
 
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     sched = _plan(conn, "Create hello.py printing Hello World")
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
 
     def _resolve(wid):
         # Success-claiming mock that writes NOTHING (lies about the contract).
@@ -194,11 +206,11 @@ def test_missing_artifact_truthful_failure():
     conn.close()
 
 
-def test_wrong_artifact_failure():
+def test_wrong_artifact_failure(tmp_path):
     """Executor writes a DIFFERENT file than the contract expects -> FAIL."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     sched = _plan(conn, "Create hello.py printing Hello World")
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
 
     class WrongMock(MockExecutor):
         def execute(self, task):
@@ -223,19 +235,19 @@ def test_wrong_artifact_failure():
     conn.close()
 
 
-def test_claude_invocation_failure_falls_back():
+def test_claude_invocation_failure_falls_back(tmp_path):
     """Claude fails (is_error/json or exit) -> runtime falls back to
     deterministic built-ins, which satisfy the contract -> mission succeeds."""
-    conn = _fresh_db()
+    conn = _fresh_db(tmp_path)
     sched = _plan(conn, "Create hello.py printing Hello World")
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
     report = _run(conn, sched, str(ws), claude_fails=True)
     assert report.failed == 0, f"fallback mission failed: {report.tasks}"
     assert (ws / "hello.py").exists()
     conn.close()
 
 
-def test_timeout_failure():
+def test_timeout_failure(tmp_path):
     """An executor that exceeds its timeout must fail (never hang the mission).
 
     Uses the REAL shell executor with a 1s timeout against a `sleep 5` payload —
@@ -243,7 +255,7 @@ def test_timeout_failure():
     """
     from friday.runtime.executors import BuiltinShellExecutor
 
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
     ex = BuiltinShellExecutor(worker_id="worker:shell", workspace=str(ws),
                               timeout=1)
 
@@ -270,7 +282,7 @@ def test_timeout_failure():
 # Phase 6 — Claude adapter: JSON is_error + structured verify
 # ===================================================================
 
-def test_claude_verify_rejects_is_error_json():
+def test_claude_verify_rejects_is_error_json(tmp_path):
     """Claude's verify() must treat a 0-exit JSON payload with is_error:true as
     a FAILURE, not success. Exit code alone would lie."""
     from friday.runtime.executors import ClaudeCodeWorker
@@ -284,7 +296,7 @@ def test_claude_verify_rejects_is_error_json():
     assert "is_error" in vres.reason
 
 
-def test_claude_verify_accepts_clean_json():
+def test_claude_verify_accepts_clean_json(tmp_path):
     worker = ClaudeCodeWorker()
     payload = json.dumps({"type": "result", "is_error": False,
                           "result": "done"})
@@ -292,14 +304,14 @@ def test_claude_verify_accepts_clean_json():
     assert vres.passed is True
 
 
-def test_claude_verify_fallback_non_json():
+def test_claude_verify_fallback_non_json(tmp_path):
     """Non-JSON output degrades to the exit-code rule (no crash)."""
     worker = ClaudeCodeWorker()
     vres = worker.verify(None, ExecutionResult(success=True, stdout="some text"))
     assert vres.passed is True
 
 
-def test_claude_real_integration():
+def test_claude_real_integration(tmp_path):
     """Run the ACTUAL claude CLI if installed AND explicitly enabled.
 
     Validates the invocation contract end-to-end: print mode, JSON output,
@@ -313,7 +325,7 @@ def test_claude_real_integration():
     if not binary:
         pytest.skip("claude CLI not installed; skipping real integration")
 
-    ws = Path(tempfile.mkdtemp())
+    ws = tmp_path
     probe = ws / "probe.txt"
     prompt = f"Write the single word DONE to {probe} and nothing else."
     try:

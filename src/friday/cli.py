@@ -49,6 +49,9 @@ from .cli_runtime import (
     cmd_runtime_export,
 )
 from .cli_capability import cmd_capability
+from .cli_watch import cmd_watch
+from .cli_suggest import cmd_suggest
+from .context import ContextEngine
 from .db import connect
 from .doctor import cmd_doctor
 from .ingest import ingest_paths
@@ -465,7 +468,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_understanding.add_argument(
         "action", nargs="?", default=None,
-        choices=["build", "explain", "evolution"],
+        choices=["build", "explain", "evolution", "list"],
         help="'build' (WRITE), 'explain <id>', 'evolution'; omit to list.",
     )
     p_understanding.add_argument(
@@ -482,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_initiatives.add_argument(
         "action", nargs="?", default=None,
-        choices=["build", "explain", "timeline"],
+        choices=["build", "explain", "timeline", "list"],
         help="'build' (WRITE), 'explain <id>', 'timeline'; omit to list.",
     )
     p_initiatives.add_argument(
@@ -499,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_insights.add_argument(
         "action", nargs="?", default=None,
-        choices=["build", "explain", "evolution"],
+        choices=["build", "explain", "evolution", "list"],
         help="'build' (WRITE), 'explain <id>', 'evolution'; omit to list.",
     )
     p_insights.add_argument(
@@ -568,15 +571,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_graph.add_argument(
         "goal", nargs="?",
-        help="Goal to compile (e.g. \"Implement OAuth\"). Omit with an action to list.",
+        help="Goal, or 'generate <initiative-id>', or 'review [approve|reject <id>]'.",
     )
     p_graph.add_argument(
         "action", nargs="?",
-        help="'explain <id>', 'export <id>', or 'list'; omit with a goal to compile.",
+        help="'explain <id>', 'export <id>', 'list', 'generate <id>', or 'review [approve|reject <id>]'.",
     )
     p_graph.add_argument(
-        "graph_id", nargs="?", default=None,
-        help="Graph ID for 'explain'/'export' (can also use --id)."
+        "graph_id", nargs="*", default=None,
+        help="Graph ID for 'explain'/'export'/'review' (can also use --id)."
     )
     p_graph.add_argument("--id", help="Graph ID for 'explain'/'export' action.")
     p_graph.set_defaults(func=cmd_graph)
@@ -660,6 +663,12 @@ def main(argv: list[str] | None = None) -> int:
         "goal", nargs="+", help="The goal to execute, e.g. 'Improve the README'.")
     p_execute.add_argument(
         "--workspace", default=".", help="Working directory for execution.")
+    p_execute.add_argument(
+        "--yes", action="store_true",
+        help="Skip confirmation prompt (for scripted/CI use).")
+    p_execute.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the execution plan without running it.")
     p_execute.set_defaults(func=cmd_execute)
 
     p_runtime = sub.add_parser(
@@ -669,6 +678,12 @@ def main(argv: list[str] | None = None) -> int:
         "goal", nargs="*",
         help='Goal to execute (e.g. "Implement OAuth").',
     )
+    p_runtime.add_argument(
+        "--yes", action="store_true",
+        help="Skip confirmation prompt (for scripted/CI use).")
+    p_runtime.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the execution plan without running it.")
     p_runtime.set_defaults(func=cmd_runtime)
 
     p_runtime_session = sub.add_parser(
@@ -711,8 +726,32 @@ def main(argv: list[str] | None = None) -> int:
         "--worker", help="Worker name for 'info'.")
     p_capability.set_defaults(func=cmd_capability)
 
+    p_watch = sub.add_parser(
+        "watch", help="Ambient workspace observation loop (systemd timer).")
+    p_watch.add_argument(
+        "--install", action="store_true",
+        help="Install the systemd timer and start it.")
+    p_watch.add_argument(
+        "--uninstall", action="store_true",
+        help="Stop and remove the systemd timer.")
+    p_watch.add_argument(
+        "--status", action="store_true",
+        help="Show timer and recent watch cycle status.")
+    p_watch.add_argument(
+        "--run-once", action="store_true",
+        help="Run one watch cycle immediately (also used by the timer).")
+    p_watch.add_argument(
+        "--quiet", action="store_true",
+        help="Suppress output when --run-once.")
+    p_watch.set_defaults(func=cmd_watch)
+
+    p_suggest = sub.add_parser(
+        "suggest",
+        help="Surface cross-project integration opportunities from existing workspace evidence.")
+    p_suggest.set_defaults(func=cmd_suggest)
+
     p_doctor = sub.add_parser(
-        "doctor", help="Check system health (DB, deps, workers, README).")
+        "doctor", help="Check system health (DB, deps, workers, README, watch).")
     p_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)

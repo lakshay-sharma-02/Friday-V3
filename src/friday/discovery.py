@@ -29,6 +29,15 @@ IGNORED_DIRS = {
     ".pytest_cache",
     ".tox",
     ".git",
+    ".hg",
+    ".svn",
+    ".claude",
+    ".zcode",
+    "dogfood_run",
+    # site-packages is a pip-installed dependency directory (never source).
+    # && is a shell-parsing artifact directory from a prior buggy install.
+    "site-packages",
+    "&&",
 }
 
 

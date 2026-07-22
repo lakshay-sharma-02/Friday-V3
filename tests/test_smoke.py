@@ -33,16 +33,19 @@ def test_end_to_end_smoke():
         try:
             friday_cmd = "friday"
 
+            env = os.environ.copy()
+            env["FRIDAY_DB"] = str(tmp / "friday.db")
+            
             # Ingest
             r = subprocess.run(
                 [friday_cmd, "ingest", str(repo)],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True, timeout=60, env=env)
             assert r.returncode == 0, f"ingest failed: {r.stderr}"
 
             # Workers list (should auto-bootstrap)
             r = subprocess.run(
                 [friday_cmd, "workers"],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=30, env=env)
             assert r.returncode == 0, f"workers failed: {r.stderr}"
             assert "Python" in r.stdout or "Shell" in r.stdout, \
                 f"workers output missing builtins: {r.stdout[:500]}"
@@ -51,7 +54,7 @@ def test_end_to_end_smoke():
             r = subprocess.run(
                 [friday_cmd, "execute",
                  "output the current working directory and list files"],
-                capture_output=True, text=True, timeout=120)
+                capture_output=True, text=True, timeout=120, env=env)
             assert r.returncode == 0, \
                 f"execute failed: stdout={r.stdout[-500:]}\nstderr={r.stderr[-500:]}"
             # Verify the shell worker produced output

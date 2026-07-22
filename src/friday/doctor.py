@@ -103,6 +103,81 @@ def _check_env() -> List[Tuple[str, str, str]]:
     return issues
 
 
+def _systemctl_available() -> bool:
+    import shutil
+    return shutil.which("systemctl") is not None
+
+
+def _check_watch(conn) -> List[Tuple[str, str, str]]:
+    """Check watch loop status."""
+    issues: List[Tuple[str, str, str]] = []
+    import subprocess
+
+    # Is the systemd timer installed?
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "is-enabled", "friday-watch.timer"],
+            capture_output=True, text=True, timeout=10)
+        timer_enabled = r.stdout.strip() == "enabled"
+    except Exception:
+        timer_enabled = False
+
+    if not timer_enabled:
+        issues.append(("watch", "info", "not installed — run `friday watch --install`"))
+        return issues
+
+    # Check if timer is active.
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "is-active", "friday-watch.timer"],
+            capture_output=True, text=True, timeout=10)
+        timer_active = r.stdout.strip() == "active"
+    except Exception:
+        timer_active = False
+
+    if not timer_active:
+        issues.append(("watch", "unavailable", "timer installed but not active"))
+        return issues
+
+    # Recent cycle outcomes.
+    row = conn.execute(
+        "SELECT outcome, started_at, finished_at, error_detail "
+        "FROM watch_history ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+    if row is None:
+        issues.append(("watch", "info", "installed and active; no cycles yet"))
+        return issues
+
+    if row["outcome"] == "failed":
+        issues.append(("watch", "error",
+                       f"last cycle FAILED at {row['started_at']}: "
+                       f"{row['error_detail'] or 'unknown'}"))
+    elif row["outcome"] == "succeeded":
+        pass  # healthy — no issue to report
+    else:
+        issues.append(("watch", "info",
+                       f"last cycle status: {row['outcome']} at {row['started_at']}"))
+
+    return issues
+
+
+def _check_graph_proposals(conn) -> List[Tuple[str, str, str]]:
+    """Check for pending graph proposals awaiting review (Phase 5)."""
+    issues: List[Tuple[str, str, str]] = []
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM task_graphs WHERE status='proposal'"
+        ).fetchone()
+        if row and row["cnt"] > 0:
+            issues.append(("graph proposals", "info",
+                           f"{row['cnt']} proposal(s) awaiting review — "
+                           f"run `friday graph review`"))
+    except Exception:
+        pass  # table may not exist yet
+    return issues
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Check system health.
 
@@ -122,7 +197,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # DB check
     issues = _check_database(conn)
     all_issues.extend(issues)
-    conn.close()
 
     # README check
     repo_root = Path(__file__).resolve().parents[2]
@@ -132,6 +206,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     # Env check
     issues = _check_env()
     all_issues.extend(issues)
+
+    # Watch check (needs conn). Skip silently if systemctl unavailable.
+    if _systemctl_available():
+        issues = _check_watch(conn)
+        all_issues.extend(issues)
+
+    # Phase 5: graph proposals check.
+    issues = _check_graph_proposals(conn)
+    all_issues.extend(issues)
+
+    conn.close()
 
     # Report
     if not all_issues:

@@ -569,15 +569,36 @@ def _evidence_for(milestone: dict, plan: Plan) -> List[str]:
 def _expand(milestone: dict, plan: Plan, ptype: str = "") -> List[dict]:
     """Expand one plan milestone into 1+ sub-task specs.
 
-    Each spec: {task_type, title, parallel_next}. `parallel_next=True` means this
-    sub-task runs in PARALLEL with the next sub-task in the same milestone phase
-    (no intra-phase edge). `parallel_next=False` chains them sequentially.
+    Each spec: {task_type, title, parallel_next, symbolic, acceptance_criteria}.
+    When a milestone already carries ``task_type`` / ``symbolic`` /
+    ``acceptance_criteria`` (added by the LLM or trivial-pattern planner),
+    these are passed through verbatim so the compiler emits a task that
+    matches the milestone's intent. Otherwise, the original deterministic
+    title-based mapping is used.
     """
     title = (milestone.get("title") or "").lower()
     ptype = plan.plan_type.value
     detail = milestone.get("detail", "")
 
+    # If the milestone already has an explicit task_type (from LLM/trivial plan),
+    # pass it through with the milestone's full payload.
+    if milestone.get("task_type"):
+        tt = milestone["task_type"]
+        sym = milestone.get("symbolic", {}) or {}
+        ac = milestone.get("acceptance_criteria", []) or []
+        return [{
+            "task_type": tt,
+            "title": milestone.get("title", ""),
+            "parallel_next": bool(milestone.get("parallel_next", False)),
+            "symbolic": sym,
+            "acceptance_criteria": ac if isinstance(ac, list) else [str(ac)],
+        }]
+
     def spec(tt, t, par=False):
+        # Propagate an explicit parallel_next hint from the milestone itself
+        # (set by the template-fallback path for independent evidence subjects
+        # that share the same milestone order).
+        par = par or bool(milestone.get("parallel_next", False))
         return {"task_type": tt, "title": t, "parallel_next": par}
 
     # Feature / Integration: the FEATURE plan already carries explicit Backend
@@ -771,13 +792,18 @@ class TaskGraphCompiler:
         gid = _graph_id(plan)
         pid = plan.id or plan._generate_id()
 
-        # Phase 3: engineering-pattern pre-pass. A recognized software-engineering
-        # mission (rename/extract/refactor/feature/bugfix/maintenance) overrides
-        # the whole graph with an explicit deterministic workflow. Unrecognized
-        # goals fall through to the frozen generic milestone expansion below.
-        pattern = classify(plan.goal, plan)
-        if pattern is not None:
-            return self._compile_pattern(gid, pid, plan, pattern, generated_at)
+        # Phase 3: engineering-pattern pre-pass. Only applies when the plan
+        # has NO LLM-derived or trivial-pattern milestones (i.e. milestones that
+        # already carry task_type/symbolic). Even then, only specific engineering
+        # patterns (rename/extract/refactor/bugfix/maintenance) override the
+        # template — generic patterns like "add X to Y" produce worse output
+        # than the template fallback, so they are excluded.
+        _has_explicit_milestones = any(
+            m.get("task_type") for m in plan.milestones)
+        if not _has_explicit_milestones:
+            pattern = classify(plan.goal, plan)
+            if pattern is not None and pattern.name not in ("feature",):
+                return self._compile_pattern(gid, pid, plan, pattern, generated_at)
 
         milestones = sorted(plan.milestones, key=lambda m: m.get("order", 0))
         if not milestones:
@@ -818,12 +844,27 @@ class TaskGraphCompiler:
 
         # 2. Build task objects (fields except edges; deps filled after edges).
         for i, (spec, phase) in enumerate(zip(specs, phase_of), start=1):
-            tt = TaskType.from_str(spec["task_type"])
+            try:
+                tt = TaskType.from_str(spec["task_type"])
+            except ValueError:
+                tt = TaskType.IMPLEMENTATION  # fallback for unknown task_type
             m = self._milestone_for(phase, milestones)
             title = spec["title"]
             caps = _infer_capabilities(m.get("title", ""), tt, plan)
             desc = (m.get("detail") or "")
             conf = plan.confidence.value if plan.confidence else "medium"
+            # Phase 1: propagate symbolic/ac from milestone (LLM/trivial planners
+            # stamp these on the milestone; the template fallback doesn't.)
+            spec_sym = spec.get("symbolic") or {}
+            spec_ac = spec.get("acceptance_criteria") or []
+            # When the trivial/LLM planner provided explicit acceptance_criteria
+            # on the spec, those override the generic ones.
+            outputs = list(_OUTPUTS.get(tt, [])) + _expected_artifacts(tt, title, plan.goal)
+            # If symbolic has a "path", include it in outputs for artifact check.
+            if spec_sym.get("path"):
+                p = spec_sym["path"]
+                if p not in outputs:
+                    outputs.append(p)
             t = Task(
                 id=f"{gid}#t{i}",
                 graph_id=gid,
@@ -841,11 +882,13 @@ class TaskGraphCompiler:
                 # Phase 1.5: emit the explicit artifact contract (file paths)
                 # alongside the human-readable description, so the runtime can
                 # verify WHAT must exist after execution. Deduplicated.
-                outputs=list(_OUTPUTS.get(tt, [])) + _expected_artifacts(tt, title, plan.goal),
-                acceptance_criteria=_acceptance_criteria(tt, title, plan),
+                outputs=outputs,
+                acceptance_criteria=spec_ac or _acceptance_criteria(tt, title, plan),
                 verification=_task_verification(tt, plan),
                 rollback=_task_rollback(tt, plan),
                 evidence=_evidence_for(m, plan),
+                # Phase 1: propagate symbolic intent from milestone to task.
+                symbolic=spec_sym,
                 status="pending",
                 confidence=conf,
                 sequence=i,

@@ -35,7 +35,8 @@ def test_multiline_prompt_uses_stdin_not_argv():
     # (argv[0] is the PATH-resolved binary, not the bare name).
     assert inv.argv[0].endswith("claude"), inv.argv
     assert inv.argv[1:] == ["--print", "--output-format", "json",
-                             "--dangerously-skip-permissions"], \
+                             "--dangerously-skip-permissions", 
+                             "--model", "oc/deepseek-v4-flash-free"], \
         inv.argv
     assert inv.stdin is not None and inv.stdin.strip(), "prompt must be on stdin"
 

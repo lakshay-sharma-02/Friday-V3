@@ -51,10 +51,9 @@ from friday.scheduler.models import ExecutionSchedule, ScheduledTask, TaskState
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _db(tmp_path: Path | None = None) -> sqlite3.Connection:
-    if tmp_path is None:
-        tmp_path = Path(tempfile.mkdtemp())
-    return connect(tmp_path / "runtime_test.db")
+def _db(path: Path | None = None) -> sqlite3.Connection:
+    d = path or Path(tempfile.mkdtemp())
+    return connect(d / "runtime_test.db")
 
 
 def _seed_graph(conn, gid, n_tasks):
@@ -108,44 +107,44 @@ def _run(conn, sched, workers=None, resolver=None, max_workers=8):
 # 1. State machine
 # ===================================================================
 
-def test_state_transitions_valid():
+def test_state_transitions_valid(tmp_path):
     assert can_transition(RunState.PENDING, RunState.RUNNING)
     assert can_transition(RunState.RUNNING, RunState.SUCCESS)
     assert can_transition(RunState.RUNNING, RunState.FAILED)
     assert can_transition(RunState.PENDING, RunState.CANCELLED)
 
 
-def test_state_transitions_invalid():
+def test_state_transitions_invalid(tmp_path):
     assert not can_transition(RunState.SUCCESS, RunState.RUNNING)
     assert not can_transition(RunState.FAILED, RunState.SUCCESS)
     assert not can_transition(RunState.CANCELLED, RunState.RUNNING)
     assert not can_transition(RunState.RUNNING, RunState.PENDING)
 
 
-def test_next_state_for_result_success():
+def test_next_state_for_result_success(tmp_path):
     assert next_state_for_result(RunState.RUNNING, True) == RunState.SUCCESS
 
 
-def test_next_state_for_result_failure():
+def test_next_state_for_result_failure(tmp_path):
     assert next_state_for_result(RunState.RUNNING, False) == RunState.FAILED
 
 
-def test_next_state_for_result_rejects_non_running():
+def test_next_state_for_result_rejects_non_running(tmp_path):
     with pytest.raises(ValueError):
         next_state_for_result(RunState.PENDING, True)
 
 
-def test_mark_cancelled_from_pending():
+def test_mark_cancelled_from_pending(tmp_path):
     assert mark_cancelled(RunState.PENDING) == RunState.CANCELLED
 
 
-def test_mark_cancelled_preserves_terminal():
+def test_mark_cancelled_preserves_terminal(tmp_path):
     # A real outcome is not overridden by a descendant-cancel pass.
     assert mark_cancelled(RunState.SUCCESS) == RunState.SUCCESS
     assert mark_cancelled(RunState.FAILED) == RunState.FAILED
 
 
-def test_blocked_descendants_chain():
+def test_blocked_descendants_chain(tmp_path):
     # deps[X] = tasks X depends on. So B,C depend on A; D depends on B,C.
     deps = {"A": [], "B": ["A"], "C": ["A"], "D": ["B", "C"]}
     # dependents[X] = tasks that depend on X.
@@ -157,7 +156,7 @@ def test_blocked_descendants_chain():
     assert out == {"B", "C", "D"}
 
 
-def test_blocked_descendants_none():
+def test_blocked_descendants_none(tmp_path):
     dependents = {"A": ["B"], "B": []}
     assert blocked_descendants("B", dependents) == set()
 
@@ -166,7 +165,7 @@ def test_blocked_descendants_none():
 # 2. Session lifecycle
 # ===================================================================
 
-def test_session_created_and_finished():
+def test_session_created_and_finished(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -178,7 +177,7 @@ def test_session_created_and_finished():
     assert row["state"] == "finished"
 
 
-def test_session_has_started_and_finished():
+def test_session_has_started_and_finished(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -188,7 +187,7 @@ def test_session_has_started_and_finished():
     assert rep.duration_ms >= 0
 
 
-def test_session_id_unique_per_run():
+def test_session_id_unique_per_run(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -197,7 +196,7 @@ def test_session_id_unique_per_run():
     assert r1.session_id != r2.session_id
 
 
-def test_session_records_events():
+def test_session_records_events(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -211,7 +210,7 @@ def test_session_records_events():
     assert "session_finished" in kinds
 
 
-def test_session_persisted_row():
+def test_session_persisted_row(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [("A", 1), ("B", 1)])
@@ -228,7 +227,7 @@ def test_session_persisted_row():
 # 3. Parallel execution
 # ===================================================================
 
-def test_parallel_wave_runs_concurrently():
+def test_parallel_wave_runs_concurrently(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [("A", 1), ("B", 1), ("C", 1)])
@@ -239,7 +238,7 @@ def test_parallel_wave_runs_concurrently():
     assert states == {"A": "success", "B": "success", "C": "success"}
 
 
-def test_parallel_true_concurrency_timing():
+def test_parallel_true_concurrency_timing(tmp_path):
     # A slow mock worker; parallel wave should finish near one duration, not N.
     class SlowMock(MockWorker):
         def execute(self, task):
@@ -254,7 +253,7 @@ def test_parallel_true_concurrency_timing():
     assert rep.succeeded == 4
 
 
-def test_parallel_different_workers():
+def test_parallel_different_workers(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [
@@ -272,7 +271,7 @@ def test_parallel_different_workers():
 # 4. Wave ordering
 # ===================================================================
 
-def test_wave_ordering_chain():
+def test_wave_ordering_chain(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [
@@ -288,7 +287,7 @@ def test_wave_ordering_chain():
     assert order.index("A") < order.index("B") < order.index("C")
 
 
-def test_wave_ordering_diamond():
+def test_wave_ordering_diamond(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 4)
     sched = _schedule("g1", [
@@ -299,7 +298,7 @@ def test_wave_ordering_diamond():
     assert rep.succeeded == 4
 
 
-def test_wave_wait_for_completion():
+def test_wave_wait_for_completion(tmp_path):
     # A wave-2 task must not start before its wave-1 dependency.
     conn = _db()
     _seed_graph(conn, "g1", 2)
@@ -315,7 +314,7 @@ def test_wave_wait_for_completion():
 # 5. Dependency blocking (failure propagation)
 # ===================================================================
 
-def test_failure_cancels_descendants():
+def test_failure_cancels_descendants(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 4)
     sched = _schedule("g1", [
@@ -335,7 +334,7 @@ def test_failure_cancels_descendants():
     assert rep.failed == 1 and rep.cancelled == 2
 
 
-def test_failure_does_not_affect_unrelated():
+def test_failure_does_not_affect_unrelated(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 4)
     sched = _schedule("g1", [
@@ -354,7 +353,7 @@ def test_failure_does_not_affect_unrelated():
     assert states["D"] == "cancelled"
 
 
-def test_no_retry_on_failure():
+def test_no_retry_on_failure(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -373,7 +372,7 @@ def test_no_retry_on_failure():
 # 6. Worker failures / exceptions
 # ===================================================================
 
-def test_worker_exception_becomes_failure():
+def test_worker_exception_becomes_failure(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -388,7 +387,7 @@ def test_worker_exception_becomes_failure():
     assert "kaboom" in (row["error"] or "")
 
 
-def test_missing_worker_is_failure():
+def test_missing_worker_is_failure(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1, None, "worker:none")])
@@ -401,7 +400,7 @@ def test_missing_worker_is_failure():
     assert "no worker" in (row["error"] or "")
 
 
-def test_missing_worker_cancels_dependents():
+def test_missing_worker_cancels_dependents(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [
@@ -416,7 +415,7 @@ def test_missing_worker_cancels_dependents():
 # 7. Execution events (append-only)
 # ===================================================================
 
-def test_events_append_only_count():
+def test_events_append_only_count(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [("A", 1), ("B", 1)])
@@ -428,7 +427,7 @@ def test_events_append_only_count():
     assert n == 6
 
 
-def test_event_ordering_monotonic():
+def test_event_ordering_monotonic(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -441,7 +440,7 @@ def test_event_ordering_monotonic():
     assert kinds[-1] == "session_finished"
 
 
-def test_task_failed_event_emitted():
+def test_task_failed_event_emitted(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -459,7 +458,7 @@ def test_task_failed_event_emitted():
 # 8. History (append-only)
 # ===================================================================
 
-def test_history_append_only():
+def test_history_append_only(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -470,7 +469,7 @@ def test_history_append_only():
     assert n >= 2  # pending + running + success snapshots
 
 
-def test_history_records_each_state():
+def test_history_records_each_state(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -487,7 +486,7 @@ def test_history_records_each_state():
 # 9. Serialization / schema version
 # ===================================================================
 
-def test_execution_result_to_dict():
+def test_execution_result_to_dict(tmp_path):
     r = ExecutionResult(success=True, stdout="o", stderr="e",
                         artifacts=["a1"], exit_code=0, duration_ms=5)
     d = r.to_dict()
@@ -495,7 +494,7 @@ def test_execution_result_to_dict():
     assert d["artifacts"] == ["a1"] and d["duration_ms"] == 5
 
 
-def test_execution_report_to_dict():
+def test_execution_report_to_dict(tmp_path):
     rep = ExecutionReport(
         session_id="s1", schedule_id="g1", state="finished",
         started_at="t0", finished_at="t1", duration_ms=1, executed=1,
@@ -506,14 +505,14 @@ def test_execution_report_to_dict():
     assert d["succeeded"] == 1
 
 
-def test_runtime_task_to_dict():
+def test_runtime_task_to_dict(tmp_path):
     t = RuntimeTask(execution_id="g1:A", session_id="s", schedule_id="g1",
                     task_id="A", worker_id="w", wave=1, dependencies=["B"])
     d = t.to_dict()
     assert d["task_id"] == "A" and d["dependencies"] == ["B"]
 
 
-def test_scheduled_task_schema_version():
+def test_scheduled_task_schema_version(tmp_path):
     t = ScheduledTask(
         schedule_id="g1:A", graph_id="g1", assignment_id="g1:A", task_id="A",
         worker_id="w", phase="wave-1", wave=1, status=TaskState.READY,
@@ -521,7 +520,7 @@ def test_scheduled_task_schema_version():
     assert t.schema_version == "1.0"
 
 
-def test_runtime_results_row_persisted():
+def test_runtime_results_row_persisted(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -532,7 +531,7 @@ def test_runtime_results_row_persisted():
     assert n == 1
 
 
-def test_runtime_results_append_only_multiple_runs():
+def test_runtime_results_append_only_multiple_runs(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -548,7 +547,7 @@ def test_runtime_results_append_only_multiple_runs():
 # 10. Deterministic replay
 # ===================================================================
 
-def test_deterministic_replay_same_report():
+def test_deterministic_replay_same_report(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [
@@ -559,7 +558,7 @@ def test_deterministic_replay_same_report():
     assert r1.failed == r2.failed == 0
 
 
-def test_deterministic_execution_order():
+def test_deterministic_execution_order(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 4)
     sched = _schedule("g1", [("A", 1), ("B", 1), ("C", 2, ["A"]), ("D", 2, ["B"])])
@@ -574,26 +573,26 @@ def test_deterministic_execution_order():
 # 11. Mock workers
 # ===================================================================
 
-def test_mock_worker_success():
+def test_mock_worker_success(tmp_path):
     w = MockWorker()
     res = w.execute(RuntimeTask("g1:A", "s", "g1", "A", "w", 1))
     assert res.success and res.exit_code == 0
 
 
-def test_mock_worker_forced_fail():
+def test_mock_worker_forced_fail(tmp_path):
     w = MockWorker(fail=True)
     res = w.execute(RuntimeTask("g1:A", "s", "g1", "A", "w", 1))
     assert not res.success and res.error
 
 
-def test_mock_worker_hint_fail():
+def test_mock_worker_hint_fail(tmp_path):
     w = MockWorker()
     t = RuntimeTask("g1:A", "s", "g1", "A", "w", 1)
     t.runtime_hint = "fail"
     assert not w.execute(t).success
 
 
-def test_mock_worker_artifacts():
+def test_mock_worker_artifacts(tmp_path):
     w = MockWorker()
     t = RuntimeTask("g1:A", "s", "g1", "A", "w", 1, artifacts=["x"])
     res = w.execute(t)
@@ -604,7 +603,7 @@ def test_mock_worker_artifacts():
 # 12. Multiple workers
 # ===================================================================
 
-def test_multiple_workers_routed():
+def test_multiple_workers_routed(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [
@@ -623,7 +622,7 @@ def test_multiple_workers_routed():
     assert calls == {"x": 1, "y": 1}
 
 
-def test_unknown_worker_falls_to_none():
+def test_unknown_worker_falls_to_none(tmp_path):
     # worker_resolver returns None for an unmapped worker -> failure.
     conn = _db()
     _seed_graph(conn, "g1", 1)
@@ -636,7 +635,7 @@ def test_unknown_worker_falls_to_none():
 # 13. Worker exceptions
 # ===================================================================
 
-def test_dispatcher_converts_exception():
+def test_dispatcher_converts_exception(tmp_path):
     t = RuntimeTask("g1:A", "s", "g1", "A", "w", 1)
     class Boom(MockWorker):
         def execute(self, task):
@@ -646,7 +645,7 @@ def test_dispatcher_converts_exception():
     assert "nope" in res.error
 
 
-def test_dispatcher_none_worker():
+def test_dispatcher_none_worker(tmp_path):
     t = RuntimeTask("g1:A", "s", "g1", "A", "w", 1)
     res = dispatch(t, None)
     assert not res.success and "no worker" in res.error
@@ -656,7 +655,7 @@ def test_dispatcher_none_worker():
 # 14. Cancellation
 # ===================================================================
 
-def test_cancelled_task_not_executed():
+def test_cancelled_task_not_executed(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [
@@ -675,7 +674,7 @@ def test_cancelled_task_not_executed():
     assert states["C"] == "cancelled"
 
 
-def test_cancelled_state_persisted():
+def test_cancelled_state_persisted(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [("A", 1), ("B", 2, ["A"])])
@@ -695,7 +694,7 @@ def test_cancelled_state_persisted():
 # 15. Execution report
 # ===================================================================
 
-def test_report_counts():
+def test_report_counts(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [
@@ -707,7 +706,7 @@ def test_report_counts():
     assert rep.workers_used == ["worker:mock"]
 
 
-def test_report_with_failure_counts():
+def test_report_with_failure_counts(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [("A", 1), ("B", 2, ["A"])])
@@ -722,7 +721,7 @@ def test_report_with_failure_counts():
     assert rep.failed == 1 and rep.cancelled == 1
 
 
-def test_report_no_analysis_fields():
+def test_report_no_analysis_fields(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -737,7 +736,7 @@ def test_report_no_analysis_fields():
 # 16. Runtime restart (resumability of records)
 # ===================================================================
 
-def test_runtime_tasks_reloadable_after_session():
+def test_runtime_tasks_reloadable_after_session(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [("A", 1), ("B", 1)])
@@ -749,7 +748,7 @@ def test_runtime_tasks_reloadable_after_session():
     assert all(r["status"] == "success" for r in rows)
 
 
-def test_session_listable_after_restart():
+def test_session_listable_after_restart(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -767,7 +766,7 @@ def test_session_listable_after_restart():
 # 17. Large graphs
 # ===================================================================
 
-def test_large_chain():
+def test_large_chain(tmp_path):
     conn = _db()
     n = 40
     _seed_graph(conn, "g1", n)
@@ -779,7 +778,7 @@ def test_large_chain():
     assert rep.wave_count == n
 
 
-def test_large_wide_parallel():
+def test_large_wide_parallel(tmp_path):
     conn = _db()
     n = 50
     _seed_graph(conn, "g1", n)
@@ -790,7 +789,7 @@ def test_large_wide_parallel():
     assert rep.wave_count == 1
 
 
-def test_large_graph_deterministic():
+def test_large_graph_deterministic(tmp_path):
     conn = _db()
     n = 30
     _seed_graph(conn, "g1", n)
@@ -805,7 +804,7 @@ def test_large_graph_deterministic():
 # 18. Dogfood: real worker adapters (PythonWorker / ShellWorker)
 # ===================================================================
 
-def test_python_worker_executes():
+def test_python_worker_executes(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -822,7 +821,7 @@ def test_python_worker_executes():
     assert "hello from python" in (row["stdout"] or "")
 
 
-def test_shell_worker_executes():
+def test_shell_worker_executes(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -836,7 +835,7 @@ def test_shell_worker_executes():
     assert "shell-ran" in (row["stdout"] or "")
 
 
-def test_python_worker_failure_propagates():
+def test_python_worker_failure_propagates(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -855,7 +854,7 @@ def test_python_worker_failure_propagates():
 # 19. Dispatcher purity (no retry / repair / planning)
 # ===================================================================
 
-def test_dispatcher_no_retry():
+def test_dispatcher_no_retry(tmp_path):
     calls = []
     class C(Worker):
         worker_id = "w"
@@ -866,7 +865,7 @@ def test_dispatcher_no_retry():
     assert len(calls) == 1
 
 
-def test_dispatcher_returns_result_only():
+def test_dispatcher_returns_result_only(tmp_path):
     res = dispatch(RuntimeTask("g1:A", "s", "g1", "A", "w", 1), MockWorker())
     assert isinstance(res, ExecutionResult)
     # The Runtime never sees planning/scheduling internals.
@@ -877,7 +876,7 @@ def test_dispatcher_returns_result_only():
 # 20. Engine never schedules / resolves (boundary)
 # ===================================================================
 
-def test_engine_requires_schedule_input():
+def test_engine_requires_schedule_input(tmp_path):
     conn = _db()
     eng = RuntimeEngine(conn, workers={"worker:mock": MockWorker()})
     # run() requires an ExecutionSchedule; it does not build one.
@@ -885,7 +884,7 @@ def test_engine_requires_schedule_input():
         eng.run(None)
 
 
-def test_runtime_does_not_modify_schedule():
+def test_runtime_does_not_modify_schedule(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -898,7 +897,7 @@ def test_runtime_does_not_modify_schedule():
 # 21. Schema version on every persisted row
 # ===================================================================
 
-def test_all_runtime_tables_carry_schema_version():
+def test_all_runtime_tables_carry_schema_version(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -917,12 +916,12 @@ def test_all_runtime_tables_carry_schema_version():
 # 22. Session id format
 # ===================================================================
 
-def test_session_id_format():
+def test_session_id_format(tmp_path):
     sid = _session_id()
     assert sid.startswith("sess:")
 
 
-def test_multiple_sessions_distinct_rows():
+def test_multiple_sessions_distinct_rows(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -936,7 +935,7 @@ def test_multiple_sessions_distinct_rows():
 # 23. Worker conflict serialization already solved upstream
 # ===================================================================
 
-def test_same_worker_serialized_by_scheduler_not_runtime():
+def test_same_worker_serialized_by_scheduler_not_runtime(tmp_path):
     # Both tasks share worker:mock, wave 1. Runtime just executes both; the
     # Scheduler already decided ordering. Here we confirm both still run.
     conn = _db()
@@ -950,7 +949,7 @@ def test_same_worker_serialized_by_scheduler_not_runtime():
 # 24. Append-only evolution table
 # ===================================================================
 
-def test_evolution_records_state_changes():
+def test_evolution_records_state_changes(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -966,7 +965,7 @@ def test_evolution_records_state_changes():
 # 25. Cancellation reason recorded
 # ===================================================================
 
-def test_cancellation_reason_recorded():
+def test_cancellation_reason_recorded(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [("A", 1), ("B", 2, ["A"])])
@@ -986,7 +985,7 @@ def test_cancellation_reason_recorded():
 # 26. Independent graph dogfood
 # ===================================================================
 
-def test_dogfood_independent_graph():
+def test_dogfood_independent_graph(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 4)
     sched = _schedule("g1", [("A", 1), ("B", 1), ("C", 1), ("D", 1)])
@@ -994,7 +993,7 @@ def test_dogfood_independent_graph():
     assert rep.succeeded == 4 and rep.wave_count == 1
 
 
-def test_dogfood_chain():
+def test_dogfood_chain(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [("A", 1), ("B", 2, ["A"]), ("C", 3, ["B"])])
@@ -1002,7 +1001,7 @@ def test_dogfood_chain():
     assert rep.succeeded == 3
 
 
-def test_dogfood_diamond():
+def test_dogfood_diamond(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 4)
     sched = _schedule("g1", [
@@ -1011,7 +1010,7 @@ def test_dogfood_diamond():
     assert rep.succeeded == 4 and rep.wave_count == 3
 
 
-def test_dogfood_parallel_graph():
+def test_dogfood_parallel_graph(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [("A", 1), ("B", 1), ("C", 2, ["A", "B"])])
@@ -1019,7 +1018,7 @@ def test_dogfood_parallel_graph():
     assert rep.succeeded == 3
 
 
-def test_dogfood_mixed_priority_runs_all():
+def test_dogfood_mixed_priority_runs_all(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 5)
     sched = _schedule("g1", [
@@ -1029,7 +1028,7 @@ def test_dogfood_mixed_priority_runs_all():
     assert rep.succeeded == 5
 
 
-def test_dogfood_worker_failure_blocks_descendants():
+def test_dogfood_worker_failure_blocks_descendants(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 3)
     sched = _schedule("g1", [("A", 1), ("B", 2, ["A"]), ("C", 3, ["B"])])
@@ -1043,7 +1042,7 @@ def test_dogfood_worker_failure_blocks_descendants():
     assert states == {"A": "failed", "B": "cancelled", "C": "cancelled"}
 
 
-def test_dogfood_blocked_at_schedule_time():
+def test_dogfood_blocked_at_schedule_time(tmp_path):
     # A task the Scheduler already BLOCKED (no worker) is cancelled, not run.
     conn = _db()
     _seed_graph(conn, "g1", 2)
@@ -1061,7 +1060,7 @@ def test_dogfood_blocked_at_schedule_time():
 # 27. Concurrency safety (no DB corruption under threads)
 # ===================================================================
 
-def test_concurrent_sessions_safe():
+def test_concurrent_sessions_safe(tmp_path):
     # Each session uses its OWN connection to a shared DB file (the realistic
     # multi-process scenario). The Runtime never shares one connection across
     # threads; this verifies no corruption when sessions run concurrently.
@@ -1095,7 +1094,7 @@ def test_concurrent_sessions_safe():
 # 28. Export / round-trip via DB helpers
 # ===================================================================
 
-def test_runtime_tasks_query_round_trip():
+def test_runtime_tasks_query_round_trip(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [("A", 1), ("B", 1)])
@@ -1106,7 +1105,7 @@ def test_runtime_tasks_query_round_trip():
     assert all(r["status"] == "success" for r in rows)
 
 
-def test_runtime_results_query_round_trip():
+def test_runtime_results_query_round_trip(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -1116,7 +1115,7 @@ def test_runtime_results_query_round_trip():
     assert len(rows) == 1 and rows[0]["success"] == 1
 
 
-def test_cli_runtime_session_lists():
+def test_cli_runtime_session_lists(tmp_path):
     """Smoke: friday.runtime CLI helpers import and list sessions."""
     from friday.cli_runtime import cmd_runtime_session
     import argparse
@@ -1139,16 +1138,16 @@ def test_cli_runtime_session_lists():
 # 29. State machine exhaustiveness
 # ===================================================================
 
-def test_all_run_states_defined():
+def test_all_run_states_defined(tmp_path):
     assert {s.value for s in RunState} == {
         "pending", "running", "success", "failed", "cancelled"}
 
 
-def test_session_states_defined():
+def test_session_states_defined(tmp_path):
     assert {s.value for s in SessionState} == {"created", "running", "finished"}
 
 
-def test_terminal_states():
+def test_terminal_states(tmp_path):
     assert RunState.SUCCESS.terminal
     assert RunState.FAILED.terminal
     assert RunState.CANCELLED.terminal
@@ -1160,7 +1159,7 @@ def test_terminal_states():
 # 30. ExecutionReport artifacts / workers collecting
 # ===================================================================
 
-def test_report_collects_workers_used():
+def test_report_collects_workers_used(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 2)
     sched = _schedule("g1", [
@@ -1171,7 +1170,7 @@ def test_report_collects_workers_used():
     assert set(rep.workers_used) == {"worker:w1", "worker:w2"}
 
 
-def test_report_duration_nonnegative():
+def test_report_duration_nonnegative(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
@@ -1183,7 +1182,7 @@ def test_report_duration_nonnegative():
 # 31. No execution when schedule empty
 # ===================================================================
 
-def test_empty_schedule_no_tasks():
+def test_empty_schedule_no_tasks(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 0)
     sched = _schedule("g1", [], task_count=0)
@@ -1196,7 +1195,7 @@ def test_empty_schedule_no_tasks():
 # 32. Scheduler BLOCKED upstream flow (integration w/ resolver absent)
 # ===================================================================
 
-def test_blocked_task_never_executed_even_if_worker_exists():
+def test_blocked_task_never_executed_even_if_worker_exists(tmp_path):
     # A task marked BLOCKED but a worker IS registered for it: Runtime still
     # cancels it, because it respects the Scheduler's decision (no reassignment).
     conn = _db()
@@ -1214,7 +1213,7 @@ def test_blocked_task_never_executed_even_if_worker_exists():
 # 33. Persistence idempotency of single task re-run
 # ===================================================================
 
-def test_rerun_creates_new_session_not_duplicate():
+def test_rerun_creates_new_session_not_duplicate(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])

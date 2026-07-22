@@ -1,10 +1,5 @@
 """Planning derivation (Milestone 9.0).
 
-Deterministic planning stages. The engine NEVER touches observations, context,
-git, READMEs, or repositories; it reads only Insights, Initiatives,
-Understanding, and Knowledge (passed in by the engine). It NEVER executes,
-edits files, or calls workers. It NEVER uses an LLM.
-
 Stages (every one explainable, every one evidence-backed):
 
   1. Understand objective    -> classify PlanType from goal keywords
@@ -12,7 +7,7 @@ Stages (every one explainable, every one evidence-backed):
   3. Locate insights          -> match goal to live insight titles/types
   4. Locate understanding     -> match goal to understanding subjects/types
   5. Locate knowledge         -> match goal to knowledge subjects/types
-  6. Milestones               -> template per plan_type, evidence-tagged
+  6. Milestones               -> LLM-backed → trivial pattern → template fallback
   7. Dependencies             -> technical/initiative/knowledge/understanding
   8. Risks                    -> from insights + understanding + knowledge evo
   9. Verification             -> mandatory, method-typed, evidence-tagged
@@ -20,12 +15,16 @@ Stages (every one explainable, every one evidence-backed):
 
 The output is a STRUCTURED Plan object. Text rendering happens in models only.
 
-All matching is deterministic keyword/type overlap. No embeddings, no vectors,
-no neural scoring.
+Phase 1 change: milestones now use a fallback chain. When an LLM is configured,
+it generates the milestone list from the goal + evidence. If that fails (or no
+LLM), trivial regex-based patterns handle single-step goals. If neither matches,
+the existing template fallback is used.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -245,7 +244,148 @@ def _match_knowledge(ev: Evidence, goal: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# 6. Milestones — template per plan_type, evidence-tagged.
+# 6a. Milestones — trivial pattern detection (deterministic fallback).
+# ---------------------------------------------------------------------------
+
+# "create a/the file named X containing Y" / "write a/the file X with content Y"
+_CREATE_FILE = re.compile(
+    r"(?:create|write|make)\s+(?:a\s+|the\s+)?(?:file\s+)?"
+    r"(?:named|called|--file)?\s*(\S+?\.\w+)\s+"
+    r"(?:containing|with\s+(?:the\s+)?(?:text|content)?)\s*"
+    r"(?:'|\"|the\s+text\s+|the\s+content\s+)?"
+    r"(.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+# "run <command>" / "execute <command>"
+_RUN_COMMAND = re.compile(
+    r"\b(?:run|execute)\s+(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _trivial_milestones(goal: str) -> Optional[List[dict]]:
+    """Return milestones for a trivial single-step goal, or None.
+
+    Recognises file-creation and command-execution goals. Each milestone
+    carries extra fields (``task_type``, ``symbolic``, ``acceptance_criteria``)
+    the compiler propagates into the task so the executor can act.
+    """
+    g = goal.strip()
+    m = _CREATE_FILE.search(g)
+    if m:
+        filename = m.group(1).strip()
+        content = m.group(2).strip().strip("'\"")
+        return [{
+            "order": 1,
+            "title": f"Create {filename}",
+            "detail": f"Create file {filename} with specified content.",
+            "evidence": "goal",
+            "task_type": "implementation",
+            "symbolic": {
+                "op": "create_file",
+                "path": filename,
+                "content": content,
+                "goal": g,
+            },
+            "acceptance_criteria": [
+                f"File {filename} exists",
+                f"File {filename} contains the expected content",
+            ],
+        }]
+    m = _RUN_COMMAND.search(g)
+    if m:
+        cmd = m.group(1).strip()
+        return [{
+            "order": 1,
+            "title": f"Run: {cmd}",
+            "detail": f"Execute shell command: {cmd}",
+            "evidence": "goal",
+            "task_type": "configuration",
+            "symbolic": {"op": "run_command", "command": cmd, "goal": g},
+            "acceptance_criteria": [f"Command '{cmd}' executed successfully"],
+        }]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 6b. LLM-backed milestone generation.
+# ---------------------------------------------------------------------------
+
+def _llm_milestones(goal: str, ev: Evidence) -> Optional[List[dict]]:
+    """Ask the LLM to generate milestones for this goal + evidence.
+
+    Returns a list of milestone dicts, or None if the LLM is unavailable /
+    the response cannot be parsed. Each milestone optionally carries
+    ``task_type`` / ``symbolic`` / ``acceptance_criteria`` that the compiler
+    propagates into the downstream task.
+    """
+    try:
+        from ..services.llm import plan_goal
+    except Exception:
+        return None
+
+    # Build a compact evidence summary.
+    evidence_parts = []
+    for i in ev.initiatives:
+        evidence_parts.append(f"Initiative[{i.id}]: {i.title} — {i.statement}")
+    for ins in ev.insights:
+        evidence_parts.append(f"Insight[{ins.id}]: {ins.title} — {ins.statement}")
+    for u in ev.understanding:
+        evidence_parts.append(f"Understanding[{u.id}]: {u.subject} — {u.statement}")
+    for k in ev.knowledge:
+        evidence_parts.append(f"Knowledge[{k.id}]: {k.subject} — {k.statement}")
+
+    # Extract project-stack knowledge explicitly — the LLM needs to know
+    # this repo's language so it generates matching code.
+    _langs = set()
+    for k in ev.knowledge:
+        ktype = getattr(k, "type", None)
+        ktype_str = ktype.value if hasattr(ktype, "value") else str(ktype or "")
+        if "stack" in ktype_str.lower():
+            _langs.add(k.statement[:200])
+    if _langs:
+        evidence_parts.append(f"Project stack context: {'; '.join(sorted(_langs))}")
+
+    evidence_summary = "\n".join(evidence_parts[:15])  # keep it compact
+
+    raw = plan_goal(goal, evidence_summary)
+    if not raw:
+        return None
+    # Strip markdown code fences some models wrap JSON in.
+    text = raw.strip()
+    if text.startswith("```"):
+        idx = text.find("\n")
+        if idx != -1:
+            text = text[idx:].strip()
+    if text.endswith("```"):
+        text = text[:-3].strip()
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    tasks = data if isinstance(data, list) else data.get("tasks", [])
+    if not tasks:
+        return None
+    milestones = []
+    for i, t in enumerate(tasks, start=1):
+        sym = t.get("symbolic", {}) or {}
+        ac = t.get("acceptance_criteria") or []
+        tt = t.get("task_type", "implementation")
+        milestones.append({
+            "order": i,
+            "title": t.get("title", f"Task {i}"),
+            "detail": sym.get("goal", t.get("title", "")),
+            "evidence": "goal",
+            "task_type": tt,
+            "symbolic": sym,
+            "acceptance_criteria": ac if isinstance(ac, list) else [str(ac)],
+            "parallel_next": bool(t.get("parallel_next", False)),
+        })
+    return milestones
+
+
+# ---------------------------------------------------------------------------
+# 6c. Milestones — template per plan_type, evidence-tagged.
 # ---------------------------------------------------------------------------
 
 def _milestones(ptype: PlanType, ev: Evidence, init_ids, ins_ids, u_ids, k_ids) -> List[dict]:
@@ -500,11 +640,31 @@ def _effort(ptype: PlanType, n_milestones: int) -> str:
 # Orchestrator: build the STRUCTURED Plan object (no prose yet).
 # ---------------------------------------------------------------------------
 
-def plan(goal: str, ev: Evidence) -> Plan:
-    """Run all 10 deterministic stages and return a STRUCTURED Plan.
+def _generate_milestones(goal: str, ptype: PlanType, ev: Evidence,
+                          init_ids, ins_ids, u_ids, k_ids) -> List[dict]:
+    """Fallback chain: LLM → trivial → template.
 
-    The returned object is the source of truth. Callers render it to text via
-    Plan.render_text() only at the end (or not at all, for workers)."""
+    1. Try the LLM (when configured). Returns structured milestones with
+       task_type/symbolic/acceptance_criteria for real tasks.
+    2. Trivial pattern detection — "create file X with content Y" etc.
+    3. Template fallback — the original deterministic template per PlanType.
+    """
+    llm_ms = _llm_milestones(goal, ev)
+    if llm_ms is not None:
+        return llm_ms
+    trivial = _trivial_milestones(goal)
+    if trivial is not None:
+        return trivial
+    return _milestones(ptype, ev, init_ids, ins_ids, u_ids, k_ids)
+
+
+def plan(goal: str, ev: Evidence) -> Plan:
+    """Run all planning stages and return a STRUCTURED Plan.
+
+    Milestones now use a fallback chain (LLM → trivial → template) so
+    single-step goals produce exactly one task, and open-ended goals get
+    LLM decomposition when available. The returned object is the source of
+    truth. Callers render it to text via Plan.render_text() only at the end."""
     ptype = _classify(goal)
 
     init_ids = _match_initiatives(ev, goal)
@@ -517,7 +677,8 @@ def plan(goal: str, ev: Evidence) -> Plan:
         if i.id in init_ids:
             repos.update(getattr(i, "participating_repositories", []) or [])
 
-    milestones = _milestones(ptype, ev, init_ids, ins_ids, u_ids, k_ids)
+    milestones = _generate_milestones(goal, ptype, ev,
+                                       init_ids, ins_ids, u_ids, k_ids)
     dependencies = _dependencies(ev, init_ids, k_ids, u_ids, repos)
     risks = _risks(ev, ins_ids, u_ids, k_ids)
     verification = _verification(ptype, ev, k_ids)

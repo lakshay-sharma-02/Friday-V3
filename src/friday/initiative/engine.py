@@ -107,8 +107,16 @@ class InitiativeEngine:
         candidates = detect(understanding, knowledge, evo_events)
         merged = self._merge_candidates(candidates)
 
+        # Build evidence dicts for statement synthesis.
+        u_by = {u.id: u for u in understanding if u.id}
+        k_by = {k.id: k for k in knowledge if k.id}
+
+        # First: merge any existing duplicate-title initiatives so each title
+        # appears at most once when we look up prev.
+        self._merge_existing_duplicates(build_at)
+
         existing_rows = [Initiative.from_row(r) for r in get_all_initiatives(self.conn)]
-        existing_by_key = {(i.type, i.title): i for i in existing_rows}
+        existing_by_key = {i.title: i for i in existing_rows}
 
         created = updated = 0
         to_persist: List[Initiative] = []
@@ -125,14 +133,19 @@ class InitiativeEngine:
             status = status_from_confidence(conf, len(uids) + len(kids))
             repos = sorted(set(cand.repos))
 
-            key = (cand.type, cand.title)
-            prev = existing_by_key.get(key)
+            # Synthesize statement from actual evidence every build,
+            # never use template filler from Candidate or stale prev.
+            statement = self._synthesize_statement(
+                cand.title, cand.type, uids, kids, u_by, k_by, repos,
+            )
+
+            prev = existing_by_key.get(cand.title)
 
             if prev is None:
                 i = Initiative(
                     type=cand.type,
                     title=cand.title,
-                    statement=cand.statement,
+                    statement=statement,
                     status=status,
                     confidence=conf,
                     participating_repositories=repos,
@@ -152,7 +165,7 @@ class InitiativeEngine:
                 i = Initiative(
                     type=cand.type,
                     title=cand.title,
-                    statement=prev.statement or cand.statement,
+                    statement=statement,
                     status=preserved if preserved is not None else status,
                     confidence=conf,
                     participating_repositories=sorted(set(
@@ -168,6 +181,11 @@ class InitiativeEngine:
                 )
                 updated += 1
             to_persist.append(i)
+
+        # Also backfill stale existing rows not touched by this build.
+        backfilled = self._backfill_existing_statements(u_by, k_by)
+        if backfilled > 0:
+            updated += backfilled
 
         # Whole build is one atomic transaction (Part F).
         with atomic(self.conn):
@@ -313,23 +331,42 @@ class InitiativeEngine:
         from ..db import evolution_events_all
         return evolution_events_all(self.conn)
 
-    def _merge_candidates(self, candidates: List[Candidate]) -> Dict[tuple, Candidate]:
-        out: Dict[tuple, Candidate] = {}
+    def _merge_candidates(self, candidates: List[Candidate]) -> Dict[str, Candidate]:
+        """Merge candidates with the SAME title, resolving type by majority vote.
+
+        Dedup key is the title alone (not (type, title)), so "Python Engineering
+        Initiative" from two different understanding types collapses into one.
+        Type resolution: majority vote; alphabetical tiebreak for determinism.
+        """
+        # First pass: count type occurrences per title.
+        type_counts: Dict[str, Dict[InitiativeType, int]] = {}
         for c in candidates:
-            key = c.key()
-            if key in out:
-                prev = out[key]
+            tc = type_counts.setdefault(c.title, {})
+            tc[c.type] = tc.get(c.type, 0) + 1
+
+        out: Dict[str, Candidate] = {}
+        for c in candidates:
+            resolved_type = max(
+                type_counts[c.title],
+                key=lambda t: (type_counts[c.title][t], t.value),
+            )
+            prev = out.get(c.title)
+            if prev is not None:
                 merged_ids = list(dict.fromkeys(prev.understanding_ids + c.understanding_ids))
                 merged_k = list(dict.fromkeys(prev.knowledge_ids + c.knowledge_ids))
                 merged_r = sorted(set(prev.repos + c.repos))
-                out[key] = Candidate(
-                    type=c.type, title=c.title,
+                out[c.title] = Candidate(
+                    type=resolved_type, title=c.title,
                     statement=prev.statement if len(prev.statement) >= len(c.statement)
                     else c.statement,
                     understanding_ids=merged_ids, knowledge_ids=merged_k, repos=merged_r,
                 )
             else:
-                out[key] = c
+                out[c.title] = Candidate(
+                    type=resolved_type, title=c.title,
+                    statement=c.statement, understanding_ids=c.understanding_ids,
+                    knowledge_ids=c.knowledge_ids, repos=c.repos,
+                )
         return out
 
     def _contributors_for(
@@ -374,6 +411,250 @@ class InitiativeEngine:
             understanding_ids=i.understanding_ids, knowledge_ids=i.knowledge_ids)
         return self._contributors_for(cand, list(understanding.values()),
                                  list(knowledge.values()))
+
+    def _merge_existing_duplicates(self, build_at: str) -> int:
+        """Merge existing initiatives with the same title but different types.
+
+        Type resolved by majority vote; alphabetical tiebreak for determinism.
+        Updates pending_initiatives to point to the survivor id.
+        Returns count of duplicate rows merged.
+        """
+        all_rows = get_all_initiatives(self.conn)
+        initiatives = [Initiative.from_row(r) for r in all_rows]
+
+        by_title: Dict[str, List[Initiative]] = {}
+        for i in initiatives:
+            by_title.setdefault(i.title, []).append(i)
+
+        merged = 0
+        for title, group in by_title.items():
+            if len(group) < 2:
+                continue
+
+            # Majority vote on type.
+            type_votes: Dict[InitiativeType, int] = {}
+            for i in group:
+                type_votes[i.type] = type_votes.get(i.type, 0) + 1
+            winning_type = max(type_votes, key=lambda t: (type_votes[t], t.value))
+
+            # Merge data from all duplicates.
+            all_uids = list(dict.fromkeys(
+                sum((i.understanding_ids for i in group), [])))
+            all_kids = list(dict.fromkeys(
+                sum((i.knowledge_ids for i in group), [])))
+            all_repos = sorted(set(
+                sum((i.participating_repositories for i in group), [])))
+            best_conf = max(
+                (i.confidence for i in group),
+                key=lambda c: {"weak": 0, "medium": 1, "strong": 2}[c],
+            )
+            best_status = max(
+                (i.status for i in group),
+                key=lambda s: self._status_rank(s),
+            )
+            earliest = min(i.created_at for i in group)
+            latest = max(i.updated_at for i in group)
+            # Prefer the statement that is NOT template filler ("long-running" is
+            # the old template marker). Fall back to longest if all are templates.
+            candidates_stmts = [s for s in (i.statement for i in group)
+                                if "long-running" not in s]
+            best_statement = max(candidates_stmts or
+                                 (i.statement for i in group), key=len)
+
+            survivor_id = f"{winning_type.value}:{title}"
+            survivor = next((i for i in group if i.id == survivor_id), None)
+
+            if survivor is None:
+                # Create new survivor row.
+                surv = Initiative(
+                    id=survivor_id,
+                    type=winning_type,
+                    title=title,
+                    statement=best_statement,
+                    status=best_status,
+                    confidence=best_conf,
+                    participating_repositories=all_repos,
+                    understanding_ids=all_uids,
+                    knowledge_ids=all_kids,
+                    build_at=build_at,
+                    started_at=earliest if best_status != InitiativeStatus.CANDIDATE else None,
+                    created_at=earliest,
+                    updated_at=latest,
+                )
+                insert_initiative(self.conn, [surv.to_row()])
+
+            # Delete duplicates and redirect pending references.
+            for i in group:
+                if i.id != survivor_id and i.id is not None:
+                    self.conn.execute(
+                        "DELETE FROM initiatives WHERE id=?", (i.id,))
+                    self.conn.execute(
+                        "UPDATE pending_initiatives SET id=? WHERE id=?",
+                        (survivor_id, i.id))
+                    merged += 1
+
+        self.conn.commit()
+        return merged
+
+    def _backfill_existing_statements(self, u_by: dict, k_by: dict) -> int:
+        """Regenerate statements for all existing initiatives.
+
+        Replaces template filler with evidence-grounded synthesis.
+        Returns count of rows updated.
+        """
+        all_rows = get_all_initiatives(self.conn)
+        count = 0
+        for r in all_rows:
+            i = Initiative.from_row(r)
+            uids = [uid for uid in i.understanding_ids if uid in u_by]
+            kids = [kid for kid in i.knowledge_ids if kid in k_by]
+            if not uids and not kids:
+                continue
+            new_statement = self._synthesize_statement(
+                i.title, i.type, uids, kids, u_by, k_by,
+                i.participating_repositories,
+            )
+            if new_statement != i.statement:
+                self.conn.execute(
+                    "UPDATE initiatives SET statement=?, updated_at=? WHERE id=?",
+                    (new_statement, now_iso(), i.id))
+                count += 1
+        if count:
+            self.conn.commit()
+        return count
+
+    def _synthesize_statement(
+        self, title: str, itype, uids: List[str], kids: List[str],
+        u_by: dict, k_by: dict, repos: List[str]
+    ) -> str:
+        """Synthesize a meaningful statement from actual evidence.
+
+        Replaces template filler with evidence-grounded synthesis.
+        For global detectors (platform, infrastructure), statements are already
+        meaningful. For per-understanding detectors, we synthesize from the
+        actual understanding/knowledge statements.
+
+        NOTE: keep in sync with the standalone _synthesize_initiative_statement
+        in cli_watch.py (same logic, different layer to avoid circular imports).
+        """
+        # Collect actual statements from evidence
+        statements = []
+        for uid in uids:
+            u = u_by.get(uid)
+            if u and hasattr(u, "statement") and u.statement:
+                statements.append(u.statement)
+        for kid in kids:
+            k = k_by.get(kid)
+            if k and hasattr(k, "statement") and k.statement:
+                statements.append(k.statement)
+
+        if not statements:
+            # Fallback to template if no evidence statements
+            return f"{title}: a {itype.value} effort indicated by {len(uids)} understanding(s) and {len(kids)} knowledge."
+
+        # Deduplicate and limit to most distinctive statements
+        unique = list(dict.fromkeys(statements))
+
+        # For small evidence sets (≤5 statements), join raw evidence directly.
+        # Concept extraction is a lossy compression that strips the subject (tech
+        # name) from each statement, making all maintenance-type initiatives with
+        # identical understanding structures produce identical concept output regardless
+        # of their different evidence content.
+        if len(unique) <= 5:
+            cleaned = [s.strip().rstrip(". ") for s in unique]
+            stmt = ", ".join(cleaned)
+            return f"{title}: {stmt}"
+
+        # Synthesize a meaningful statement from the evidence
+        # Strategy: extract key concepts from the statements and form a coherent summary
+        concepts = self._extract_concepts(unique)
+
+        if len(concepts) == 0:
+            # Fallback to joining statements (cleaned)
+            cleaned = [s.strip().rstrip(". ") for s in unique[:3]]
+            stmt = " and ".join(cleaned)
+        elif len(concepts) == 1:
+            stmt = concepts[0]
+        else:
+            # Form a compound statement
+            if len(concepts) <= 3:
+                stmt = " and ".join(concepts)
+            else:
+                stmt = ", ".join(concepts[:3]) + f" (and {len(concepts)-3} more aspects)"
+
+        # Always prepend title - evidence-grounded statements should start with it
+        return f"{title}: {stmt}"
+
+    def _extract_concepts(self, statements: List[str]) -> List[str]:
+        """Extract key concepts from statements for synthesis."""
+        concepts = []
+        seen = set()
+
+        concept_keywords = [
+            ("architecture", "architectural evolution"),
+            ("stabilizing", "stabilizing architecture"),
+            ("purpose", "purpose evolution"),
+            ("fit", "integration fit"),
+            ("integrate", "integration opportunity"),
+            ("platform", "platform convergence"),
+            ("frontend", "frontend experience"),
+            ("authentication", "authentication infrastructure"),
+            ("auth", "authentication infrastructure"),
+            ("session", "session management"),
+            ("jwt", "JWT handling"),
+            ("credential", "credential management"),
+            ("oauth", "OAuth integration"),
+            ("router", "AI routing"),
+            ("llm", "LLM integration"),
+            ("agent", "agent coordination"),
+            ("knowledge", "knowledge evolution"),
+            ("memory", "memory systems"),
+            ("rust", "systems infrastructure"),
+            ("kernel", "kernel development"),
+            ("filesystem", "filesystem operations"),
+            ("runtime", "runtime optimization"),
+            ("compiler", "compiler development"),
+            ("migration", "technology migration"),
+            ("documentation", "documentation"),
+            ("test", "test coverage"),
+            ("ci/cd", "CI/CD pipeline"),
+            ("docker", "container deployment"),
+            ("database", "data layer"),
+            ("api", "API design"),
+            ("backend", "backend services"),
+            ("project", "project evolution"),
+            ("project convergence", "project convergence"),
+            ("project divergence", "project divergence"),
+            ("weakness", "emerging weakness"),
+            ("direction", "technology direction"),
+            ("engineering identity", "engineering identity"),
+            ("converging", "converging efforts"),
+            ("diverging", "diverging direction"),
+            ("recurring", "recurring patterns"),
+            ("blind spot", "blind spot detected"),
+            ("risk", "engineering risk"),
+        ]
+
+        for stmt in statements:
+            stmt_lower = stmt.lower()
+            found = False
+            for keyword, concept in concept_keywords:
+                if keyword in stmt_lower and concept not in seen:
+                    concepts.append(concept)
+                    seen.add(concept)
+                    found = True
+                    break
+            if not found:
+                cleaned = stmt.strip().rstrip(". ")
+                for prefix in ["a ", "the ", "an "]:
+                    if cleaned.lower().startswith(prefix):
+                        cleaned = cleaned[len(prefix):]
+                words = cleaned.split()
+                if len(words) >= 3 and cleaned not in seen:
+                    concepts.append(cleaned)
+                    seen.add(cleaned)
+
+        return concepts
 
     def _record_evolution(
         self, build_at: str, to_persist: List[Initiative],

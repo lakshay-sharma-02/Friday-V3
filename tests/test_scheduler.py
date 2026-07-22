@@ -58,7 +58,7 @@ from friday.worker.models import Worker, WorkerKind
 def _db(tmp_path: Path | None = None) -> sqlite3.Connection:
     import tempfile
     if tmp_path is None:
-        tmp_path = Path(tempfile.mkdtemp())
+        tmp_path = tmp_path
     return connect(tmp_path / "scheduler_test.db")
 
 
@@ -159,7 +159,7 @@ def _resolve(conn, graph_id):
 # 1. Topological ordering
 # ===================================================================
 
-def test_topological_chain_order():
+def test_topological_chain_order(tmp_path):
     """A->B->C produces waves 1,2,3."""
     conn = _db()
     _register_builtins(conn)
@@ -174,7 +174,7 @@ def test_topological_chain_order():
     conn.close()
 
 
-def test_topological_respects_edges():
+def test_topological_respects_edges(tmp_path):
     """C depends on A and B; C is in a later wave than both."""
     conn = _db()
     _register_builtins(conn)
@@ -193,7 +193,7 @@ def test_topological_respects_edges():
 # 2. Cycle detection
 # ===================================================================
 
-def test_cycle_detected_rejects():
+def test_cycle_detected_rejects(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -206,7 +206,7 @@ def test_cycle_detected_rejects():
     conn.close()
 
 
-def test_cycle_reported_path():
+def test_cycle_reported_path(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -221,14 +221,14 @@ def test_cycle_reported_path():
     conn.close()
 
 
-def test_detect_cycle_pure():
+def test_detect_cycle_pure(tmp_path):
     assert detect_cycle(["A", "B", "C"],
                         [{"from": "A", "to": "B"}, {"from": "B", "to": "C"}]) is None
     cyc = detect_cycle(["A", "B"], [{"from": "A", "to": "B"}, {"from": "B", "to": "A"}])
     assert cyc is not None
 
 
-def test_detect_cycle_self_loop():
+def test_detect_cycle_self_loop(tmp_path):
     cyc = detect_cycle(["A"], [{"from": "A", "to": "A"}])
     assert cyc is not None
 
@@ -237,7 +237,7 @@ def test_detect_cycle_self_loop():
 # 3. Diamond graph
 # ===================================================================
 
-def test_diamond_graph_waves():
+def test_diamond_graph_waves(tmp_path):
     """A / B C / D  -> waves 1, 2 (B,C), 3."""
     conn = _db()
     _register_builtins(conn)
@@ -254,7 +254,7 @@ def test_diamond_graph_waves():
     conn.close()
 
 
-def test_diamond_parallel_mid_wave():
+def test_diamond_parallel_mid_wave(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -273,7 +273,7 @@ def test_diamond_parallel_mid_wave():
 # 4. Independent graph
 # ===================================================================
 
-def test_independent_tasks_same_wave():
+def test_independent_tasks_same_wave(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -291,7 +291,7 @@ def test_independent_tasks_same_wave():
 # 5. Parallel waves
 # ===================================================================
 
-def test_parallel_waves_count():
+def test_parallel_waves_count(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -311,7 +311,7 @@ def test_parallel_waves_count():
 # 6. Worker conflict serialization
 # ===================================================================
 
-def test_worker_conflict_serialized():
+def test_worker_conflict_serialized(tmp_path):
     """Same worker on two wave-mates: serialized via estimated_start order."""
     conn = _db()
     reg = _register_builtins(conn)
@@ -333,7 +333,7 @@ def test_worker_conflict_serialized():
     conn.close()
 
 
-def test_worker_conflict_order_by_task_id():
+def test_worker_conflict_order_by_task_id(tmp_path):
     conn = _db()
     reg = _register_builtins(conn)
     w = _make_worker("Solo", ["Rust"], task_types=["implementation"],
@@ -353,7 +353,7 @@ def test_worker_conflict_order_by_task_id():
 # 7. Critical path
 # ===================================================================
 
-def test_critical_path_recorded():
+def test_critical_path_recorded(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -369,7 +369,7 @@ def test_critical_path_recorded():
     conn.close()
 
 
-def test_critical_path_priority_bonus():
+def test_critical_path_priority_bonus(tmp_path):
     """Tasks on the critical path get a higher priority."""
     conn = _db()
     _register_builtins(conn)
@@ -389,7 +389,7 @@ def test_critical_path_priority_bonus():
 # 8. Dependency depth
 # ===================================================================
 
-def test_dependency_depth_priority():
+def test_dependency_depth_priority(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -410,7 +410,7 @@ def test_dependency_depth_priority():
 # 9. Priority ordering
 # ===================================================================
 
-def test_priority_order_in_timeline():
+def test_priority_order_in_timeline(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -429,12 +429,12 @@ def test_priority_order_in_timeline():
     conn.close()
 
 
-def test_priority_explicit_band():
+def test_priority_explicit_band(tmp_path):
     assert compute_priority("x", {}, [], "critical") > \
         compute_priority("x", {}, [], "low")
 
 
-def test_priority_tie_break_task_id():
+def test_priority_tie_break_task_id(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -450,7 +450,7 @@ def test_priority_tie_break_task_id():
 # 10. Blocked tasks
 # ===================================================================
 
-def test_blocked_missing_assignment():
+def test_blocked_missing_assignment(tmp_path):
     """A task with no resolver assignment -> schedule rejected."""
     conn = _db()
     _register_builtins(conn)
@@ -466,7 +466,7 @@ def test_blocked_missing_assignment():
     conn.close()
 
 
-def test_blocked_disabled_worker():
+def test_blocked_disabled_worker(tmp_path):
     """Assigned worker disabled -> task BLOCKED (never auto-reassigned)."""
     conn = _db()
     reg = _register_builtins(conn)
@@ -485,7 +485,7 @@ def test_blocked_disabled_worker():
     conn.close()
 
 
-def test_not_ready_with_predecessors():
+def test_not_ready_with_predecessors(tmp_path):
     """A task with dependencies starts NOT_READY (predecessors incomplete)."""
     conn = _db()
     _register_builtins(conn)
@@ -500,7 +500,7 @@ def test_not_ready_with_predecessors():
     conn.close()
 
 
-def test_compute_initial_state_rules():
+def test_compute_initial_state_rules(tmp_path):
     class Fake: pass
     t = Fake(); t.dependencies = []
     s, r = compute_initial_state(t, "worker:x", "assigned", {"worker:x"})
@@ -518,7 +518,7 @@ def test_compute_initial_state_rules():
 # 11. Missing assignments
 # ===================================================================
 
-def test_missing_assignment_reports_all():
+def test_missing_assignment_reports_all(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -538,7 +538,7 @@ def test_missing_assignment_reports_all():
 # 12. Stable output
 # ===================================================================
 
-def test_stable_output():
+def test_stable_output(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -557,7 +557,7 @@ def test_stable_output():
     conn.close()
 
 
-def test_idempotent_re_schedule():
+def test_idempotent_re_schedule(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -575,7 +575,7 @@ def test_idempotent_re_schedule():
 # 13. Append-only history
 # ===================================================================
 
-def test_history_append_only():
+def test_history_append_only(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1", [{"id": "A", "req": "python"}])
@@ -589,7 +589,7 @@ def test_history_append_only():
     conn.close()
 
 
-def test_evolution_on_reblock():
+def test_evolution_on_reblock(tmp_path):
     conn = _db()
     reg = _register_builtins(conn)
     _seed_graph(conn, "g1", [{"id": "A", "req": "python"}])
@@ -608,11 +608,11 @@ def test_evolution_on_reblock():
 # 14. Schema version
 # ===================================================================
 
-def test_schema_version():
+def test_schema_version(tmp_path):
     assert SCHEMA_VERSION == "1.0"
 
 
-def test_scheduled_task_schema_version():
+def test_scheduled_task_schema_version(tmp_path):
     t = ScheduledTask(
         schedule_id="g1:A", graph_id="g1", assignment_id="g1:A",
         task_id="A", worker_id="worker:x", phase="wave-1", wave=1,
@@ -625,7 +625,7 @@ def test_scheduled_task_schema_version():
 # 15. Round-trip serialization
 # ===================================================================
 
-def test_scheduled_task_round_trip():
+def test_scheduled_task_round_trip(tmp_path):
     t = ScheduledTask(
         schedule_id="g1:A", graph_id="g1", assignment_id="g1:A",
         task_id="A", worker_id="worker:x", phase="wave-1", wave=1,
@@ -641,7 +641,7 @@ def test_scheduled_task_round_trip():
     assert row["wave"] == 1
 
 
-def test_execution_schedule_to_dict():
+def test_execution_schedule_to_dict(tmp_path):
     t = ScheduledTask(
         schedule_id="g1:A", graph_id="g1", assignment_id="g1:A",
         task_id="A", worker_id="worker:x", phase="wave-1", wave=1,
@@ -656,7 +656,7 @@ def test_execution_schedule_to_dict():
     assert d["tasks"][0]["task_id"] == "A"
 
 
-def test_execution_schedule_waves():
+def test_execution_schedule_waves(tmp_path):
     ts = [
         ScheduledTask(schedule_id=f"g:{i}", graph_id="g", assignment_id=f"g:{i}",
                       task_id=f"t{i}", worker_id="w", phase="x", wave=w,
@@ -670,13 +670,13 @@ def test_execution_schedule_waves():
 # 16. Export
 # ===================================================================
 
-def test_export_json():
+def test_export_json(tmp_path):
     import io, contextlib, os, tempfile
     from friday.cli_scheduler import cmd_scheduler_export
     conn = _db()
     dbpath = conn.execute("PRAGMA database_list").fetchall()
     # Point the CLI at the same temp DB.
-    tmp = tempfile.mkdtemp()
+    tmp = str(tmp_path)
     db_file = Path(tmp) / "exp.db"
     conn.close()
     conn = connect(db_file)
@@ -696,7 +696,7 @@ def test_export_json():
     assert payload["tasks"][0]["task_id"] == "A"
 
 
-def test_export_via_tasks():
+def test_export_via_tasks(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1", [{"id": "A", "req": "python"}])
@@ -712,7 +712,7 @@ def test_export_via_tasks():
 # 17. Single task / empty graph
 # ===================================================================
 
-def test_single_task_wave_one():
+def test_single_task_wave_one(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1", [{"id": "A", "req": "python"}])
@@ -723,7 +723,7 @@ def test_single_task_wave_one():
     conn.close()
 
 
-def test_empty_graph_no_tasks():
+def test_empty_graph_no_tasks(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1", [])
@@ -733,7 +733,7 @@ def test_empty_graph_no_tasks():
     conn.close()
 
 
-def test_unknown_graph_rejected():
+def test_unknown_graph_rejected(tmp_path):
     conn = _db()
     _register_builtins(conn)
     with pytest.raises(InvalidGraphError):
@@ -741,7 +741,7 @@ def test_unknown_graph_rejected():
     conn.close()
 
 
-def test_dangling_edge_rejected():
+def test_dangling_edge_rejected(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1", [{"id": "A", "req": "python"}],
@@ -755,7 +755,7 @@ def test_dangling_edge_rejected():
 # 18. Large graph
 # ===================================================================
 
-def test_large_graph_deterministic():
+def test_large_graph_deterministic(tmp_path):
     conn = _db()
     _register_builtins(conn)
     n = 50
@@ -772,7 +772,7 @@ def test_large_graph_deterministic():
     conn.close()
 
 
-def test_large_graph_wide_parallel():
+def test_large_graph_wide_parallel(tmp_path):
     conn = _db()
     _register_builtins(conn)
     n = 40
@@ -789,7 +789,7 @@ def test_large_graph_wide_parallel():
 # 19. Timeline / priority helpers
 # ===================================================================
 
-def test_build_timeline_order():
+def test_build_timeline_order(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -806,7 +806,7 @@ def test_build_timeline_order():
     conn.close()
 
 
-def test_critical_path_status_clean():
+def test_critical_path_status_clean(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -819,14 +819,14 @@ def test_critical_path_status_clean():
     conn.close()
 
 
-def test_compute_waves_pure():
+def test_compute_waves_pure(tmp_path):
     waves = compute_waves(["A", "B", "C"],
                           [{"from": "A", "to": "B"}, {"from": "B", "to": "C"}],
                           {"A": 0, "B": 1, "C": 2})
     assert waves == {"A": 1, "B": 2, "C": 3}
 
 
-def test_max_parallelism_pure():
+def test_max_parallelism_pure(tmp_path):
     ts = [
         ScheduledTask(schedule_id=f"g:{i}", graph_id="g", assignment_id=f"g:{i}",
                       task_id=f"t{i}", worker_id="w", phase="x", wave=w,
@@ -836,7 +836,7 @@ def test_max_parallelism_pure():
     assert max_parallelism(s) == 2
 
 
-def test_serialize_worker_conflicts_pure():
+def test_serialize_worker_conflicts_pure(tmp_path):
     ts = [
         ScheduledTask(schedule_id="g:A", graph_id="g", assignment_id="g:A",
                       task_id="A", worker_id="w", phase="x", wave=1,
@@ -854,7 +854,7 @@ def test_serialize_worker_conflicts_pure():
 # 20. State machine boundaries
 # ===================================================================
 
-def test_scheduler_creates_only_initial_states():
+def test_scheduler_creates_only_initial_states(tmp_path):
     """Scheduler never initializes SCHEDULED/COMPLETE/FAILED/CANCELLED."""
     conn = _db()
     _register_builtins(conn)
@@ -869,7 +869,7 @@ def test_scheduler_creates_only_initial_states():
     conn.close()
 
 
-def test_no_execution_side_effects():
+def test_no_execution_side_effects(tmp_path):
     """Scheduler does not mutate worker status or task status in the registry."""
     conn = _db()
     reg = _register_builtins(conn)
@@ -886,7 +886,7 @@ def test_no_execution_side_effects():
 # 21. Dogfood graphs
 # ===================================================================
 
-def test_dogfood_simple_chain():
+def test_dogfood_simple_chain(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -901,7 +901,7 @@ def test_dogfood_simple_chain():
     conn.close()
 
 
-def test_dogfood_parallel_graph():
+def test_dogfood_parallel_graph(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -914,7 +914,7 @@ def test_dogfood_parallel_graph():
     conn.close()
 
 
-def test_dogfood_diamond_graph():
+def test_dogfood_diamond_graph(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -929,7 +929,7 @@ def test_dogfood_diamond_graph():
     conn.close()
 
 
-def test_dogfood_independent_graph():
+def test_dogfood_independent_graph(tmp_path):
     conn = _db()
     _register_builtins(conn)
     _seed_graph(conn, "g1",
@@ -942,7 +942,7 @@ def test_dogfood_independent_graph():
     conn.close()
 
 
-def test_dogfood_mixed_priority():
+def test_dogfood_mixed_priority(tmp_path):
     """Deep + critical-path task outranks shallow independent task."""
     conn = _db()
     _register_builtins(conn)

@@ -40,6 +40,74 @@ def _readme_text(repo: Repo):
     return path.read_text(encoding="utf-8", errors="ignore").strip()
 
 
+# ---------------------------------------------------------------------------
+# Friday self-awareness (Phase 6, Task 3 — Option C).
+#
+# Keep Friday's own repo in the workspace so it can understand itself as a
+# project (source code, Python stack, CLI architecture). But its README has
+# been trimmed to just "Document", which feeds an empty identity into the
+# portfolio/theme pipeline. We override the README summary with the project's
+# own pyproject.toml description for a meaningful self-description, while
+# still ingesting everything else (language stats, tech detection, architecture
+# analysis) normally — those are accurate for real source code.
+# ---------------------------------------------------------------------------
+
+_FRIDAY_ROOT: str = ""
+
+
+def _friday_root() -> Path:
+    """Return the resolved project root for the Friday package itself.
+
+    ingest.py lives at src/friday/ingest.py, so parents[0]=src/friday,
+    parents[1]=src, parents[2]=project root (the git repo root).
+    The project root is the directory containing pyproject.toml.
+    """
+    global _FRIDAY_ROOT
+    if not _FRIDAY_ROOT:
+        try:
+            _FRIDAY_ROOT = str(Path(__file__).resolve().parents[2])
+        except (IndexError, Exception):
+            _FRIDAY_ROOT = ""
+    return Path(_FRIDAY_ROOT) if _FRIDAY_ROOT else Path()
+
+
+def _is_friday_repo(repo: Repo) -> bool:
+    """Check if this discovered repo is Friday's own project directory."""
+    root = _friday_root()
+    if not root or not root.exists():
+        return False
+    try:
+        return repo.path.resolve() == root.resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def _friday_readme_summary(repo: Repo) -> Optional[str]:
+    """Read pyproject.toml description as a meaningful README summary for Friday.
+
+    Returns a Purpose/Maturity summary derived from the project's own metadata
+    instead of its trimmed README.md. Returns None if pyproject.toml is missing
+    or unreadable (falls through to normal README processing).
+    """
+    try:
+        pyproj_path = repo.path / "pyproject.toml"
+        if not pyproj_path.is_file():
+            return None
+        text = pyproj_path.read_text(encoding="utf-8", errors="ignore")
+        # Extract [project] description field.
+        import re as _re
+        m = _re.search(r'^description\s*=\s*["\'](.+?)["\']', text, _re.MULTILINE)
+        if not m:
+            return None
+        desc = m.group(1).strip()
+        if not desc:
+            return None
+        # Format as a minimal README summary (same format readme.py produces).
+        return f"Purpose:\n{desc}\n\nMaturity:\nActive"
+    except (OSError, IOError):
+        return None
+
+
 def ingest_paths(paths: list[Path], conn: sqlite3.Connection) -> IngestReport:
     repos: list[Repo] = discover_many(paths)
     report = IngestReport(repos_found=len(repos), repos_stored=0, llm_summaries=0)
@@ -50,7 +118,19 @@ def ingest_paths(paths: list[Path], conn: sqlite3.Connection) -> IngestReport:
         readme = process(repo)
         readme_text = _readme_text(repo)
 
-        summary_text = readme.summary if readme else None
+        # Phase 6, Option C: for Friday's own repo, use pyproject.toml's
+        # description as the README summary (the working README.md is just
+        # "Document"). Everything else — language stats, tech detection,
+        # architecture analysis — is accurate real signal and stays.
+        if _is_friday_repo(repo):
+            override = _friday_readme_summary(repo)
+            if override:
+                summary_text = override
+            else:
+                summary_text = readme.summary if readme else None
+        else:
+            summary_text = readme.summary if readme else None
+
         if readme and readme.used_llm:
             report.llm_summaries += 1
 

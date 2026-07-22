@@ -29,6 +29,17 @@ def discover(workers: List[dict]) -> DiscoveryResult:
         for r in reqs:
             is_binary = shutil.which(r) is not None
             is_env = r in os.environ
+            
+            # Capability check: claude is on PATH, but is it authenticated?
+            if is_binary and r == "claude":
+                import subprocess
+                try:
+                    p = subprocess.run([r, "auth", "status"], capture_output=True, text=True, timeout=5)
+                    if p.returncode != 0:
+                        is_binary = False
+                except Exception:
+                    is_binary = False
+                    
             if not (is_binary or is_env):
                 missing.append(r)
         if missing:

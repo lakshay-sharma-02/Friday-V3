@@ -971,6 +971,38 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE runtime_results ADD COLUMN verification_evidence "
             "TEXT NOT NULL DEFAULT '{}'")
+    # Phase 4: watch_history table (created fresh each time).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS watch_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at  TEXT NOT NULL,
+            finished_at TEXT,
+            outcome     TEXT NOT NULL DEFAULT 'running',
+            repos_scanned INTEGER NOT NULL DEFAULT 0,
+            repos_changed INTEGER NOT NULL DEFAULT 0,
+            knowledge_updated INTEGER NOT NULL DEFAULT 0,
+            understanding_updated INTEGER NOT NULL DEFAULT 0,
+            initiatives_changed INTEGER NOT NULL DEFAULT 0,
+            insights_changed INTEGER NOT NULL DEFAULT 0,
+            new_pending_initiatives INTEGER NOT NULL DEFAULT 0,
+            error_detail TEXT
+        );
+        CREATE TABLE IF NOT EXISTS pending_initiatives (
+            id               TEXT PRIMARY KEY,
+            title            TEXT NOT NULL,
+            statement        TEXT NOT NULL,
+            initiative_type  TEXT NOT NULL,
+            confidence       TEXT NOT NULL,
+            understanding_ids TEXT NOT NULL DEFAULT '',
+            knowledge_ids    TEXT NOT NULL DEFAULT '',
+            detected_at      TEXT NOT NULL,
+            watch_run_id     INTEGER NOT NULL REFERENCES watch_history(id),
+            reviewed         INTEGER NOT NULL DEFAULT 0,
+            reviewed_at      TEXT,
+            dismissed_at     TEXT,
+            action_taken     TEXT
+        );
+    """)
     conn.commit()
 
 
@@ -3412,6 +3444,11 @@ def insert_task_graph(conn: sqlite3.Connection, graphs: List[TaskGraphRow],
                  g.critical_path_length, g.parallel_groups, g.status,
                  g.created_at, g.updated_at),
             )
+            # Scrub stale tasks + edges before re-inserting, so recompilation
+            # doesn't leave orphan rows from a prior generation with different
+            # task count.
+            conn.execute("DELETE FROM tasks WHERE graph_id=?", (g.id,))
+            conn.execute("DELETE FROM task_edges WHERE graph_id=?", (g.id,))
         for t in tasks:
             conn.execute(
                 """

@@ -36,11 +36,11 @@ from src.friday.ask import ask
 
 
 @pytest.fixture
-def db():
+def db(tmp_path):
     """Fresh in-memory DB with the full schema (and migrations) applied."""
     import tempfile
     from pathlib import Path
-    os.environ["FRIDAY_DB"] = str(Path(tempfile.mkdtemp()) / "m815.db")
+    os.environ["FRIDAY_DB"] = str(tmp_path / "m815.db")
     conn = connect()  # runs SCHEMA + _migrate (M4 columns)
     yield conn
     conn.close()

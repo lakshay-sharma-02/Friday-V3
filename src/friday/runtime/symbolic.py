@@ -161,6 +161,28 @@ def _is_python(worker_id: str) -> bool:
     return bool(worker_id) and "python" in worker_id
 
 
+def _create_file_payload(path: str, content: str, worker_id: str) -> str:
+    """Build a file-creation payload appropriate for the assigned worker.
+
+    - FileExecutor (filesystem): JSON {"op":"write",...}
+    - Python: python snippet writing the file
+    - Shell/git: shell heredoc/redirect command
+    - Anything else: JSON (the fallback resolver route)
+    """
+    if _is_shell(worker_id):
+        escaped = content.replace("'", "'\\''")
+        return f"mkdir -p $(dirname '{path}') && echo '{escaped}' > '{path}'"
+    if _is_python(worker_id):
+        return "\n".join([
+            "import pathlib",
+            f"path = pathlib.Path({path!r})",
+            f"path.parent.mkdir(parents=True, exist_ok=True)",
+            f"path.write_text({content!r}, encoding='utf-8')",
+        ])
+    # Default: FileExecutor JSON format.
+    return json.dumps({"op": "write", "path": path, "content": content})
+
+
 def build_payload(task: RuntimeTask, workspace: str = ".") -> str:
     """Translate a task's symbolic intent into a concrete executor payload.
 
@@ -211,6 +233,27 @@ def build_payload(task: RuntimeTask, workspace: str = ".") -> str:
     if op in ("run_tests", "run_regression_tests", "verify_fix"):
         return json.dumps({"pytest": ["-q"]})
 
+    # --- Phase 1: create_file (from trivial/LLM planner) ------------------
+    if op == "create_file":
+        path = sym.get("path", "")
+        content = sym.get("content", "")
+        payload = _create_file_payload(path, content, worker_id)
+        # Derive test command: explicit command from LLM, or auto-detect
+        # from content patterns (def test_, class Test, unittest, import pytest).
+        cmd = _derive_test_command(sym, task)
+        if cmd:
+            if _is_shell(worker_id):
+                payload = f"{payload} && {cmd}"
+            else:
+                # For Python executor: write file then run the command.
+                payload += f"\nimport subprocess\nsubprocess.run({cmd!r}, shell=True, check=True)"
+        return payload
+
+    # --- Phase 1: run_command (from trivial/LLM planner) ------------------
+    if op == "run_command":
+        cmd = sym.get("command", "")
+        return cmd or "echo no-command"
+
     # Unknown symbolic op: leave payload as-is (executor will no-op safely).
     return getattr(task, "runtime_payload", "") or ""
 
@@ -219,16 +262,104 @@ def build_payload(task: RuntimeTask, workspace: str = ".") -> str:
 # Evidence-based verification for symbolic tasks.
 # ---------------------------------------------------------------------------
 
+def _derive_test_command(sym: dict, task) -> str:
+    """Derive a test command from a task's symbolic, if auto-detectable.
+
+    Checks the explicit ``command`` field first, then auto-detects from
+    content patterns (def test_, class Test, unittest, import pytest).
+    Returns '' if no command can be derived."""
+    cmd = sym.get("command", "")
+    if cmd:
+        return cmd
+    content = sym.get("content", "")
+    path = sym.get("path", "")
+    _test_patterns = ("def test_", "class Test", "unittest", "import pytest")
+    _is_test = (getattr(task, "task_type", "") or "").lower() == "testing"
+    if _is_test or any(p in (content or "") for p in _test_patterns):
+        if path.endswith(".py"):
+            return f"python -m pytest {path} -v"
+    return ""
+
+
 def verify_symbolic(task: RuntimeTask, result: ExecutionResult,
                     workspace: str = ".") -> Optional[VerificationResult]:
-    """Evidence-based verification for rename/refactor symbolic tasks.
+    """Evidence-based verification for rename/refactor and Phase 1 ops.
 
     For a rename, the proof is: the OLD symbol count is 0 across the workspace
-    and the NEW symbol appears at least once. Returns None when the task has no
+    and the NEW symbol appears at least once. For create_file, the proof is
+    the file actually existing. Returns None when the task has no
     symbolic op we can evidence-check (caller falls back to artifact checks).
     """
     sym = getattr(task, "symbolic", None) or {}
     op = sym.get("op", "")
+
+    # --- Phase 1: create_file verification ---
+    if op == "create_file":
+        path = sym.get("path", "")
+        # Resolve the path against the workspace — symbolic paths from the
+        # planner are relative (e.g. "hello.py") but the executor writes them
+        # to the workspace directory. Checking CWD (Path(path).exists()) would
+        # miss the file and falsely fail verification.
+        if path:
+            full_path = str((Path(workspace).resolve() / path).resolve())
+        else:
+            full_path = ""
+        if full_path and Path(full_path).exists():
+            content = Path(full_path).read_text(encoding="utf-8", errors="replace")
+            expected = sym.get("content", "")
+            if expected and expected not in content:
+                return VerificationResult(
+                    passed=False,
+                    reason=f"file {path} exists but content mismatch")
+            # If the LLM specified a command (e.g. "pytest test_git_branch.py"),
+            # execute it NOW as part of verification. Without this, a create_file
+            # task that wrote the file but never ran the test would pass
+            # verification. Re-running the command independently ensures the
+            # test actually passes, not just that the file exists.
+            cmd = _derive_test_command(sym, task)
+            if cmd:
+                try:
+                    import subprocess as _sp
+                    _r = _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+                except _sp.TimeoutExpired:
+                    return VerificationResult(
+                        passed=False, reason=f"test command timed out: {cmd}",
+                        evidence={"command": cmd, "stdout": "(timeout)"})
+                except Exception as _e:
+                    return VerificationResult(
+                        passed=False, reason=f"test command error: {_e}",
+                        evidence={"command": cmd, "error": str(_e)})
+                if _r.returncode != 0:
+                    _detail = (_r.stderr[:300] or _r.stdout[:300] or "(no output)").strip()
+                    return VerificationResult(
+                        passed=False,
+                        reason=f"test command failed (exit {_r.returncode}): {_detail}",
+                        evidence={"command": cmd, "stdout": _r.stdout[:1000],
+                                   "stderr": _r.stderr[:1000], "exit_code": _r.returncode})
+                return VerificationResult(
+                    passed=True,
+                    reason=f"file {path} exists with correct content, test passed",
+                    evidence={"path": full_path, "command": cmd, "exit_code": _r.returncode})
+            return VerificationResult(
+                passed=True,
+                reason=f"file {path} exists with correct content",
+                evidence={"path": full_path})
+        if path:
+            return VerificationResult(
+                passed=False, reason=f"expected file {full_path} not found")
+        return None
+
+    # --- Phase 1: run_command verification ---
+    if op == "run_command":
+        # Trust exit code — the executor already checked this.
+        if result.success:
+            return VerificationResult(
+                passed=True,
+                reason="command executed successfully",
+                evidence={"exit_code": result.exit_code})
+        return VerificationResult(
+            passed=False, reason=f"command failed: {result.error}")
+
     if op not in ("rename_declaration", "rename_imports", "update_references"):
         return None
 

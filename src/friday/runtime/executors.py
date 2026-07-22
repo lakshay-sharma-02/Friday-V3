@@ -770,7 +770,7 @@ AI_EXECUTOR_IDS = (
 # Configurable AI-executor timeout (seconds). External AI CLIs can hang in
 # headless mode; a bounded timeout prevents indefinite waits. Override via the
 # FRIDAY_AI_TIMEOUT env var.
-AI_TIMEOUT = int(os.environ.get("FRIDAY_AI_TIMEOUT", "120"))
+AI_TIMEOUT = int(os.environ.get("FRIDAY_AI_TIMEOUT", "30"))
 
 # Deterministic built-in fallback order used when an AI executor fails/hangs.
 _DETERMINISTIC_FALLBACKS = (
@@ -1002,7 +1002,8 @@ class ClaudeCodeWorker(CLIExecutor):
         return Invocation(
             argv=[_resolve_binary("claude"), "--print",
                    "--output-format", "json",
-                   "--dangerously-skip-permissions"],
+                   "--dangerously-skip-permissions",
+                   "--model", "oc/deepseek-v4-flash-free"],
             stdin=prompt, timeout=AI_TIMEOUT)
 
     def verify(self, task, result: "ExecutionResult") -> "VerificationResult":
