@@ -28,24 +28,29 @@ from .models import EngineeringSession, SessionActivity
 
 
 def correlate(session: EngineeringSession,
-              facts: Optional[dict] = None) -> EngineeringSession:
+              facts: Optional[dict] = None,
+              conn=None) -> EngineeringSession:
     """Label a session in place (returns the same object).
 
     `facts` is an optional precomputed {aspect: value} for the session's primary
     repo, used by tests; when omitted, facts are reconstructed from the
     observations referenced elsewhere. We only use session-local signals.
+
+    When `conn` is provided, commit_count delta is computed against the
+    immediately prior observation row in the DB — necessary for single-observation
+    sessions where within-session delta is zero.
     """
-    activity, confidence = _classify(session, facts)
+    activity, confidence = _classify(session, facts, conn)
     session.activity = activity
     session.confidence = confidence
     return session
 
 
-def _classify(session: EngineeringSession, facts) -> tuple[SessionActivity, Confidence]:
+def _classify(session: EngineeringSession, facts, conn=None) -> tuple[SessionActivity, Confidence]:
     # Read the session's own fact signals from its observations (we stored them
     # as Observation objects upstream; here we accept either Observations or a
     # precomputed dict). Keep it branch-free of any specific observer.
-    signals = _signals(session, facts)
+    signals = _signals(session, facts, conn)
 
     commits = signals.get("commit_count", 0)
     has_dirty = signals.get("dirty", False)
@@ -85,7 +90,7 @@ def _classify(session: EngineeringSession, facts) -> tuple[SessionActivity, Conf
     return SessionActivity.UNKNOWN, Confidence.DERIVED
 
 
-def _signals(session: EngineeringSession, facts) -> dict:
+def _signals(session: EngineeringSession, facts, conn=None) -> dict:
     if facts is not None:
         return dict(facts)
     out: dict = {
@@ -93,8 +98,47 @@ def _signals(session: EngineeringSession, facts) -> dict:
         "revert_events": 0, "repeated_reverts": False,
         "branch_switch": False, "readme_changed": False,
     }
-    for o in getattr(session, "_obs_objects", []):
+    obs_list = sorted(getattr(session, "_obs_objects", []),
+                      key=lambda o: (o.observed_at, o.aspect))
+    for o in obs_list:
         _fold(out, o)
+
+    # commit_count: use DELTA, not absolute value. Absolute is always >0 on
+    # any repo with history — using it raw labels every observed repo as
+    # "committing".
+    # Strategy: take the delta between first and last commit_count obs
+    # within this session (two observations = multiple observe ticks while
+    # commits were happening). Single obs: compare against prior DB row, or
+    # return 0 (baseline).
+    commit_obs = [o for o in obs_list if o.aspect == "commit_count"]
+    if len(commit_obs) >= 2:
+        # Within-session delta tells the real story
+        try:
+            first_val = int(commit_obs[0].value) if commit_obs[0].value else 0
+            last_val = int(commit_obs[-1].value) if commit_obs[-1].value else 0
+            out["commit_count"] = max(0, last_val - first_val)
+        except (TypeError, ValueError):
+            out["commit_count"] = 0
+    elif len(commit_obs) == 1 and conn is not None:
+        # Compare against prior DB row
+        last_obs = commit_obs[0]
+        try:
+            cur_count = int(last_obs.value) if last_obs.value else 0
+        except (TypeError, ValueError):
+            cur_count = 0
+        prior = conn.execute(
+            "SELECT value FROM observations WHERE subject = ? AND aspect = 'commit_count' "
+            "AND observed_at < ? AND source = ? "
+            "ORDER BY observed_at DESC LIMIT 1",
+            (last_obs.subject, last_obs.observed_at, last_obs.source)
+        ).fetchone()
+        if prior and prior["value"]:
+            prior_count = int(prior["value"])
+            out["commit_count"] = max(0, cur_count - prior_count)
+        else:
+            out["commit_count"] = 0  # baseline — no change
+    else:
+        out["commit_count"] = 0
     return out
 
 
@@ -128,7 +172,8 @@ def _int(v) -> int:
 
 
 def build_correlated(sessions: List[EngineeringSession],
-                     facts_by_session: Optional[dict] = None) -> List[EngineeringSession]:
+                     facts_by_session: Optional[dict] = None,
+                     conn=None) -> List[EngineeringSession]:
     """Correlate many sessions.
 
     Each session reads its own facts from the Observation objects attached
@@ -138,5 +183,5 @@ def build_correlated(sessions: List[EngineeringSession],
     out = []
     for s in sessions:
         f = (facts_by_session or {}).get(s.id) if facts_by_session else None
-        out.append(correlate(s, f))
+        out.append(correlate(s, f, conn=conn))
     return out

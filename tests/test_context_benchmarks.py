@@ -296,7 +296,7 @@ def test_bench_engine_reads_observations(conn, start, tmp_path):
     eng.build()
     sessions = eng.sessions()
     assert len(sessions) == 1
-    # Committing label, observed confidence (direct fact).
-    assert sessions[0].activity is SessionActivity.COMMITTING
+    # First observation without a prior baseline — no activity change known.
+    assert sessions[0].activity is SessionActivity.UNKNOWN
     # Session references observations, does not duplicate them.
     assert set(sessions[0].observations) == {o.id for o in obs}

@@ -104,7 +104,7 @@ class ContextEngine:
                       self.conn.execute("SELECT * FROM sessions").fetchall()}
 
         sessions = build_sessions(obs)
-        sessions = build_correlated(sessions)
+        sessions = build_correlated(sessions, conn=self.conn)
         for s in sessions:
             s.built_at = as_of
 

@@ -141,18 +141,20 @@ def test_long_session_duration(base):
 # --- Part 3: correlation (conservative) -------------------------------------
 
 
-def test_correlate_committing(base):
+def test_correlate_committing_with_delta(base):
+    """Single obs with no prior is a baseline — not committing."""
     a = _obs("FridayV3", "commit_count", "3", _t(base, 0))
     s = build_sessions([a])[0]
     correlate(s)
-    assert s.activity is SessionActivity.COMMITTING
-    assert s.confidence is Confidence.OBSERVED
+    assert s.activity is SessionActivity.UNKNOWN  # baseline, no change
+    assert s.confidence is Confidence.DERIVED
 
 
 def test_correlate_feature_work_on_branch_switch(base):
-    a = _obs("FridayV3", "branch_switch", "main -> develop", _t(base, 0))
-    b = _obs("FridayV3", "commit_count", "4", _t(base, 5))
-    s = build_sessions([a, b])[0]
+    a = _obs("FridayV3", "commit_count", "3", _t(base, 0))
+    b = _obs("FridayV3", "branch_switch", "main -> develop", _t(base, 5))
+    c = _obs("FridayV3", "commit_count", "4", _t(base, 10))
+    s = build_sessions([a, b, c])[0]
     correlate(s)
     assert s.activity is SessionActivity.FEATURE_WORK
 
@@ -160,7 +162,8 @@ def test_correlate_feature_work_on_branch_switch(base):
 def test_correlate_debugging_on_repeated_reverts(base):
     a = _obs("FridayV3", "revert_events", "2", _t(base, 0))
     b = _obs("FridayV3", "commit_count", "1", _t(base, 5))
-    s = build_sessions([a, b])[0]
+    c = _obs("FridayV3", "commit_count", "2", _t(base, 10))
+    s = build_sessions([a, b, c])[0]
     correlate(s)
     assert s.activity is SessionActivity.DEBUGGING
     assert s.confidence is Confidence.INFERRED

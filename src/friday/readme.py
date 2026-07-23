@@ -27,6 +27,8 @@ class ReadmeResult:
 
 
 def _find_readme(repo: Path) -> Optional[Path]:
+    if not repo.exists():
+        return None
     for name in _README_NAMES:
         p = repo / name
         if p.is_file():

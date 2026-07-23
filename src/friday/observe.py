@@ -110,7 +110,10 @@ def take_snapshot(conn) -> tuple[str, list[ObservationSnapshot]]:
     for r in get_repositories(conn):
         if r.id is None:
             continue
-        meta = collect(Repo(path=Path(r.path)))
+        rpath = Path(r.path)
+        if not rpath.exists():
+            continue
+        meta = collect(Repo(path=rpath))
         ident = identity.build_identity(conn, r.id)
         snap = ObservationSnapshot(
             observed_at=observed_at,

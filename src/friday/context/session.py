@@ -89,7 +89,15 @@ def _to_events(observations: List[Observation]) -> List["_Event"]:
     events: List[_Event] = []
     for ts in sorted(by_time):
         facts = by_time[ts]
-        events.append(_Event(ts=ts, facts=facts))
+        # Group facts by repo so each repo gets its own session.
+        # A single `friday observe` run stamps all repos at once; without
+        # splitting, every repo would collapse into one event with the
+        # alphabetically-first repo as primary_repo — false sessions.
+        by_subject: dict[str, List[Observation]] = {}
+        for f in facts:
+            by_subject.setdefault(f.subject, []).append(f)
+        for subject in sorted(by_subject):
+            events.append(_Event(ts=ts, facts=by_subject[subject]))
     return events
 
 
