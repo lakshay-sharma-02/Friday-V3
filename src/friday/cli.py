@@ -34,6 +34,7 @@ from .cli_initiative import cmd_initiatives
 from .cli_insight import cmd_insights
 from .cli_identity import cmd_identity
 from .cli_portfolio import cmd_portfolio_dispatch
+from .cli_profile import cmd_profile
 from .cli_strategy import cmd_strategy
 from .cli_planning import cmd_plan
 from .cli_graph import cmd_graph
@@ -523,6 +524,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_identity.set_defaults(func=cmd_identity)
 
+    p_profile = sub.add_parser(
+        "profile", help="Operator identity: preferences, patterns, and derived traits."
+    )
+    p_profile.add_argument(
+        "action", nargs="?", default="show",
+        choices=["show", "set", "unset"],
+        help="'show' (default), 'set <key> <value>', or 'unset <key>'.",
+    )
+    p_profile.add_argument(
+        "key", nargs="?", default=None,
+        help="Preference key (for 'set' / 'unset').",
+    )
+    p_profile.add_argument(
+        "value", nargs="?", default=None,
+        help="Preference value (for 'set').",
+    )
+    p_profile.set_defaults(func=cmd_profile)
+
     p_portfolio = sub.add_parser(
         "portfolio", help="Workspace reasoning: themes, overlap, value, recommendations."
     )
@@ -718,12 +737,22 @@ def main(argv: list[str] | None = None) -> int:
     p_review.set_defaults(func=cmd_review)
 
     p_capability = sub.add_parser(
-        "capability", help="Capability discovery, registry, health, benchmark.")
+        "capability", help="Capability discovery, registry, health, benchmark, genesis.")
     p_capability.add_argument(
         "token", nargs="?", default="list",
-        choices=["discover", "list", "info", "benchmark"])
+        choices=["discover", "list", "info", "benchmark", "propose", "review"])
     p_capability.add_argument(
         "--worker", help="Worker name for 'info'.")
+    p_capability.add_argument(
+        "--capability", help="Capability name for 'propose' (explicit gap).")
+    p_capability.add_argument(
+        "--goal", help="Goal for 'propose' (context for explicit gap).")
+    p_capability.add_argument(
+        "action", nargs="?", default=None,
+        help="For 'review': 'approve <id>' or 'reject <id>', or just an ID to inspect.")
+    p_capability.add_argument(
+        "target", nargs="?", default=None,
+        help="Target proposal ID for 'review' action.")
     p_capability.set_defaults(func=cmd_capability)
 
     p_watch = sub.add_parser(
@@ -748,6 +777,9 @@ def main(argv: list[str] | None = None) -> int:
     p_suggest = sub.add_parser(
         "suggest",
         help="Surface cross-project integration opportunities from existing workspace evidence.")
+    p_suggest.add_argument(
+        "--graph", default=None,
+        help="Generate a Task Graph from a suggestion by its id (run `friday suggest` to see ids).")
     p_suggest.set_defaults(func=cmd_suggest)
 
     p_doctor = sub.add_parser(

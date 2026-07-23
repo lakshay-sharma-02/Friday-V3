@@ -590,50 +590,7 @@ class InitiativeEngine:
         concepts = []
         seen = set()
 
-        concept_keywords = [
-            ("architecture", "architectural evolution"),
-            ("stabilizing", "stabilizing architecture"),
-            ("purpose", "purpose evolution"),
-            ("fit", "integration fit"),
-            ("integrate", "integration opportunity"),
-            ("platform", "platform convergence"),
-            ("frontend", "frontend experience"),
-            ("authentication", "authentication infrastructure"),
-            ("auth", "authentication infrastructure"),
-            ("session", "session management"),
-            ("jwt", "JWT handling"),
-            ("credential", "credential management"),
-            ("oauth", "OAuth integration"),
-            ("router", "AI routing"),
-            ("llm", "LLM integration"),
-            ("agent", "agent coordination"),
-            ("knowledge", "knowledge evolution"),
-            ("memory", "memory systems"),
-            ("rust", "systems infrastructure"),
-            ("kernel", "kernel development"),
-            ("filesystem", "filesystem operations"),
-            ("runtime", "runtime optimization"),
-            ("compiler", "compiler development"),
-            ("migration", "technology migration"),
-            ("documentation", "documentation"),
-            ("test", "test coverage"),
-            ("ci/cd", "CI/CD pipeline"),
-            ("docker", "container deployment"),
-            ("database", "data layer"),
-            ("api", "API design"),
-            ("backend", "backend services"),
-            ("project", "project evolution"),
-            ("project convergence", "project convergence"),
-            ("project divergence", "project divergence"),
-            ("weakness", "emerging weakness"),
-            ("direction", "technology direction"),
-            ("engineering identity", "engineering identity"),
-            ("converging", "converging efforts"),
-            ("diverging", "diverging direction"),
-            ("recurring", "recurring patterns"),
-            ("blind spot", "blind spot detected"),
-            ("risk", "engineering risk"),
-        ]
+        from ..vocabulary import CONCEPT_KEYWORDS as concept_keywords
 
         for stmt in statements:
             stmt_lower = stmt.lower()

@@ -215,73 +215,22 @@ class TaskGraphEngine:
         # meaning (e.g. "recurring", "accumulating", "now visible", "clear")
         # and inject them into the task title. If nothing useful is found,
         # fall back to just the type template.
+        # Extract a content-rich key phrase from the evidence statement.
+        from ..vocabulary import SIGNAL_WORDS, UNDERSTANDING_TEMPLATES
         _key_phrase = ""
         if stmt:
             s_lower = stmt.lower()
-            _signal_words = [
-                "recurring", "accumulating", "diverging", "stabilizing",
-                "forming", "appearing", "clear", "strong", "growing",
-                "emerging", "shifting", "converging", "visible", "evident",
-            ]
-            found = [w for w in _signal_words if w in s_lower]
+            found = [w for w in SIGNAL_WORDS if w in s_lower]
             if found:
                 _key_phrase = found[0]
 
-        def _title_fmt(title: str) -> str:
-            """Collapse excess whitespace in a pre-formatted title string.
-
-            When no key phrase is extracted, the format expression produces
-            a double-space gap (e.g. "Investigate  weakness in npm").
-            This collapse removes the extra whitespace."""
-            return ' '.join(title.split())
-
-        # Format templates per type. Key phrases slot into the noun slot when
-        # available; without a key phrase the template produces the original
-        # generic title (single space collapsed).
-        _templates = {
-            "engineering_weakness": (
-                "analysis",
-                lambda: _title_fmt(f"Investigate {s} {_key_phrase} weakness")
-                if _key_phrase else f"Investigate {s} weakness",
-            ),
-            "project_divergence": (
-                "refactor",
-                lambda: f"Address {s} engineering divergence",
-            ),
-            "engineering_risk": (
-                "refactor",
-                lambda: _title_fmt(f"Mitigate {_key_phrase} risk in {s}")
-                if _key_phrase else f"Mitigate {s} risk",
-            ),
-            "engineering_blind_spot": (
-                "analysis",
-                lambda: f"Address {s} blind spot",
-            ),
-            "engineering_strength": (
-                "implementation",
-                lambda: _title_fmt(f"Leverage {s} {_key_phrase} strength")
-                if _key_phrase else f"Leverage {s} engineering strength",
-            ),
-            "engineering_identity": (
-                "documentation",
-                lambda: f"Document {s} engineering identity",
-            ),
-            "architectural_style": (
-                "analysis",
-                lambda: f"Assess {s} architecture stability",
-            ),
-            "project_convergence": (
-                "design",
-                lambda: f"Support {s} project convergence",
-            ),
-        }
-        result = _templates.get(t)
+        result = UNDERSTANDING_TEMPLATES.get(t)
         if result is None:
             return None
         task_type, title_fn = result
         return {
             "order": 0,  # filled by caller
-            "title": title_fn(),
+            "title": title_fn(s, _key_phrase),
             "detail": uid_stmt,
             "evidence": uid_id,
             "task_type": task_type,
@@ -310,32 +259,11 @@ class TaskGraphEngine:
         ktype = getattr(knowledge_entry, "type", None)
         ktype_str = ktype.value if hasattr(ktype, "value") else str(ktype or "")
 
-        # Knowledge-type dispatch table: each type gets a distinct task_type +
-        # title template that reflects what that type of knowledge actually says.
-        _knowledge_templates = {
-            "project_architecture": (
-                "analysis",
-                f"Review {subject} architecture"
-            ),
-            "project_stack": (
-                "analysis",
-                f"Audit {subject} technology stack"
-            ),
-            "portfolio_integration": (
-                "analysis",
-                f"Evaluate {subject} integration potential"
-            ),
-            "project_identity": (
-                "documentation",
-                f"Document {subject} project identity"
-            ),
-            "portfolio_technology": (
-                "configuration",
-                f"Standardize {subject} usage across projects"
-            ),
-        }
-        task_type, title = _knowledge_templates.get(
-            ktype_str, ("analysis", f"Audit {subject} usage across projects"))
+        # Knowledge-type dispatch table (from consolidated vocabulary.py).
+        from ..vocabulary import KNOWLEDGE_TEMPLATES
+        task_type, title_fmt = KNOWLEDGE_TEMPLATES.get(
+            ktype_str, ("analysis", f"Audit {{subject}} usage across projects"))
+        title = title_fmt.format(subject=subject)
 
         return {
             "order": 0,
@@ -451,17 +379,7 @@ class TaskGraphEngine:
                 if kid:
                     all_evidence.append((kid, stmt))
 
-        _stopwords: set = {
-            'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
-            'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
-            'would', 'could', 'should', 'may', 'might', 'shall', 'can',
-            'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
-            'as', 'into', 'through', 'during', 'before', 'after', 'above',
-            'below', 'between', 'and', 'but', 'or', 'nor', 'not', 'so',
-            'yet', 'both', 'either', 'neither', 'this', 'that', 'these',
-            'those', 'it', 'its', 'they', 'them', 'their', 'we', 'our',
-            'you', 'your', 'i', 'me', 'my', 'he', 'she', 'his', 'her',
-        }
+        from ..vocabulary import STOPWORDS as _stopwords
 
         def _tokenize(text: str) -> set:
             """Lowercase, split on non-alpha, remove stopwords and short tokens."""

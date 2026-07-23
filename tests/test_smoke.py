@@ -52,7 +52,7 @@ def test_end_to_end_smoke():
 
             # Execute — run a simple shell command
             r = subprocess.run(
-                [friday_cmd, "execute",
+                [friday_cmd, "execute", "--yes",
                  "output the current working directory and list files"],
                 capture_output=True, text=True, timeout=120, env=env)
             assert r.returncode == 0, \
@@ -61,22 +61,24 @@ def test_end_to_end_smoke():
             assert "Mission" in r.stdout or "session" in r.stdout or "succeeded" in r.stdout, \
                 f"execute output missing success indicators: {r.stdout[:500]}"
 
-            # Doctor should pass
+            # Doctor should pass (using test DB, not production)
             r = subprocess.run(
                 [friday_cmd, "doctor"],
-                capture_output=True, text=True, timeout=30)
-            assert r.returncode == 0, f"doctor failed: {r.stderr}"
+                capture_output=True, text=True, timeout=30, env=env)
+            assert r.returncode == 0, \
+                f"doctor failed: stdout={r.stdout[-300:]}\nstderr={r.stderr[-300:]}"
 
-            # Doctor should pass
+            # Doctor should pass (using test DB, not production)
             r = subprocess.run(
                 [friday_cmd, "doctor"],
-                capture_output=True, text=True, timeout=30)
-            assert r.returncode == 0, f"doctor failed: {r.stderr}"
+                capture_output=True, text=True, timeout=30, env=env)
+            assert r.returncode == 0, \
+                f"doctor failed: stdout={r.stdout[-300:]}\nstderr={r.stderr[-300:]}"
 
-            # Ask should not crash (output depends on LLM availability)
+            # Ask should not crash (using test DB, not production)
             r = subprocess.run(
                 [friday_cmd, "ask", "what is this project"],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=30, env=env)
             assert r.returncode == 0, f"ask failed: {r.stderr}"
 
         finally:

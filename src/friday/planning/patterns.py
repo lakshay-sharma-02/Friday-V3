@@ -85,30 +85,19 @@ class PatternPlan:
 # Deterministic goal classification (no LLM, regex/keyword only).
 # ---------------------------------------------------------------------------
 
-# "rename X to Y" / "rename X into Y" / "rename X as Y"
-_RENAME = re.compile(
-    r"\brename\s+(?:the\s+)?(\w+)\s+(?:to|into|as|=>)\s+(\w+)", re.IGNORECASE)
-# "extract <thing> into <module>" / "extract <module>"
-_EXTRACT = re.compile(
-    r"\bextract\b", re.IGNORECASE)
-# "refactor <thing>"
-_REFActor = re.compile(r"\brefactor\b", re.IGNORECASE)
-# "add <thing> to <target>" / "add <thing> into <target>" — requires a code
-# target (to/into/for + a following word) so documentation goals ("add README
-# documentation") fall through to the generic path instead of being hijacked
-# into a code-feature graph. Captures the target (last word after the preposition).
-_FEATURE = re.compile(
-    r"\badd\b.{1,40}?\b(?:to|into|for)\b\s+(\w+)", re.IGNORECASE)
-# "fix <thing>" / "fix failing <tests>"
-_BUGFIX = re.compile(r"\bfix\b", re.IGNORECASE)
-# "remove <dead code>" / "delete <thing>" / "clean up"
-_MAINTENANCE = re.compile(
-    r"\b(?:remove|delete|clean\s*up|prune|drop)\b", re.IGNORECASE)
-# Concrete dead-code symbol named in the goal: "remove DEAD_FN",
-# "delete unused_helper". Captured so the resolver/executor can target it.
-_MAINTENANCE_TARGET = re.compile(
-    r"\b(?:remove|delete|clean\s*up|prune|drop)\b\s+(?:the\s+|unused\s+|dead\s+)?"
-    r"(\w+)", re.IGNORECASE)
+# Capability hints and verify methods (consolidated in vocabulary.py).
+from ..vocabulary import PATTERN_CAP_HINTS, PATTERN_VERIFY_METHODS
+
+# Pattern regexes (consolidated in vocabulary.py).
+from ..vocabulary import (
+    PATTERN_RENAME as _RENAME,
+    PATTERN_EXTRACT as _EXTRACT,
+    PATTERN_REFACTOR as _REFActor,
+    PATTERN_FEATURE as _FEATURE,
+    PATTERN_BUGFIX as _BUGFIX,
+    PATTERN_MAINTENANCE as _MAINTENANCE,
+    PATTERN_MAINTENANCE_TARGET as _MAINTENANCE_TARGET,
+)
 
 
 def _cap(type_: str) -> List[str]:
@@ -119,16 +108,7 @@ def _cap(type_: str) -> List[str]:
     enrichment adds worker-side hints (file editing/shell commands/...) at
     resolution time. Kept in sync with compiler._cap_for_symbolic.
     """
-    return {
-        "analysis": ["python"],
-        "refactor": ["python"],
-        "implementation": ["python"],
-        "cleanup": ["python"],
-        "configuration": ["configuration"],
-        "testing": ["testing"],
-        "verification": ["testing"],
-        "review": ["research"],
-    }.get(type_, [])
+    return PATTERN_CAP_HINTS.get(type_, [])
 
 
 def _sym(op: str, task_type: str, title: str, sym: dict,
@@ -141,16 +121,7 @@ def _sym(op: str, task_type: str, title: str, sym: dict,
 
 
 def _verify_method(task_type: str) -> str:
-    return {
-        "analysis": "static_analysis",
-        "refactor": "build",
-        "implementation": "build",
-        "cleanup": "build",
-        "configuration": "format",
-        "testing": "tests",
-        "verification": "tests",
-        "review": "review",
-    }.get(task_type, "check")
+    return PATTERN_VERIFY_METHODS.get(task_type, "check")
 
 
 # ---------------------------------------------------------------------------

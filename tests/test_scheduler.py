@@ -58,7 +58,7 @@ from friday.worker.models import Worker, WorkerKind
 def _db(tmp_path: Path | None = None) -> sqlite3.Connection:
     import tempfile
     if tmp_path is None:
-        tmp_path = tmp_path
+        tmp_path = Path(tempfile.mkdtemp())
     return connect(tmp_path / "scheduler_test.db")
 
 

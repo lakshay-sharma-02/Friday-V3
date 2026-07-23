@@ -52,15 +52,20 @@ from . import objective as obj_mod
 
 # Objectives the online LLM understanding can produce from a noisy bag that we
 # do NOT trust over the deterministic offline heuristic (see retrieve_requirements).
+# Keep this inline — it references objective enum members, not generic vocabulary.
 _LOW_CONFIDENCE_OBJECTIVES = {
     obj_mod.Objective.GENERAL, obj_mod.Objective.VALUE, obj_mod.Objective.UNIVERSE,
     obj_mod.Objective.OVERLAP, obj_mod.Objective.INSIGHTS, obj_mod.Objective.DRIFT,
 }
 
-_CHITCHAT = {
-    "hello", "hi", "hey", "thanks", "thank you", "ok", "okay", "cool", "nice",
-    "who are you", "what are you", "help",
-}
+from . import vocabulary as _vocab
+
+
+def _v(name):
+    """Get a named export from vocabulary module."""
+    return getattr(_vocab, name)
+
+_CHITCHAT = _v('CHITCHAT_WORDS')
 
 
 # ---------------------------------------------------------------------------
@@ -1922,12 +1927,7 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
 # reasoning pipeline (requirements_from_question / understand -> retrieve_requirements).
 # TODO: remove once the benchmark suite is migrated to RetrievalRequirements.
 
-_DEPRECATED_INTENTS = {
-    "chitchat", "compare", "related", "architecture", "describe", "similarity",
-    "inactive", "newest", "recommend", "portfolio", "value", "overlap",
-    "integration", "workspace", "by-tech", "insights", "strategy", "general",
-    "merge",
-}
+_DEPRECATED_INTENTS = _v('DEPRECATED_INTENTS')
 
 
 @dataclass
@@ -2092,21 +2092,12 @@ def _portfolio_mode(question: str) -> str:
     """DEPRECATED: legacy portfolio sub-cut detection. Used only by the compat
     layer for legacy {intent:"portfolio"} payloads. TODO: remove."""
     qlow = question.lower()
-    if any(w in qlow for w in (
-        "strengths", "skills am i", "developing", "good at", "capabilities",
-        "what can i", "engineering ability",
-    )):
+    v = _v  # shorthand
+    if any(w in qlow for w in v('PORTFOLIO_STRENGTHS')):
         return "strengths"
-    if any(w in qlow for w in (
-        "effort", "where is my", "where.*going", "attention", "spending my",
-        "time going", "focus", "currently investing",
-    )):
+    if any(w in qlow for w in v('PORTFOLIO_EFFORT')):
         return "effort"
-    if any(w in qlow for w in (
-        "kind of engineer", "kind of developer", "type of engineer",
-        "type of developer", "what kind of ", "what sort of engineer",
-        "am i a", "engineer am i", "developer am i",
-    )):
+    if any(w in qlow for w in v('PORTFOLIO_IDENTITY')):
         return "identity"
     return "building"
 
@@ -2115,30 +2106,20 @@ def _strategy_axis(question: str) -> str:
     """DEPRECATED: legacy strategy sub-cut detection. Used only by the compat
     layer for legacy {intent:"strategy"} payloads. TODO: remove."""
     qlow = question.lower()
-    if any(w in qlow for w in ("impact", "highest impact", "most impact", "most valuable impact")):
+    v = _v
+    if any(w in qlow for w in v('STRATEGY_IMPACT')):
         return "impact"
-    if any(w in qlow for w in ("platform", "should become a platform", "become a platform",
-                               "turn into a platform", "platform play")):
+    if any(w in qlow for w in v('STRATEGY_PLATFORM')):
         return "platform"
-    if any(w in qlow for w in ("teaches me", "teach me", "teaching me", "learning",
-                               "learn the most", "stretched me", "taught me")):
+    if any(w in qlow for w in v('STRATEGY_LEARNING')):
         return "learning"
-    if any(w in qlow for w in ("opportunit", "leverage", "missing out", "am i missing",
-                               "missing", "left on the table", "not yet doing")):
+    if any(w in qlow for w in v('STRATEGY_OPPORTUNITY')):
         return "opportunity"
-    if any(w in qlow for w in ("center of my", "center of the", "engineering universe",
-                               "heart of my", "should become the center")):
+    if any(w in qlow for w in v('STRATEGY_PRIORITY')):
         return "priority"
-    if any(w in qlow for w in (
-        "ultimately trying to build", "ultimately build", "converging on",
-        "what am i converging", "trying to build", "am i really building",
-        "what am i really building",
-    )):
+    if any(w in qlow for w in v('STRATEGY_CONVERGE')):
         return "converge"
-    if any(w in qlow for w in (
-        "never merge", "shouldn't merge", "should not merge", "keep separate",
-        "stay independent", "don't merge", "do not merge",
-    )):
+    if any(w in qlow for w in v('STRATEGY_MERGE')):
         return "merge"
     if "what would you do" in qlow or "what should i do" in qlow:
         return "priority"
@@ -2150,18 +2131,7 @@ def _strategy_axis(question: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-_REL_PREFERENCE = {
-    "duplicated-functionality": 0,
-    "shared-abstraction": 1,
-    "shared-implementation": 2,
-    "shared-architecture": 3,
-    "shared-framework": 4,
-    "shared-deployment": 5,
-    "shared-db": 6,
-    "shared-config": 7,
-    "shared-tech": 8,
-    "potential-reuse": 9,
-}
+_REL_PREFERENCE = _v('REL_PREFERENCE')
 
 
 def _rel_rank(kind: str) -> int:
@@ -2206,14 +2176,7 @@ def _resolve_subjects_safe(question: str) -> list[str]:
     return []
 
 
-_STOP = {
-    "what", "which", "why", "who", "how", "are", "is", "the", "a", "an", "and",
-    "or", "of", "to", "do", "does", "did", "you", "your", "my", "me", "i", "use",
-    "using", "project", "projects", "repository", "repositories", "repo", "repos",
-    "share", "sharing", "with", "about", "tell", "describe", "compare", "related",
-    "between", "inactive", "abandoned", "stale", "newest", "recent", "latest",
-    "most", "active", "should", "next", "insight", "observations", "overview",
-}
+_STOP = _v('STOP_WORDS')
 
 
 def _detect_repo(question: str, conn) -> Optional[Repository]:
@@ -2428,26 +2391,18 @@ def _frame_blocks(blocks: list[str]) -> str:
 _RESTATE = ("how so", "why is that", "why's that", "convince me",
             "explain more", "elaborate", "tell me more", "more detail",
             "go on", "clarify that")
-_CONTRAST_PREFIX = ("why not", "what about", "how about", "and not", "but not")
-_NEXT_PREFIX = ("what next", "and then", "after that", "then what", "what should i do next",
-                "what do i do next", "next step", "next steps")
-_AGE_PREFIX = ("how long", "how old", "since when", "age of", "how stale", "how stale")
+_CONTRAST_PREFIX = _v('CONTRAST_PREFIX')
+_NEXT_PREFIX = _v('NEXT_PREFIX')
+_AGE_PREFIX = _v('AGE_PREFIX')
 
 # Meta-follow-ups that are ABOUT the previous answer, not new questions. These
 # are answered from the previous Evidence package (no fresh retrieval).
-_META_CONFIDENCE = ("how confident", "confidence", "how sure", "how certain",
-                    "sure are you", "certain are you")
-_META_EVIDENCE = ("what evidence", "which evidence", "what supports", "evidence for",
-                  "based on what", "how do you know", "where did you", "sources",
-                  "what backs this")
-_META_SUMMARIZE = ("summarize", "sum it up", "summarise", "tl;dr", "in short",
-                   "recap", "wrap up", "give me the gist")
-_META_EXPAND = ("explain further", "expand", "more on that", "tell me everything",
-                "go deeper", "dive deeper", "more about that", "elaborate further",
-                "what else", "anything else")
-_META_CHANGED = ("what changed", "has it changed", "what's changed", "what is changed",
-                 "recent change", "what's new", "anything changed")
-_COMPARE_PREFIX = ("compare", "contrast", "versus", "vs")
+_META_CONFIDENCE = _v('META_CONFIDENCE')
+_META_EVIDENCE = _v('META_EVIDENCE')
+_META_SUMMARIZE = _v('META_SUMMARIZE')
+_META_EXPAND = _v('META_EXPAND')
+_META_CHANGED = _v('META_CHANGED')
+_COMPARE_PREFIX = _v('COMPARE_PREFIX')
 
 
 def _is_meta(qlow: str, phrases: tuple) -> bool:
@@ -2522,9 +2477,9 @@ def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
     # ("that"/"this"/"it") to the previous subject so the contrast carries
     # context. When the previous subject is None (workspace question), we cannot
     # anchor "that", so we clarify rather than guess.
-    _PRONOUNS = ("that", "this", "it", "them")
-    _STOPWORDS = ("to", "with", "against", "and", "the")
-    for p in _COMPARE_PREFIX:
+    _PRONOUNS = _v('FOLLOWUP_PRONOUNS')
+    _STOPWORDS = _v('FOLLOWUP_STOPWORDS')
+    for p in _v('COMPARE_PREFIX'):
         if qlow.startswith(p + " ") or qlow == p:
             tail = qlow[len(p):].strip()
             toks = tail.split()

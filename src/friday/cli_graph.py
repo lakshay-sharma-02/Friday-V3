@@ -149,9 +149,10 @@ def cmd_graph_review(args: argparse.Namespace) -> int:
     print(f"Graph proposals awaiting review — {len(proposals)}\n")
     for r in sorted(proposals, key=lambda x: x.updated_at, reverse=True):
         short_id = r.id.split(":")[-1] if ":" in r.id else r.id
+        source_tag = f" | source={r.source}" if r.source else ""
         print(f"  {r.goal}")
         print(f"      id={short_id} | tasks={r.task_count} "
-              f"edges={r.edge_count} | plan={r.plan_type}")
+              f"edges={r.edge_count} | plan={r.plan_type}{source_tag}")
         print(f"      -> friday graph explain {short_id} for details")
         print()
     print("Actions:")

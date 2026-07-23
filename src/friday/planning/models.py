@@ -67,46 +67,15 @@ class PlanType(str, Enum):
         BEFORE generic verbs (build/add/create) so 'build worker system' maps to
         INFRASTRUCTURE, not FEATURE."""
         g = (goal or "").lower()
-        # Ordered: most specific first. Generic verbs (implement/build/add/
-        # create) are last so a specific keyword always wins.
-        table = [
-            # Structural / activity keywords FIRST — they are the plan's true
-            # shape and must win over broad topic words (auth) or verbs.
-            ("refactor", cls.REFACTOR),
-            ("extract", cls.REFACTOR),
-            ("restructure", cls.REFACTOR),
-            ("migrat", cls.MIGRATION),
-            ("upgrade", cls.MIGRATION),
-            ("worker", cls.INFRASTRUCTURE),
-            ("infrastructure", cls.INFRASTRUCTURE),
-            ("architecture", cls.ARCHITECTURE),
-            ("architect", cls.ARCHITECTURE),
-            ("optimi", cls.OPTIMIZATION),
-            ("performance", cls.OPTIMIZATION),
-            ("integrate", cls.INTEGRATION),
-            ("commercial", cls.COMMERCIAL),
-            ("product", cls.COMMERCIAL),
-            ("research", cls.RESEARCH),
-            ("study", cls.RESEARCH),
-            ("learn", cls.LEARNING),
-            ("mainten", cls.MAINTENANCE),
-            ("document", cls.DOCUMENTATION),
-            ("docs", cls.DOCUMENTATION),
-            ("test", cls.TESTING),
-            ("release", cls.RELEASE),
-            ("ship", cls.RELEASE),
-            # Topic words next (auth/oauth narrow a feature).
-            ("oauth", cls.FEATURE),
-            ("auth", cls.FEATURE),
-            # Generic verbs LAST — any specific keyword above wins first.
-            ("implement", cls.FEATURE),
-            ("add ", cls.FEATURE),
-            ("build", cls.FEATURE),
-            ("create", cls.FEATURE),
-        ]
-        for kw, pt in table:
+        # Ordered: most specific first (from vocabulary.py). Generic verbs
+        # (implement/build/add/create) are last so a specific keyword always wins.
+        from ..vocabulary import PLAN_TYPE_KEYWORDS
+        for kw, pt_name in PLAN_TYPE_KEYWORDS:
             if kw in g:
-                return pt
+                try:
+                    return cls.from_str(pt_name)
+                except ValueError:
+                    continue
         return cls.FEATURE  # safe inference default for unmatched goals
 
 

@@ -32,6 +32,7 @@ from ..db import (
     now_iso,
 )
 from ..worker.models import validate_capabilities
+from ..worker.genesis import propose_worker, reset_gap_tracking
 from ..planning import TaskGraphEngine
 from ..worker.engine import WorkerRegistry
 from .models import (
@@ -230,6 +231,10 @@ class CapabilityResolver:
         assignments: List[Assignment] = []
         resolved_at = now_iso()
 
+        # Reset gap tracking at the start of each resolution run so each run
+        # independently detects gaps (duplicate detection is per-run).
+        reset_gap_tracking()
+
         with atomic(self.conn):
             for task in g.tasks:
                 task_strategy = strategy or _strategy_for_task(task, g)
@@ -248,6 +253,18 @@ class CapabilityResolver:
                         expected_artifacts=list(task.outputs),
                         is_judgment=is_judgment,
                     )
+
+                # Emit CapabilityGapEvent when missing capabilities exist.
+                # This is ADDITIVE — the existing failure path is unchanged.
+                if missing:
+                    propose_worker(
+                        self.conn,
+                        goal=g.goal,
+                        missing_capabilities=missing,
+                        task_id=task.id,
+                        graph_id=graph_id,
+                    )
+
                 res = self._build_result(
                     task, chosen, candidates, conf, matched, missing,
                     reason, alts, task_strategy)

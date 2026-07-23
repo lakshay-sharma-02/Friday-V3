@@ -202,18 +202,21 @@ def test_reuse_opportunities_from_shared_framework(conn):
 # --- Ask intents ------------------------------------------------------------
 
 
-def test_classify_architecture_question(conn):
+def test_classify_architecture_question(conn, monkeypatch):
+    monkeypatch.setattr("friday.ask.llm_enabled", lambda: False)
     assert classify("Explain Friday's architecture.", conn) == "architecture"
     assert classify("How does Vivaha start?", conn) == "architecture"
 
 
-def test_classify_similarity_question(conn):
+def test_classify_similarity_question(conn, monkeypatch):
+    monkeypatch.setattr("friday.ask.llm_enabled", lambda: False)
     assert classify("Which projects duplicate configuration loading?", conn) == "similarity"
     assert classify("Which projects could realistically share code?", conn) == "similarity"
     assert classify("Which repositories have similar layouts?", conn) == "similarity"
 
 
-def test_ask_architecture_explains_from_evidence(conn, tmp_path):
+def test_ask_architecture_explains_from_evidence(conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("friday.ask.llm_enabled", lambda: False)
     _seed_repo(conn, "Vivaha", "/v", "Next.js App Router",
                ["Authentication", "Routing"], [("Next.js app", "app/")])
     ans = ask("Explain Vivaha's architecture.", conn, verbose=False)
@@ -223,7 +226,8 @@ def test_ask_architecture_explains_from_evidence(conn, tmp_path):
     assert "Next.js app" in ans.text
 
 
-def test_ask_similarity_honest_when_empty(conn, tmp_path):
+def test_ask_similarity_honest_when_empty(conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("friday.ask.llm_enabled", lambda: False)
     _seed_repo(conn, "Vivaha", "/v", "Next.js App Router", ["Routing"], [])
     ans = ask("Which projects could realistically share code?", conn, verbose=False)
     assert not ans.used_llm
@@ -231,7 +235,8 @@ def test_ask_similarity_honest_when_empty(conn, tmp_path):
     assert "No evidence-backed" in ans.text or "similar" in ans.text.lower()
 
 
-def test_ask_similarity_no_concept_components(conn, tmp_path):
+def test_ask_similarity_no_concept_components(conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("friday.ask.llm_enabled", lambda: False)
     # Config/Auth/Database are concepts; they must NOT appear as reuse recs.
     _seed_repo(conn, "A", "/a", "CLI tool", ["Configuration", "Authentication"], [("CLI", "x")])
     _seed_repo(conn, "B", "/b", "CLI tool", ["Configuration", "Database"], [("CLI", "y")])
@@ -243,7 +248,8 @@ def test_ask_similarity_no_concept_components(conn, tmp_path):
     assert "CLI entry point" in ans.text
 
 
-def test_ask_architecture_data_flow_not_character_split(conn, tmp_path):
+def test_ask_architecture_data_flow_not_character_split(conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("friday.ask.llm_enabled", lambda: False)
     # data_flow / known_patterns are stored newline-joined; rendering must not
     # split the string character-by-character (regression from .join(string)).
     rid = _seed_repo(conn, "Vivaha", "/v", "CLI tool", ["Testing"], [("CLI", "x")])
@@ -260,7 +266,8 @@ def test_ask_architecture_data_flow_not_character_split(conn, tmp_path):
     assert "\n- s\n- t" not in ans.text  # per-character split guard
 
 
-def test_similarity_no_self_duplication(conn, tmp_path):
+def test_similarity_no_self_duplication(conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("friday.ask.llm_enabled", lambda: False)
     # One repo with multiple main() entry-point rows must NOT list itself N times.
     _seed_repo(conn, "Solo", "/s", "CLI tool", [], [("main()", "a.py"), ("main()", "b.py")])
     ans = ask("Which projects could realistically share code?", conn, verbose=False)

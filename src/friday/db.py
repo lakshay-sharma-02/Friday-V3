@@ -454,7 +454,8 @@ CREATE TABLE IF NOT EXISTS task_graphs (
     parallel_groups         INTEGER NOT NULL DEFAULT 0,
     status                  TEXT NOT NULL DEFAULT 'compiled',
     created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL
+    updated_at              TEXT NOT NULL,
+    source                  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -582,6 +583,30 @@ CREATE TABLE IF NOT EXISTS worker_versions (
     registered_at           TEXT NOT NULL,
     changelog               TEXT,
     PRIMARY KEY (worker_id, version)
+);
+
+-- ===========================================================================
+-- Worker Genesis: proposed workers (capability gap proposals awaiting review).
+-- ===========================================================================
+
+-- Proposals for new workers detected from capability gaps. Never auto-approved;
+-- status transitions: pending -> approved | rejected. Only approved proposals
+-- are registered into the live Worker Registry.
+CREATE TABLE IF NOT EXISTS proposed_workers (
+    id                  TEXT PRIMARY KEY,
+    detected_from_goal  TEXT NOT NULL,
+    capability_gap      TEXT NOT NULL,
+    draft_manifest_json TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    created_at          TEXT NOT NULL,
+    reviewed_at         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS operator_preferences (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    set_at      TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'explicit' CHECK(source IN ('explicit', 'derived'))
 );
 
 -- ===========================================================================
@@ -806,6 +831,67 @@ CREATE TABLE IF NOT EXISTS runtime_evolution (
     reason               TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (evolved_at, task_id, from_state, to_state)
 );
+
+-- ===========================================================================
+-- Indexes for hot-path WHERE clauses (FK columns, status filters, etc.)
+-- ===========================================================================
+-- These are purely additive. No schema changes, no column additions.
+-- CREATE INDEX IF NOT EXISTS guarantees idempotency on reconnect.
+
+-- Graph/task FK lookups (tasks.graph_id, task_edges.graph_id, etc.)
+CREATE INDEX IF NOT EXISTS idx_tasks_graph_id ON tasks(graph_id);
+CREATE INDEX IF NOT EXISTS idx_task_edges_graph_id ON task_edges(graph_id);
+CREATE INDEX IF NOT EXISTS idx_task_history_graph_id ON task_history(graph_id);
+CREATE INDEX IF NOT EXISTS idx_task_evolution_graph_id ON task_evolution(graph_id);
+CREATE INDEX IF NOT EXISTS idx_task_graphs_status ON task_graphs(status);
+
+-- Resolver FK lookups
+CREATE INDEX IF NOT EXISTS idx_resolver_evolution_graph_id ON resolver_evolution(graph_id);
+CREATE INDEX IF NOT EXISTS idx_resolver_history_assignment_id ON resolver_history(assignment_id);
+
+-- Scheduler FK lookups
+CREATE INDEX IF NOT EXISTS idx_scheduler_tasks_graph_id ON scheduler_tasks(graph_id);
+CREATE INDEX IF NOT EXISTS idx_scheduler_history_graph_id ON scheduler_history(graph_id);
+CREATE INDEX IF NOT EXISTS idx_scheduler_history_schedule_id ON scheduler_history(schedule_id);
+CREATE INDEX IF NOT EXISTS idx_scheduler_runs_graph_id ON scheduler_runs(graph_id);
+CREATE INDEX IF NOT EXISTS idx_scheduler_evolution_graph_id ON scheduler_evolution(graph_id);
+
+-- Worker & proposal lookups
+CREATE INDEX IF NOT EXISTS idx_worker_history_worker_id ON worker_history(worker_id);
+CREATE INDEX IF NOT EXISTS idx_proposed_workers_status ON proposed_workers(status);
+
+-- Knowledge evolution FK lookups
+CREATE INDEX IF NOT EXISTS idx_knowledge_history_knowledge_id ON knowledge_history(knowledge_id);
+CREATE INDEX IF NOT EXISTS idx_evolution_events_knowledge_id ON evolution_events(knowledge_id);
+
+-- Understanding evolution FK lookups
+CREATE INDEX IF NOT EXISTS idx_understanding_history_understanding_id ON understanding_history(understanding_id);
+CREATE INDEX IF NOT EXISTS idx_understanding_evolution_understanding_id ON understanding_evolution(understanding_id);
+
+-- Initiative evolution FK lookups
+CREATE INDEX IF NOT EXISTS idx_initiative_history_initiative_id ON initiative_history(initiative_id);
+CREATE INDEX IF NOT EXISTS idx_initiative_evolution_initiative_id ON initiative_evolution(initiative_id);
+
+-- Insight evolution FK lookups
+CREATE INDEX IF NOT EXISTS idx_insight_history_insight_id ON insight_history(insight_id);
+CREATE INDEX IF NOT EXISTS idx_insight_evolution_insight_id ON insight_evolution(insight_id);
+
+-- Plan evolution FK lookups
+CREATE INDEX IF NOT EXISTS idx_plan_history_plan_id ON plan_history(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_evolution_plan_id ON plan_evolution(plan_id);
+
+-- Relationship cross-reference lookups (OR filter on repo_a/repo_b)
+CREATE INDEX IF NOT EXISTS idx_relationships_repo_a ON relationships(repo_a);
+CREATE INDEX IF NOT EXISTS idx_relationships_repo_b ON relationships(repo_b);
+
+-- Runtime FK lookups
+CREATE INDEX IF NOT EXISTS idx_runtime_sessions_schedule_id ON runtime_sessions(schedule_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_events_session_id ON runtime_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_tasks_session_id ON runtime_tasks(session_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_results_session_id ON runtime_results(session_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_results_execution_id ON runtime_results(execution_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_history_session_id ON runtime_history(session_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_evolution_session_id ON runtime_evolution(session_id);
 """
 
 
@@ -971,6 +1057,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE runtime_results ADD COLUMN verification_evidence "
             "TEXT NOT NULL DEFAULT '{}'")
+    # Suggestion -> Graph Bridge: add source column to task_graphs.
+    tg_cols = {r["name"] for r in conn.execute("PRAGMA table_info(task_graphs)")}
+    if "source" not in tg_cols:
+        conn.execute(
+            "ALTER TABLE task_graphs ADD COLUMN source TEXT")
+
     # Phase 4: watch_history table (created fresh each time).
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS watch_history (
@@ -3342,6 +3434,7 @@ class TaskGraphRow:
     status: str
     created_at: str
     updated_at: str
+    source: Optional[str] = None  # provenance: e.g. "suggestion:<id>", "initiative:<id>"
 
 
 @dataclass
@@ -3430,8 +3523,8 @@ def insert_task_graph(conn: sqlite3.Connection, graphs: List[TaskGraphRow],
                 INSERT INTO task_graphs
                     (id, goal, plan_id, plan_type, task_count, edge_count,
                      critical_path_length, parallel_groups, status, created_at,
-                     updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     updated_at, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     goal=excluded.goal, plan_id=excluded.plan_id,
                     plan_type=excluded.plan_type, task_count=excluded.task_count,
@@ -3442,7 +3535,7 @@ def insert_task_graph(conn: sqlite3.Connection, graphs: List[TaskGraphRow],
                 """,
                 (g.id, g.goal, g.plan_id, g.plan_type, g.task_count, g.edge_count,
                  g.critical_path_length, g.parallel_groups, g.status,
-                 g.created_at, g.updated_at),
+                 g.created_at, g.updated_at, g.source),
             )
             # Scrub stale tasks + edges before re-inserting, so recompilation
             # doesn't leave orphan rows from a prior generation with different
@@ -3525,6 +3618,14 @@ def count_task_graphs(conn: sqlite3.Connection) -> int:
     return row["c"] if row else 0
 
 
+def update_task_graph_source(conn: sqlite3.Connection, gid: str,
+                              source: str) -> None:
+    """Set the provenance/source tag on a graph (e.g. 'suggestion:<id>')."""
+    conn.execute(
+        "UPDATE task_graphs SET source = ? WHERE id = ?", (source, gid))
+    conn.commit()
+
+
 def update_task_graph_status(conn: sqlite3.Connection, gid: str,
                              status: str) -> None:
     conn.execute(
@@ -3598,6 +3699,7 @@ def task_evolution_for(conn: sqlite3.Connection, gid: str) -> List[TaskEvolution
 
 
 def _row_to_task_graph(r) -> TaskGraphRow:
+    source = r["source"] if "source" in r.keys() else None
     return TaskGraphRow(
         id=r["id"], goal=r["goal"], plan_id=r["plan_id"],
         plan_type=r["plan_type"], task_count=r["task_count"],
@@ -3605,6 +3707,7 @@ def _row_to_task_graph(r) -> TaskGraphRow:
         critical_path_length=r["critical_path_length"],
         parallel_groups=r["parallel_groups"], status=r["status"],
         created_at=r["created_at"], updated_at=r["updated_at"],
+        source=source,
     )
 
 
@@ -3942,6 +4045,194 @@ def insert_worker_version(conn: sqlite3.Connection, rows: List[WorkerVersionRow]
             (r.worker_id, r.version, r.registered_at, r.changelog),
         )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Worker Genesis: proposed_workers table access
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProposedWorkerRow:
+    """One proposed worker (capability gap proposal awaiting review)."""
+    id: str
+    detected_from_goal: str
+    capability_gap: str
+    draft_manifest_json: str
+    status: str  # pending | approved | rejected
+    created_at: str
+    reviewed_at: Optional[str] = None
+
+
+def insert_proposed_worker(
+    conn: sqlite3.Connection, pw: ProposedWorkerRow
+) -> None:
+    """Insert a proposed worker. Idempotent on id.
+
+    Uses commit_if_top so this function can be safely called from within
+    an outer atomic() transaction block without prematurely committing.
+    """
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO proposed_workers
+            (id, detected_from_goal, capability_gap, draft_manifest_json,
+             status, created_at, reviewed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pw.id, pw.detected_from_goal, pw.capability_gap,
+            pw.draft_manifest_json, pw.status, pw.created_at, pw.reviewed_at,
+        ),
+    )
+    commit_if_top(conn)
+
+
+def get_proposed_worker(
+    conn: sqlite3.Connection, pid: str
+) -> Optional[ProposedWorkerRow]:
+    row = conn.execute(
+        "SELECT * FROM proposed_workers WHERE id = ?", (pid,)
+    ).fetchone()
+    if row is None:
+        return None
+    return ProposedWorkerRow(
+        id=row["id"], detected_from_goal=row["detected_from_goal"],
+        capability_gap=row["capability_gap"],
+        draft_manifest_json=row["draft_manifest_json"],
+        status=row["status"], created_at=row["created_at"],
+        reviewed_at=row["reviewed_at"],
+    )
+
+
+def get_proposed_workers(
+    conn: sqlite3.Connection, status: Optional[str] = None
+) -> List[ProposedWorkerRow]:
+    """Get proposed workers, optionally filtered by status."""
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM proposed_workers WHERE status = ? ORDER BY created_at DESC",
+            (status,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM proposed_workers ORDER BY created_at DESC"
+        ).fetchall()
+    return [
+        ProposedWorkerRow(
+            id=r["id"], detected_from_goal=r["detected_from_goal"],
+            capability_gap=r["capability_gap"],
+            draft_manifest_json=r["draft_manifest_json"],
+            status=r["status"], created_at=r["created_at"],
+            reviewed_at=r["reviewed_at"],
+        )
+        for r in rows
+    ]
+
+
+def update_proposed_worker_status(
+    conn: sqlite3.Connection, pid: str, status: str,
+    reviewed_at: Optional[str] = None,
+) -> None:
+    """Update a proposal's status (pending -> approved | rejected)."""
+    if reviewed_at is None:
+        reviewed_at = now_iso()
+    conn.execute(
+        "UPDATE proposed_workers SET status = ?, reviewed_at = ? WHERE id = ?",
+        (status, reviewed_at, pid),
+    )
+    commit_if_top(conn)
+
+
+def delete_proposed_worker(
+    conn: sqlite3.Connection, pid: str
+) -> None:
+    """Remove a proposed worker by id (for cleanup)."""
+    conn.execute("DELETE FROM proposed_workers WHERE id = ?", (pid,))
+    commit_if_top(conn)
+
+
+# ---------------------------------------------------------------------------
+# Operator Identity: operator_preferences (Phase 1 — model + explicit CLI only)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OperatorPreferenceRow:
+    """One operator preference (explicitly set or evidence-derived)."""
+    key: str
+    value: str
+    set_at: str
+    source: str  # 'explicit' | 'derived'
+
+
+def set_operator_preference(
+    conn: sqlite3.Connection, key: str, value: str,
+    source: str = "explicit",
+) -> None:
+    """Insert or update one operator preference.
+
+    Uses source='explicit' for `friday profile set` commands; source='derived'
+    for evidence-computed fields (never triggered by inference — see operator.py
+    for the derive-on-read-only discipline).
+
+    Use commit_if_top for safe composition inside atomic() blocks.
+    """
+    conn.execute(
+        """
+        INSERT INTO operator_preferences (key, value, set_at, source)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value=excluded.value, set_at=excluded.set_at, source=excluded.source
+        """,
+        (key, value, now_iso(), source),
+    )
+    commit_if_top(conn)
+
+
+def get_operator_preference(
+    conn: sqlite3.Connection, key: str
+) -> Optional[OperatorPreferenceRow]:
+    """Get one preference by key, or None."""
+    row = conn.execute(
+        "SELECT * FROM operator_preferences WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None:
+        return None
+    return OperatorPreferenceRow(
+        key=row["key"], value=row["value"],
+        set_at=row["set_at"], source=row["source"],
+    )
+
+
+def get_all_operator_preferences(
+    conn: sqlite3.Connection, source: Optional[str] = None
+) -> list[OperatorPreferenceRow]:
+    """Get all operator preferences, optionally filtered by source."""
+    if source:
+        rows = conn.execute(
+            "SELECT * FROM operator_preferences WHERE source = ? ORDER BY key",
+            (source,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM operator_preferences ORDER BY key"
+        ).fetchall()
+    return [
+        OperatorPreferenceRow(
+            key=r["key"], value=r["value"],
+            set_at=r["set_at"], source=r["source"],
+        )
+        for r in rows
+    ]
+
+
+def unset_operator_preference(conn: sqlite3.Connection, key: str) -> bool:
+    """Delete one preference. Returns True if a row was actually removed."""
+    cur = conn.execute(
+        "DELETE FROM operator_preferences WHERE key = ?", (key,)
+    )
+    commit_if_top(conn)
+    return cur.rowcount > 0
 
 
 def worker_history_for(

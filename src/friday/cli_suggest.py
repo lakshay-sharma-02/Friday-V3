@@ -6,13 +6,17 @@ technology stacks, architecture, and components.
 
 Every suggestion is backed by a traceable evidence record. Like every other
 Friday command, nothing here invents — when evidence is thin we say so plainly.
+
+Suggestion -> Graph Bridge (M10.x): `friday suggest --graph <id>` generates a
+Task Graph proposal from a suggestion, landing it in `friday graph review`.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .db import (
     connect,
@@ -21,6 +25,8 @@ from .db import (
     get_components,
     get_repositories,
     get_technologies,
+    update_task_graph_source,
+    now_iso,
 )
 from .portfolio import (
     detect_themes,
@@ -28,6 +34,7 @@ from .portfolio import (
     integration_opportunities,
 )
 from .judgment import is_weak, component_strength
+from .operator import build_operator_profile
 
 
 # ---------------------------------------------------------------------------
@@ -37,14 +44,29 @@ from .judgment import is_weak, component_strength
 _SEVERITY = ("high", "medium", "low")
 
 
+def _suggestion_id(title: str, detail: str) -> str:
+    """Deterministic stable id from (title, detail).
+
+    Uses a hash of the content so repeated runs over unchanged evidence
+    produce the same ids — same convention as observation IDs elsewhere in
+    the codebase. Returns a short, human-referenceable string."""
+    h = hashlib.sha256((title + "|" + detail).encode()).hexdigest()[:12]
+    return f"sug:{h}"
+
+
 @dataclass
 class Suggestion:
     """One actionable cross-project suggestion, with evidence trace."""
 
-    title: str
-    detail: str
-    severity: str  # high / medium / low
-    evidence: list[str]  # evidence records that support this
+    id: str = ""  # deterministic, set during generation
+    title: str = ""
+    detail: str = ""
+    severity: str = "medium"  # high / medium / low
+    evidence: list[str] = field(default_factory=list)  # evidence records
+
+    def __post_init__(self):
+        if not self.id:
+            self.id = _suggestion_id(self.title, self.detail)
 
 
 @dataclass
@@ -54,7 +76,16 @@ class SuggestResult:
     suggestions: list[Suggestion]
     total_projects: int
 
-    def to_text(self) -> str:
+    def to_text(self, profile=None) -> str:
+        """Render suggestions to terminal text.
+
+        Args:
+            profile: Optional OperatorProfile for passive preference-aware
+                     ordering within severity tiers (Phase 2 — informational
+                     only, never changes severity or hides suggestions).
+                     Defaults to None (no preference-based ordering), keeping
+                     output byte-identical to pre-Phase-2 behavior.
+        """
         lines = [
             "Cross-project integration suggestions",
             f"Based on {self.total_projects} ingested projects",
@@ -70,10 +101,37 @@ class SuggestResult:
             return "\n".join(lines) + "\n"
 
         severity_order = {"high": 0, "medium": 1, "low": 2}
-        sorted_sugs = sorted(
-            self.suggestions,
-            key=lambda s: (severity_order.get(s.severity, 2), s.title),
-        )
+
+        # Parse preference-based ordering keys from the profile (Phase 2).
+        # Within each severity tier, if a preference key matches suggestion
+        # content, matching suggestions are ordered first (tier-constrained).
+        # This affects display order only — never severity, never visibility.
+        _pref_boost = None
+        if profile and profile.explicit_preferences:
+            priority_kw = profile.explicit_preferences.get(
+                "priority_keywords", "").lower().strip()
+            if priority_kw:
+                keywords = [k.strip() for k in priority_kw.split(",") if k.strip()]
+                if keywords:
+                    def _boost(s):
+                        text = (s.title + " " + s.detail).lower()
+                        return -sum(1 for kw in keywords if kw in text)
+                    _pref_boost = _boost
+
+        if _pref_boost:
+            sorted_sugs = sorted(
+                self.suggestions,
+                key=lambda s: (
+                    severity_order.get(s.severity, 2),
+                    _pref_boost(s),
+                    s.title,
+                ),
+            )
+        else:
+            sorted_sugs = sorted(
+                self.suggestions,
+                key=lambda s: (severity_order.get(s.severity, 2), s.title),
+            )
 
         for i, sug in enumerate(sorted_sugs, start=1):
             mark = {"high": "!!", "medium": "! ", "low": "  "}.get(
@@ -83,9 +141,11 @@ class SuggestResult:
                 sug.severity, "LOW"
             )
             lines.append(f"  {i}. [{conf_label}] {sug.title}")
+            lines.append(f"     id={sug.id}")
             lines.append(f"     {sug.detail}")
             for ev in sug.evidence:
                 lines.append(f"     evidence: {ev}")
+            lines.append(f"     -> friday suggest --graph {sug.id}")
             lines.append("")
 
         lines.append("---")
@@ -334,6 +394,44 @@ def _integration_suggestions(conn) -> list[Suggestion]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Suggestion -> Graph Bridge
+# ---------------------------------------------------------------------------
+
+
+def _suggestion_to_graph(
+    conn, suggestion: Suggestion,
+) -> str:
+    """Generate a Task Graph from a suggestion and tag its provenance.
+
+    Builds a goal string from the suggestion's title + detail, calls
+    TaskGraphEngine.generate(goal) UNCHANGED (no new parameters), then
+    tags the resulting graph's source as 'suggestion:<id>'.
+
+    Returns the graph id on success. Raises ValueError on failure.
+    """
+    from .planning import TaskGraphEngine
+
+    # Build a goal string from the suggestion's full content.
+    goal = f"{suggestion.title}: {suggestion.detail}"
+
+    eng = TaskGraphEngine(conn)
+    g = eng.generate(goal)
+
+    # Tag the graph's provenance after generate() returns.
+    source_tag = f"suggestion:{suggestion.id}"
+    update_task_graph_source(conn, g.id, source_tag)
+    # Also tag on the in-memory TaskGraph for the return.
+    g.source = source_tag
+
+    return g.id
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+
 def generate_suggestions(conn) -> SuggestResult:
     """Run all suggestion detectors and return deduplicated results.
 
@@ -361,6 +459,8 @@ def generate_suggestions(conn) -> SuggestResult:
             seen_titles.add(s.title)
             deduped.append(s)
 
+    # Ids are auto-assigned by Suggestion.__post_init__() from
+    # _suggestion_id(title, detail) — stable across runs with unchanged evidence.
     return SuggestResult(suggestions=deduped, total_projects=total)
 
 
@@ -370,9 +470,40 @@ def generate_suggestions(conn) -> SuggestResult:
 
 
 def cmd_suggest(args: argparse.Namespace) -> int:
-    """READ: suggest cross-project integration opportunities."""
+    """READ: suggest cross-project integration opportunities.
+
+    With --graph <id>: generate a Task Graph from the suggestion and
+    tag its provenance, landing it in `friday graph review`.
+    """
+    graph_id = getattr(args, "graph", None)
+
     conn = connect()
     result = generate_suggestions(conn)
+
+    if graph_id:
+        # Look up the suggestion by id.
+        matched = [s for s in result.suggestions if s.id == graph_id]
+        if not matched:
+            print(f"error: no suggestion with id '{graph_id}' found",
+                  file=sys.stderr)
+            print("Run `friday suggest` to see available suggestion ids.",
+                  file=sys.stderr)
+            conn.close()
+            return 2
+
+        gid = _suggestion_to_graph(conn, matched[0])
+        print(f"Generated graph from suggestion '{graph_id}': {gid}")
+        print(f"Source: suggestion:{graph_id}")
+        print()
+        print("Review it: friday graph review")
+        print(f"Approve:    friday graph review approve {gid.split(':')[-1]}")
+        conn.close()
+        return 0
+
+    # Phase 2: read operator profile for passive within-tier ordering.
+    # The profile is a pure read (no inference writes, no DB mutations).
+    # An empty profile produces byte-identical output to profile=None.
+    profile = build_operator_profile(conn)
     conn.close()
-    sys.stdout.write(result.to_text())
+    sys.stdout.write(result.to_text(profile=profile))
     return 0

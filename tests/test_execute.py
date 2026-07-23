@@ -48,7 +48,7 @@ def test_execute_chains_plan_resolve_schedule_run(monkeypatch, capsys):
         "supported_task_types": ["documentation"],
         "supported_plan_types": ["documentation"]})
 
-    args = argparse.Namespace(goal=["Improve", "the", "README"], workspace=".")
+    args = argparse.Namespace(goal=["Improve", "the", "README"], workspace=".", yes=True)
     rc = cmd_execute(args, conn=conn)
     out = capsys.readouterr().out
 

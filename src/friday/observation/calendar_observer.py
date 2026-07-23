@@ -81,30 +81,8 @@ class CalendarCategory:
 
 
 # Title keyword -> category hint (deterministic, no LLM).
-TITLE_CATEGORY = [
-    ("deadline", CalendarCategory.DEADLINE),
-    ("due", CalendarCategory.DEADLINE),
-    ("sprint", CalendarCategory.SPRINT),
-    ("standup", CalendarCategory.MEETING),
-    ("meeting", CalendarCategory.MEETING),
-    ("sync", CalendarCategory.MEETING),
-    ("review", CalendarCategory.REVIEW),
-    ("code review", CalendarCategory.REVIEW),
-    ("release", CalendarCategory.RELEASE),
-    ("deploy", CalendarCategory.DEPLOYMENT),
-    ("rollout", CalendarCategory.DEPLOYMENT),
-    ("assignment", CalendarCategory.ASSIGNMENT),
-    ("homework", CalendarCategory.ASSIGNMENT),
-    ("exam", CalendarCategory.EXAM),
-    ("midterm", CalendarCategory.EXAM),
-    ("final", CalendarCategory.EXAM),
-    ("conference", CalendarCategory.CONFERENCE),
-    ("talk", CalendarCategory.CONFERENCE),
-    ("presentation", CalendarCategory.PRESENTATION),
-    ("demo", CalendarCategory.PRESENTATION),
-    ("birthday", CalendarCategory.PERSONAL),
-    ("personal", CalendarCategory.PERSONAL),
-]
+# Source of truth in vocabulary.py — kept here for backward compat imports.
+from ..vocabulary import TITLE_CATEGORY
 
 
 def classify_event(title: str, category: Optional[str] = None) -> str:
