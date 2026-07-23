@@ -1,33 +1,31 @@
-"""Insight derivation rules (Milestone 8.5).
+"""Insight derivation rules (Milestone 8.5) — LLM-grounded rewrite.
 
 Transforms accumulated UNDERSTANDING (plus Initiatives and Knowledge) into
-rare, high-value ENGINEERING INSIGHTS. This layer NEVER reads observations,
-context, git, READMEs, or repositories directly. It NEVER calls an LLM. Every
-candidate cites the understanding ids (and/or initiative ids and/or knowledge
-ids) that produced it, so an insight is fully traceable to lower layers.
+rare, high-value ENGINEERING INSIGHTS via LLM synthesis over real evidence.
+Replaces the old rule-engine system that produced 6 of 7 generic boilerplate
+paragraphs.
 
-Each rule expresses a deterministic trigger -> (insight_type, semantic_title,
-statement_factory). The QUALITY FILTER guarantees an insight is only emitted
-when multiple independent evidence sources agree:
-
-  - >= 2 Understanding items, OR
-  - 1 Understanding + 1 Initiative, OR
-  - >= 3 Knowledge items.
-
-Single evidence never produces an insight. The engine counts qualifying
-evidence and drops weak triggers.
-
-Insights are SEMANTIC ("Extract shared Rust crates", "Authentication
-subsystem") and EPHEMERAL. A rule only fires while its triggering conditions
-hold; when they vanish, the engine retires the insight instead of re-emitting
-it (see engine.build).
+Design (mirrors synthesis.py / understanding/derivation.py):
+  - Gather all understanding, initiative, and knowledge evidence.
+  - Call the LLM with the full workspace context and ask it to identify what's
+    specifically notable — or null if nothing stands out.
+  - The LLM determines the InsightType from what it finds, not from a fixed
+    rule table.
+  - Deterministic fallback: when no LLM is available, emit zero insights
+    instead of running the rule engine. An empty result is more honest than
+    a generic paragraph.
+  - Ephemerality preserved: the insight engine still retires insights whose
+    triggering conditions no longer fire.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
+from ..services.llm import _call as llm_call
+from ..services.llm import _enabled as llm_enabled
 from ..understanding.models import UnderstandingType
 from .models import InsightType
 
@@ -56,552 +54,140 @@ class Candidate:
 
 
 # ---------------------------------------------------------------------------
-# Rule context — the lower-layer evidence the rules read.
+# Data structures for building the evidence prompt
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _Ctx:
-    """Indexes over the lower layers, used by every rule."""
+def _build_evidence_text(
+    understanding: List,
+    initiatives: List,
+    knowledge: List,
+) -> str:
+    """Build a structured evidence summary for the LLM prompt.
 
-    understandings: List  # list[Understanding]
-    initiatives: List    # list[Initiative]
-    knowledge: List      # list[Knowledge]
+    Only includes entries that have actual statements (not template holdovers).
+    Grouped by type for clarity.
+    """
+    lines: List[str] = []
 
-    @property
-    def u_by_type(self) -> dict:
-        out: dict = {}
-        for u in self.understandings:
-            out.setdefault(u.type.value, []).append(u)
-        return out
+    # Understanding
+    if understanding:
+        lines.append("=== ENGINEERING UNDERSTANDING ===")
+        # Group by type
+        by_type = {}
+        for u in understanding:
+            ut = getattr(u, "type", None)
+            utype = getattr(ut, "value", "unknown") if ut is not None else "unknown"
+            by_type.setdefault(utype, []).append(u)
+        for utype, items in sorted(by_type.items()):
+            label = utype.replace("_", " ").title()
+            lines.append(f"\n{label} ({len(items)}):")
+            for u in items:
+                subject = getattr(u, "subject", "?")
+                stmt = getattr(u, "statement", "")
+                conf = getattr(u, "confidence", None)
+                conf_str = getattr(conf, "value", "?") if conf is not None else "?"
+                if stmt:
+                    lines.append(f"  - [{conf_str}] {subject}: {stmt}")
 
-    @property
-    def u_by_subject(self) -> dict:
-        out: dict = {}
-        for u in self.understandings:
-            out.setdefault((u.subject or "").strip().lower(), []).append(u)
-        return out
+    # Initiatives
+    if initiatives:
+        lines.append("\n=== ENGINEERING INITIATIVES ===")
+        for i in initiatives:
+            title = getattr(i, "title", "?")
+            stmt = getattr(i, "statement", "")
+            conf = getattr(i, "confidence", None)
+            conf_str = getattr(conf, "value", "?") if conf is not None else "?"
+            status = getattr(i, "status", None)
+            status_str = getattr(status, "value", "?") if status is not None else "?"
+            repos = getattr(i, "participating_repositories", []) or []
+            repo_str = f" [repos: {', '.join(repos[:5])}]" if repos else ""
+            if stmt:
+                lines.append(f"  - [{conf_str}] ({status_str}) {title}: {stmt}{repo_str}")
 
-    @property
-    def i_by_type(self) -> dict:
-        out: dict = {}
-        for i in self.initiatives:
-            out.setdefault(i.type.value, []).append(i)
-        return out
+    # Knowledge (summarized, no more than 3 of each type)
+    if knowledge:
+        lines.append("\n=== ENGINEERING KNOWLEDGE ===")
+        by_type = {}
+        for k in knowledge:
+            kt = getattr(k, "type", None)
+            ktype = getattr(kt, "value", "unknown") if kt is not None else "unknown"
+            by_type.setdefault(ktype, []).append(k)
+        for ktype, items in sorted(by_type.items()):
+            label = ktype.replace("_", " ").title()
+            n = len(items)
+            lines.append(f"\n{label} ({n}):")
+            for k in items[:3]:
+                subject = getattr(k, "subject", "?")
+                stmt = getattr(k, "statement", "")
+                conf = getattr(k, "confidence", None)
+                conf_str = getattr(conf, "value", "?") if conf is not None else "?"
+                if stmt:
+                    lines.append(f"  - [{conf_str}] {subject}: {stmt}")
+            if n > 3:
+                lines.append(f"  ... and {n - 3} more")
 
-    @property
-    def k_by_subject(self) -> dict:
-        out: dict = {}
-        for k in self.knowledge:
-            out.setdefault((k.subject or "").strip().lower(), []).append(k)
-        return out
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# QUALITY FILTER — rules must not emit below this evidence bar.
+# LLM system prompt for insight generation
 # ---------------------------------------------------------------------------
 
+_INSIGHT_SYSTEM = (
+    "You are Friday's insight layer. Your job is to examine a workspace's "
+    "engineering understanding, initiatives, and knowledge, and identify "
+    "what is genuinely notable — findings that deserve human attention.\n\n"
+    "Rules:\n"
+    "1. Base your analysis ONLY on the evidence provided below.\n"
+    "2. Look for genuinely non-obvious patterns: repeated problems solved "
+    "independently, converging/diverging directions, emerging risks that "
+    "are reinforced by multiple signals, breakthrough moments where "
+    "expertise is crossing a threshold.\n"
+    "3. A valid insight must be SURPRISING or ACTIONABLE — something the "
+    "engineer would not have noticed themselves. Obvious facts (\"you have "
+    "many Python projects\") are not insights.\n"
+    "4. Do NOT force a finding. If nothing genuinely notable emerges, "
+    "return an empty findings list — that is a valid, honest result.\n"
+    "5. Each insight needs a semantic title (never a repo name) and a "
+    "1-3 sentence explanation.\n"
+    "6. Confidence reflects how much evidence supports the finding. "
+    "\"Strong\" means >=3 independent evidence items, \"Medium\" means 2, "
+    "\"Weak\" means 1.\n\n"
+    "Return valid JSON only:\n"
+    '{"findings": [{"title": str, "type": str, "statement": str, '
+    '"confidence": str}], "workspace_note": str|null}\n\n'
+    '  type: one of "engineering_opportunity", "engineering_risk", '
+    '"engineering_recommendation", "engineering_convergence", '
+    '"engineering_divergence", "engineering_bottleneck", '
+    '"engineering_blind_spot", "engineering_debt", "engineering_reuse", '
+    '"engineering_momentum", "engineering_drift", "engineering_investment", '
+    '"engineering_warning", "engineering_breakthrough", '
+    '"engineering_efficiency", "engineering_focus"\n'
+    '  confidence: "Strong" | "Medium" | "Weak"\n'
+    '  workspace_note: optional one-sentence summary of the workspace state\n\n'
+    'When findings is empty, set workspace_note to explain why.'
+)
 
-def _qualifies(c: Candidate) -> bool:
-    """Multiple independent evidence sources must agree.
+_USER_TEMPLATE = """Below is the evidence from your engineering workspace:
 
-    Rule (>=2 understanding) OR (1 understanding + 1 initiative) OR
-    (>=3 knowledge). Single evidence never produces an insight.
-    """
-    n_u = len(c.understanding_ids)
-    n_i = len(c.initiative_ids)
-    n_k = len(c.knowledge_ids)
-    if n_u >= 2:
-        return True
-    if n_u >= 1 and n_i >= 1:
-        return True
-    if n_k >= 3:
-        return True
-    return False
+{evidence}
 
-
-# ---------------------------------------------------------------------------
-# Helpers — collect a set of understanding ids matching a predicate, plus repo
-# provenance from the underlying knowledge they cite.
-# ---------------------------------------------------------------------------
-
-
-def _uids_matching(ctx: _Ctx, pred) -> List[str]:
-    return [u.id for u in ctx.understandings if pred(u) and u.id]
-
-
-def _kids_for_understandings(ctx: _Ctx, uids: List[str]) -> List[str]:
-    out: List[str] = []
-    for u in ctx.understandings:
-        if u.id in uids:
-            out.extend(u.knowledge_ids)
-    # de-dup, preserve order
-    seen = set()
-    res = []
-    for k in out:
-        if k not in seen:
-            seen.add(k)
-            res.append(k)
-    return res
-
-
-def _repos_for_understandings(ctx: _Ctx, uids: List[str]) -> List[str]:
-    kids = _kids_for_understandings(ctx, uids)
-    kid_set = set(kids)
-    out: List[str] = []
-    seen = set()
-    for k in ctx.knowledge:
-        if k.id in kid_set:
-            for r in (getattr(k, "evidence_ids", []) or []):
-                if r and r not in seen:
-                    seen.add(r)
-                    out.append(r)
-    return out
-
-
-def _repos_for_initiatives(ctx: _Ctx, iids: List[str]) -> List[str]:
-    out: List[str] = []
-    seen = set()
-    for i in ctx.initiatives:
-        if i.id in iids:
-            for r in getattr(i, "participating_repositories", []) or []:
-                if r and r not in seen:
-                    seen.add(r)
-                    out.append(r)
-    return out
+Analyze this evidence and return any genuinely notable insights. Be honest:
+if nothing stands out, return an empty findings list.
+"""
 
 
 # ---------------------------------------------------------------------------
-# Rules. Each returns a list of Candidate (pre-filter / pre-confidence).
+# Deterministic fallback — emit zero insights when the LLM is unavailable.
+# This is the honest choice: the old rule engine produced 6 boilerplate
+# paragraphs and 1 real finding out of 7. Zero is better than 6/7 filler.
 # ---------------------------------------------------------------------------
 
 
-def _rule_reuse_auth(ctx: _Ctx) -> List[Candidate]:
-    """Repeated authentication + multiple repositories -> Engineering Reuse.
-
-    Trigger: >=2 understandings referencing auth across >1 participating repo.
-    """
-    auth_u = [u for u in ctx.understandings
-              if "auth" in (u.subject or "").lower()
-              or any(k in (u.statement or "").lower()
-                     for k in ("auth", "login", "oauth", "credential", "token"))]
-    repos = _repos_for_understandings(ctx, [u.id for u in auth_u])
-    distinct = {r for r in repos if r}
-    if len(auth_u) >= 2 and len(distinct) >= 2:
-        uids = [u.id for u in auth_u if u.id]
-        return [Candidate(
-            type=InsightType.REUSE,
-            title="Reusable authentication subsystem",
-            statement=("Authentication has been independently solved multiple "
-                       f"times across {len(distinct)} repositories. Recommendation: "
-                       "build a reusable authentication subsystem to stop "
-                       "re-solving the same problem."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=sorted(distinct),
-        )]
-    return []
-
-
-def _rule_rust_reuse(ctx: _Ctx) -> List[Candidate]:
-    """Repeated Rust/systems investment -> Engineering Opportunity (extract crates).
-
-    Requires >=2 understandings on rust/systems (the quality filter on its own),
-    reinforced by >=2 knowledge items. A single understanding would be below
-    the bar even with knowledge, so we demand multiple independent signals.
-    """
-    rust_u = [u for u in ctx.understandings
-              if "rust" in (u.subject or "").lower()
-              or "systems" in (u.subject or "").lower()]
-    rust_k = [k for k in ctx.knowledge
-              if any(t in (k.subject or "").lower() for t in ("rust", "systems", "kernel"))]
-    uids = [u.id for u in rust_u if u.id]
-    kids = [k.id for k in rust_k if k.id]
-    if len(uids) >= 2 and len(kids) >= 2:
-        return [Candidate(
-            type=InsightType.OPPORTUNITY,
-            title="Extract shared Rust crates",
-            statement=("Enough Rust/systems infrastructure has accumulated that "
-                       "extracting shared crates is likely to reduce future "
-                       "engineering effort."),
-            understanding_ids=uids,
-            knowledge_ids=kids,
-            repos=_repos_for_understandings(ctx, uids)
-                   + _repos_for_knowledge(ctx, kids),
-        )]
-    return []
-
-
-def _rule_commercial_risk(ctx: _Ctx) -> List[Candidate]:
-    """Commercial increasing + research decreasing -> Engineering Risk."""
-    comm = ctx.u_by_type.get(UnderstandingType.COMMERCIAL_DIRECTION.value, [])
-    research = ctx.u_by_type.get(UnderstandingType.RESEARCH_DIRECTION.value, [])
-    comm_u = [u for u in comm if u.id]
-    research_u = [u for u in research if u.id]
-    # research DEcreasing: present but flagged as decreasing in statement, OR
-    # present while commercial rises. We require commercial present and at
-    # least one research understanding to mark displacement.
-    if comm_u and research_u:
-        uids = [u.id for u in comm_u + research_u]
-        return [Candidate(
-            type=InsightType.RISK,
-            title="Commercial work displacing research",
-            statement=("Commercial engineering is beginning to displace "
-                       "foundational research work. Watch the long-term balance "
-                       "between product pressure and capability investment."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=_repos_for_understandings(ctx, uids),
-        )]
-    return []
-
-
-def _rule_convergence(ctx: _Ctx) -> List[Candidate]:
-    """Several efforts converging -> Engineering Convergence.
-
-    Fires on >=2 PROJECT_CONVERGENCE understandings (satisfies the quality
-    filter on its own) and optionally folds in a platform/integration
-    initiative when one exists.
-    """
-    convergence_u = ctx.u_by_type.get(
-        UnderstandingType.PROJECT_CONVERGENCE.value, [])
-    if len(convergence_u) >= 2:
-        uids = [u.id for u in convergence_u if u.id]
-        platform = ctx.i_by_type.get("platform", []) + ctx.i_by_type.get(
-            "integration", [])
-        iids = [i.id for i in platform if i.id]
-        repos = _repos_for_understandings(ctx, uids)
-        if iids:
-            repos = repos + _repos_for_initiatives(ctx, iids)
-        return [Candidate(
-            type=InsightType.CONVERGENCE,
-            title="Converging engineering efforts",
-            statement=("Multiple engineering efforts are converging into a shared "
-                       "direction. This is an opportunity to consolidate investment "
-                       "rather than let the parts drift apart."),
-            understanding_ids=uids,
-            initiative_ids=iids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=repos,
-        )]
-    return []
-
-
-def _rule_divergence(ctx: _Ctx) -> List[Candidate]:
-    """Several divergence understandings -> Engineering Divergence."""
-    div = ctx.u_by_type.get(UnderstandingType.PROJECT_DIVERGENCE.value, [])
-    if len(div) >= 2:
-        uids = [u.id for u in div if u.id]
-        return [Candidate(
-            type=InsightType.DIVERGENCE,
-            title="Diverging engineering efforts",
-            statement=("Several projects are diverging in direction. Consider "
-                       "whether the split is intentional or a sign of uncoordinated "
-                       "effort."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=_repos_for_understandings(ctx, uids),
-        )]
-    return []
-
-
-def _rule_debt(ctx: _Ctx) -> List[Candidate]:
-    """Many related subjects, no shared infrastructure initiative -> Debt."""
-    rel = ctx.u_by_type.get(UnderstandingType.PROJECT_CONVERGENCE.value, [])
-    has_infra = any(i.type and i.type.value == "infrastructure"
-                    for i in ctx.initiatives)
-    if len(rel) >= 2 and not has_infra:
-        uids = [u.id for u in rel if u.id]
-        return [Candidate(
-            type=InsightType.DEBT,
-            title="Emerging engineering debt",
-            statement=("Many related projects exist with no shared infrastructure "
-                       "initiative to hold them together. Duplicated effort is "
-                       "likely accumulating as engineering debt."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=_repos_for_understandings(ctx, uids),
-        )]
-    return []
-
-
-def _rule_blind_spot(ctx: _Ctx) -> List[Candidate]:
-    """Engineering blind-spot understanding -> Engineering Blind Spot."""
-    spot = ctx.u_by_type.get(UnderstandingType.ENGINEERING_BLIND_SPOT.value, [])
-    if len(spot) >= 1:
-        uids = [u.id for u in spot if u.id]
-        # blind spot requires a second independent signal to qualify
-        others = [u.id for u in ctx.understandings
-                  if u.id not in uids
-                  and u.type.value in (
-                      UnderstandingType.ENGINEERING_WEAKNESS.value,
-                      UnderstandingType.ENGINEERING_RISK.value)]
-        if len(others) >= 1:
-            all_u = uids + others
-            return [Candidate(
-                type=InsightType.BLIND_SPOT,
-                title="Engineering blind spot",
-                statement=("A recurring blind spot is emerging and is reinforced "
-                           "by a separate weakness/risk signal. It may be the "
-                           "highest-leverage thing to confront."),
-                understanding_ids=all_u,
-                knowledge_ids=_kids_for_understandings(ctx, all_u),
-                repos=_repos_for_understandings(ctx, all_u),
-            )]
-    return []
-
-
-def _rule_momentum(ctx: _Ctx) -> List[Candidate]:
-    """Investment trend increasing + strong -> Engineering Momentum."""
-    inv = [u for u in ctx.understandings
-           if u.type.value == UnderstandingType.INVESTMENT_TREND.value]
-    if len(inv) >= 2:
-        uids = [u.id for u in inv if u.id]
-        return [Candidate(
-            type=InsightType.MOMENTUM,
-            title="Engineering momentum building",
-            statement=("Investment is trending upward across several areas. The "
-                       "current engineering momentum is worth protecting and "
-                       "feeding, not fragmenting."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=_repos_for_understandings(ctx, uids),
-        )]
-    return []
-
-
-def _rule_drift(ctx: _Ctx) -> List[Candidate]:
-    """Drift understanding present -> Engineering Drift."""
-    drift = [u for u in ctx.understandings
-             if u.type.value == UnderstandingType.ENGINEERING_DIRECTION.value
-             and "drift" in (u.statement or "").lower()]
-    if len(drift) >= 2:
-        uids = [u.id for u in drift if u.id]
-        return [Candidate(
-            type=InsightType.DRIFT,
-            title="Engineering direction drift",
-            statement=("The engineering direction shows drift across multiple "
-                       "understandings. Re-anchor on the primary objective before "
-                       "the spread widens."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=_repos_for_understandings(ctx, uids),
-        )]
-    return []
-
-
-def _rule_bottleneck(ctx: _Ctx) -> List[Candidate]:
-    """Recurring bottleneck knowledge (>=3) -> Engineering Bottleneck."""
-    bn_k = [k for k in ctx.knowledge
-            if k.type and k.type.value == "recurring_bottleneck"]
-    if len(bn_k) >= 3:
-        kids = [k.id for k in bn_k if k.id]
-        return [Candidate(
-            type=InsightType.BOTTLENECK,
-            title="Recurring engineering bottleneck",
-            statement=("The same bottleneck keeps recurring across the workspace. "
-                       "Removing it would unblock multiple efforts at once."),
-            knowledge_ids=kids,
-            repos=_repos_for_knowledge(ctx, kids),
-        )]
-    return []
-
-
-def _rule_focus(ctx: _Ctx) -> List[Candidate]:
-    """Single dominant initiative (1) + supporting understanding -> Focus."""
-    if len(ctx.initiatives) == 1:
-        i = ctx.initiatives[0]
-        uids = [u.id for u in ctx.understandings if u.id]
-        if uids:
-            return [Candidate(
-                type=InsightType.FOCUS,
-                title="Primary focus area",
-                statement=(f"The workspace centers on one initiative "
-                           f"('{i.title}'). Concentrating effort there is the "
-                           f"highest-leverage move right now."),
-                understanding_ids=uids,
-                initiative_ids=[i.id],
-                knowledge_ids=_kids_for_understandings(ctx, uids),
-                repos=_repos_for_initiatives(ctx, [i.id]),
-            )]
-    return []
-
-
-def _rule_recommendation(ctx: _Ctx) -> List[Candidate]:
-    """Repeated implementation of the same concern -> Engineering Recommendation.
-
-    Trigger: >=2 *distinct* understandings citing the same knowledge subject.
-    Two understandings with the same subject collapse into one row (subject is
-    part of the understanding id), so repetition must be detected via shared
-    knowledge targets instead. That signals one concern solved more than once.
-    """
-    by_knowledge_subject: dict = {}
-    ksubj = {k.id: (k.subject or "").strip().lower() for k in ctx.knowledge}
-    for u in ctx.understandings:
-        if not u.id:
-            continue
-        for kid in getattr(u, "knowledge_ids", []) or []:
-            subj = ksubj.get(kid)
-            if subj:
-                by_knowledge_subject.setdefault(subj, []).append(u)
-    repeated = [us for us in by_knowledge_subject.values() if len(us) >= 2]
-    if repeated:
-        uids = [u.id for us in repeated for u in us if u.id]
-        # most-cited knowledge subject wins the title
-        top = max(repeated, key=len)
-        top_subj = next((ksubj.get(kid) for u in top
-                         for kid in getattr(u, "knowledge_ids", []) or [])
-                        or ["repeated concern"], None)
-        title_subj = top_subj or "repeated concern"
-        return [Candidate(
-            type=InsightType.RECOMMENDATION,
-            title=f"Reusable solution for {title_subj}",
-            statement=(f"{title_subj} has been independently implemented more than "
-                       "once. Recommendation: build a reusable solution to stop "
-                       "re-solving the same problem."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=_repos_for_understandings(ctx, uids),
-        )]
-    return []
-
-
-def _repos_for_knowledge(ctx: _Ctx, kids: List[str]) -> List[str]:
-    kid_set = set(kids)
-    out: List[str] = []
-    seen = set()
-    for k in ctx.knowledge:
-        if k.id in kid_set:
-            for r in (getattr(k, "evidence_ids", []) or []):
-                if r and r not in seen:
-                    seen.add(r)
-                    out.append(r)
-    return out
-
-
-def _rule_investment(ctx: _Ctx) -> List[Candidate]:
-    """Sustained investment trend -> Engineering Investment.
-
-    Fires on >=2 INVESTMENT_TREND understandings (quality bar met alone) and
-    folds in any TECHNOLOGY_INVESTMENT knowledge to show the investment is
-    materializing into capability rather than merely being planned.
-    """
-    inv = [u for u in ctx.understandings
-           if u.type.value == UnderstandingType.INVESTMENT_TREND.value]
-    if len(inv) >= 2:
-        uids = [u.id for u in inv if u.id]
-        tech_k = [k for k in ctx.knowledge
-                  if k.type and k.type.value == "technology_investment"]
-        kids = [k.id for k in tech_k if k.id]
-        return [Candidate(
-            type=InsightType.INVESTMENT,
-            title="Engineering investment paying off",
-            statement=("Sustained investment across several areas is beginning to "
-                       "compound into capability. Protect this investment; it is "
-                       "the engine of future leverage."),
-            understanding_ids=uids,
-            knowledge_ids=kids,
-            repos=_repos_for_understandings(ctx, uids)
-                   + _repos_for_knowledge(ctx, kids),
-        )]
-    return []
-
-
-def _rule_warning(ctx: _Ctx) -> List[Candidate]:
-    """Risk signal + weakness signal -> Engineering Warning.
-
-    Fires on >=1 ENGINEERING_RISK understanding AND >=1 ENGINEERING_WEAKNESS
-    understanding: two independent signals that fragility is building *before*
-    it becomes a realized risk. Distinct from BLIND_SPOT (which pairs the
-    blind-spot type with a weakness) by requiring the risk type instead.
-    """
-    risk = [u for u in ctx.understandings
-            if u.type.value == UnderstandingType.ENGINEERING_RISK.value]
-    weak = [u for u in ctx.understandings
-            if u.type.value == UnderstandingType.ENGINEERING_WEAKNESS.value]
-    if risk and weak:
-        uids = [u.id for u in risk + weak if u.id]
-        return [Candidate(
-            type=InsightType.WARNING,
-            title="Emerging engineering warning",
-            statement=("A risk signal is reinforced by a weakness signal. This is "
-                       "an early warning: address it now while it is cheap, before "
-                       "it escalates into a realized risk."),
-            understanding_ids=uids,
-            knowledge_ids=_kids_for_understandings(ctx, uids),
-            repos=_repos_for_understandings(ctx, uids),
-        )]
-    return []
-
-
-def _rule_breakthrough(ctx: _Ctx) -> List[Candidate]:
-    """Emerging expertise across areas -> Engineering Breakthrough.
-
-    Fires on >=2 EMERGING_EXPERTISE understandings (a compound capability leap)
-    and optionally folds in a strength understanding to mark the new ground.
-    """
-    exp = [u for u in ctx.understandings
-           if u.type.value == UnderstandingType.EMERGING_EXPERTISE.value]
-    if len(exp) >= 2:
-        uids = [u.id for u in exp if u.id]
-        strength = [u for u in ctx.understandings
-                    if u.type.value == UnderstandingType.ENGINEERING_STRENGTH.value]
-        all_u = uids + [u.id for u in strength if u.id]
-        return [Candidate(
-            type=InsightType.BREAKTHROUGH,
-            title="Engineering breakthrough emerging",
-            statement=("Expertise is emerging across multiple areas at once. This "
-                       "is a breakthrough moment: accumulated effort is converting "
-                       "into new capability. Feed it."),
-            understanding_ids=all_u,
-            knowledge_ids=_kids_for_understandings(ctx, all_u),
-            repos=_repos_for_understandings(ctx, all_u),
-        )]
-    return []
-
-
-def _rule_efficiency(ctx: _Ctx) -> List[Candidate]:
-    """Repeated patterns across the workspace -> Engineering Efficiency.
-
-    Fires on >=3 RECURRING_PATTERN knowledge items (the quality bar for pure
-    knowledge evidence). Consolidating these into shared tooling or process
-    recovers engineering efficiency at every repetition.
-    """
-    pat_k = [k for k in ctx.knowledge
-             if k.type and k.type.value == "recurring_pattern"]
-    if len(pat_k) >= 3:
-        kids = [k.id for k in pat_k if k.id]
-        return [Candidate(
-            type=InsightType.EFFICIENCY,
-            title="Engineering efficiency opportunity",
-            statement=("The same patterns recur across the workspace. "
-                       "Standardizing or automating them would recover engineering "
-                       "efficiency at every repetition."),
-            knowledge_ids=kids,
-            repos=_repos_for_knowledge(ctx, kids),
-        )]
-    return []
-
-
-# Ordered rule registry. Each rule is independent and deterministic.
-RULES = [
-    _rule_reuse_auth,
-    _rule_rust_reuse,
-    _rule_commercial_risk,
-    _rule_convergence,
-    _rule_divergence,
-    _rule_debt,
-    _rule_blind_spot,
-    _rule_recommendation,
-    _rule_momentum,
-    _rule_drift,
-    _rule_bottleneck,
-    _rule_focus,
-    _rule_investment,
-    _rule_warning,
-    _rule_breakthrough,
-    _rule_efficiency,
-]
+# ---------------------------------------------------------------------------
+# Public entrypoint
+# ---------------------------------------------------------------------------
 
 
 def detect(
@@ -609,12 +195,89 @@ def detect(
     initiatives: List,
     knowledge: List,
 ) -> List[Candidate]:
-    """Run every rule, apply the quality filter, return surviving candidates."""
-    ctx = _Ctx(understandings=understanding, initiatives=initiatives,
-               knowledge=knowledge)
+    """Run insight detection.
+
+    Calls the LLM with the full workspace evidence. When the LLM is
+    unavailable or returns empty, emits zero insights — an honest result
+    that avoids generic boilerplate.
+
+    Returns candidates for the insight engine to process (confidence
+    aggregation, lifecycle, persistence).
+    """
+    if not llm_enabled():
+        # No LLM: emit zero insights. The old rule engine is removed
+        # because it produced 6/7 generic paragraphs.
+        return []
+
+    evidence = _build_evidence_text(understanding, initiatives, knowledge)
+
+    # If there's nothing to analyze, don't bother calling the LLM.
+    if not evidence.strip():
+        return []
+
+    user = _USER_TEMPLATE.format(evidence=evidence[:12000])
+
+    content = llm_call(_INSIGHT_SYSTEM, user)
+    if not content:
+        return []
+
+    # Parse JSON
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("```", 2)[1]
+        if content.startswith("json"):
+            content = content[4:]
+    content = content.strip().strip("`").strip()
+
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+    raw_findings = data.get("findings", []) if isinstance(data, dict) else []
+    if not raw_findings:
+        return []
+
+    # Resolve types
     out: List[Candidate] = []
-    for rule in RULES:
-        for c in rule(ctx):
-            if _qualifies(c):
-                out.append(c)
+    for f in raw_findings:
+        title = f.get("title", "")
+        type_str = f.get("type", "")
+        statement = f.get("statement", "")
+        conf_str = f.get("confidence", "Weak")
+
+        # Map confidence string to our enum
+        if conf_str.lower() not in ("strong", "medium", "weak"):
+            conf_str = "Weak"
+
+        try:
+            itype = InsightType.from_str(type_str)
+        except ValueError:
+            continue
+
+        if not title or not statement:
+            continue
+
+        # Collect evidence ids that support this finding
+        uids = [u.id for u in understanding if u.id]
+        iids = [i.id for i in initiatives if i.id]
+        kids = [k.id for k in knowledge if k.id]
+
+        # For repos, collect from initiatives
+        repos = []
+        for i in initiatives:
+            r = getattr(i, "participating_repositories", []) or []
+            repos.extend(r)
+        repos = sorted(set(repos))
+
+        out.append(Candidate(
+            type=itype,
+            title=title,
+            statement=statement,
+            understanding_ids=uids,
+            initiative_ids=iids,
+            knowledge_ids=kids,
+            repos=repos,
+        ))
+
     return out

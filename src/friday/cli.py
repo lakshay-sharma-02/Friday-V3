@@ -786,6 +786,9 @@ def main(argv: list[str] | None = None) -> int:
         "doctor", help="Check system health (DB, deps, workers, README, watch).")
     p_doctor.set_defaults(func=cmd_doctor)
 
+    from .cli_synthesize import add_subparser as add_synthesize
+    add_synthesize(sub)
+
     args = parser.parse_args(argv)
     return args.func(args)
 

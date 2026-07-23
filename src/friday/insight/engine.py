@@ -39,6 +39,7 @@ from ..db import (
 from ..initiative import InitiativeEngine
 from ..knowledge.store import get_all_knowledge
 from ..understanding import Understanding
+from ..services.llm import _enabled as llm_enabled
 from .confidence import (
     Contributor,
     aggregate_confidence,
@@ -57,6 +58,7 @@ class InsightBuildResult:
     retired: int
     active: int
     events: int = 0
+    note: str = ""
 
     def to_text(self) -> str:
         lines = [
@@ -69,8 +71,11 @@ class InsightBuildResult:
             f"Active: {self.active}",
             f"Evolution events: {self.events}",
             "",
-            "Done.",
         ]
+        if self.note:
+            lines.insert(2, f"Note: {self.note}")
+            lines.insert(3, "")
+        lines.append("Done.")
         return "\n".join(lines) + "\n"
 
 
@@ -175,9 +180,16 @@ class InsightEngine:
         active_n = sum(1 for i in all_i
                        if i.status != InsightStatus.RETIRED)
 
+        # Check if understanding exists but no LLM is configured
+        staging = get_all_understanding(self.conn)
+        note = ""
+        if staging and not llm_enabled():
+            note = "Insights require an LLM — none configured."
+
         return InsightBuildResult(
             total=len(all_i), created=created, updated=updated,
             retired=retired, active=active_n, events=n_events,
+            note=note,
         )
 
     # --- READ (never mutate) --------------------------------------------------

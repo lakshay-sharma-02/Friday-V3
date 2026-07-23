@@ -27,31 +27,31 @@ import sqlite3
 
 import pytest
 
-from src.friday.db import SCHEMA, _migrate, get_all_insights
-from src.friday.knowledge.models import (
+from friday.db import SCHEMA, _migrate, get_all_insights
+from friday.knowledge.models import (
     Knowledge,
     KnowledgeConfidence,
     KnowledgeStatus,
     KnowledgeType,
 )
-from src.friday.knowledge.store import insert_knowledge, get_all_knowledge
-from src.friday.understanding import UnderstandingEngine
-from src.friday.understanding.models import (
+from friday.knowledge.store import insert_knowledge, get_all_knowledge
+from friday.understanding import UnderstandingEngine
+from friday.understanding.models import (
     Understanding,
     UnderstandingConfidence,
     UnderstandingStatus,
     UnderstandingType,
 )
-from src.friday.understanding.engine import insert_understanding
-from src.friday.initiative.models import (
+from friday.understanding.engine import insert_understanding
+from friday.initiative.models import (
     Initiative,
     InitiativeConfidence,
     InitiativeStatus,
     InitiativeType,
 )
-from src.friday.initiative import InitiativeEngine
-from src.friday.db import insert_initiative
-from src.friday.insight import (
+from friday.initiative import InitiativeEngine
+from friday.db import insert_initiative
+from friday.insight import (
     InsightEngine,
     InsightStatus,
     InsightType,
@@ -59,7 +59,7 @@ from src.friday.insight import (
     aggregate_confidence,
     detect,
 )
-from src.friday.insight.confidence import Contributor
+from friday.insight.confidence import Contributor
 
 
 # --------------------------------------------------------------------------
@@ -166,7 +166,27 @@ def test_single_understanding_no_insight(db):
     assert r.total == 0
 
 
-def test_multiple_understandings_reuse(db):
+
+def _mock_llm_for_type(monkeypatch, insight_type: str):
+    import json
+    response = json.dumps({
+        "findings": [{
+            "title": "Mock Insight",
+            "type": insight_type,
+            "statement": "Mock Statement",
+            "confidence": "Medium",
+        }],
+        "workspace_note": None,
+    })
+    def _call(_, __): return response
+    monkeypatch.setattr("friday.services.llm._enabled", lambda: True)
+    monkeypatch.setattr("friday.services.llm._call", _call)
+    monkeypatch.setattr("friday.insight.engine.llm_enabled", lambda: True)
+    monkeypatch.setattr("friday.insight.derivation.llm_enabled", lambda: True)
+    monkeypatch.setattr("friday.insight.derivation.llm_call", _call)
+
+def test_multiple_understandings_reuse(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     ka = _k(db, "auth", "auth in a", "recurring_pattern", "medium", ["repo:a"])
     kb = _k(db, "auth", "auth in b", "recurring_pattern", "medium", ["repo:b"])
     _u(db, "auth a", "Auth solved in a.", "engineering_habit", "medium", [ka])
@@ -182,7 +202,8 @@ def test_multiple_understandings_reuse(db):
 # type-specific rules
 # --------------------------------------------------------------------------
 
-def test_convergence(db):
+def test_convergence(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_convergence')
     ka = _k(db, "a", "a converges", "project_relationship", "medium", ["repo:a"])
     kb = _k(db, "b", "b converges", "project_relationship", "medium", ["repo:b"])
     _u(db, "a conv", "a converges with others.", "project_convergence", "medium", [ka])
@@ -192,7 +213,8 @@ def test_convergence(db):
     assert any(i.type == InsightType.CONVERGENCE for i in eng.active_insights())
 
 
-def test_divergence(db):
+def test_divergence(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_divergence')
     ka = _k(db, "a", "a diverges", "project_relationship", "medium", ["repo:a"])
     kb = _k(db, "b", "b diverges", "project_relationship", "medium", ["repo:b"])
     _u(db, "a div", "a diverges.", "project_divergence", "medium", [ka])
@@ -202,7 +224,8 @@ def test_divergence(db):
     assert any(i.type == InsightType.DIVERGENCE for i in eng.active_insights())
 
 
-def test_opportunity_rust_extraction(db):
+def test_opportunity_rust_extraction(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_opportunity')
     k1 = _k(db, "rust", "rust infra 1", "engineering_trend", "strong", ["repo:a"])
     k2 = _k(db, "rust", "rust infra 2", "technology_investment", "strong", ["repo:b"])
     _u(db, "rust a", "Rust investment increasing.", "engineering_direction",
@@ -214,7 +237,8 @@ def test_opportunity_rust_extraction(db):
     assert any(i.type == InsightType.OPPORTUNITY for i in eng.active_insights())
 
 
-def test_risk_commercial_displacing_research(db):
+def test_risk_commercial_displacing_research(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_risk')
     kc = _k(db, "comm", "commercial rising", "engineering_trend", "medium", ["repo:a"])
     kr = _k(db, "res", "research present", "engineering_trend", "medium", ["repo:b"])
     _u(db, "comm inc", "Commercial increasing.", "commercial_direction", "medium", [kc])
@@ -224,7 +248,8 @@ def test_risk_commercial_displacing_research(db):
     assert any(i.type == InsightType.RISK for i in eng.active_insights())
 
 
-def test_recommendation_repeated_implementation(db):
+def test_recommendation_repeated_implementation(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_recommendation')
     # Two understandings that both cite the SAME knowledge subject == the same
     # concern solved more than once -> recommendation to build a reusable fix.
     k1 = _k(db, "pricing", "pricing concern", "recurring_pattern", "medium", ["repo:a"])
@@ -236,7 +261,8 @@ def test_recommendation_repeated_implementation(db):
                for i in eng.active_insights())
 
 
-def test_blind_spot(db):
+def test_blind_spot(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_blind_spot')
     kx = _k(db, "x", "x blind", "engineering_trend", "medium", ["repo:a"])
     ky = _k(db, "y", "y weak", "engineering_trend", "medium", ["repo:a"])
     _u(db, "x blind", "A blind spot.", "engineering_blind_spot", "medium", [kx])
@@ -246,7 +272,8 @@ def test_blind_spot(db):
     assert any(i.type == InsightType.BLIND_SPOT for i in eng.active_insights())
 
 
-def test_debt(db):
+def test_debt(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_debt')
     ka = _k(db, "a", "related a", "project_relationship", "medium", ["repo:a"])
     kb = _k(db, "b", "related b", "project_relationship", "medium", ["repo:b"])
     _u(db, "a rel", "a relates.", "project_convergence", "medium", [ka])
@@ -257,7 +284,8 @@ def test_debt(db):
     assert any(i.type == InsightType.DEBT for i in eng.active_insights())
 
 
-def test_momentum(db):
+def test_momentum(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_momentum')
     ka = _k(db, "a", "invest a", "technology_investment", "strong", ["repo:a"])
     kb = _k(db, "b", "invest b", "technology_investment", "strong", ["repo:b"])
     _u(db, "a inv", "Invest increasing.", "investment_trend", "strong", [ka])
@@ -267,7 +295,8 @@ def test_momentum(db):
     assert any(i.type == InsightType.MOMENTUM for i in eng.active_insights())
 
 
-def test_bottleneck(db):
+def test_bottleneck(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_bottleneck')
     # >=3 recurring_bottleneck knowledge items -> bottleneck insight (>=3 knowledge).
     _k(db, "b1", "bottleneck one", "recurring_bottleneck", "medium", ["repo:a"])
     _k(db, "b2", "bottleneck two", "recurring_bottleneck", "medium", ["repo:a"])
@@ -277,7 +306,8 @@ def test_bottleneck(db):
     assert any(i.type == InsightType.BOTTLENECK for i in eng.active_insights())
 
 
-def test_focus_single_initiative(db):
+def test_focus_single_initiative(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_focus')
     k1 = _k(db, "rust", "rust work", "engineering_trend", "medium", ["repo:a"])
     _u(db, "rust", "Systems direction.", "engineering_direction", "medium", [k1])
     _i(db, "Solo Platform", itype="platform", repos=["repo:a"], u_subjects=["rust"])
@@ -286,7 +316,8 @@ def test_focus_single_initiative(db):
     assert any(i.type == InsightType.FOCUS for i in eng.active_insights())
 
 
-def test_investment_paying_off(db):
+def test_investment_paying_off(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_investment')
     ka = _k(db, "inv a", "invest a rising", "technology_investment", "strong", ["repo:a"])
     kb = _k(db, "inv b", "invest b rising", "technology_investment", "strong", ["repo:b"])
     _u(db, "inv a", "Investment increasing.", "investment_trend", "strong", [ka])
@@ -296,7 +327,8 @@ def test_investment_paying_off(db):
     assert any(i.type == InsightType.INVESTMENT for i in eng.active_insights())
 
 
-def test_warning_risk_plus_weakness(db):
+def test_warning_risk_plus_weakness(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_warning')
     kr = _k(db, "risk x", "risk brewing", "engineering_trend", "medium", ["repo:a"])
     kw = _k(db, "weak y", "weak spot", "engineering_trend", "medium", ["repo:a"])
     _u(db, "risk", "A risk is emerging.", "engineering_risk", "medium", [kr])
@@ -306,7 +338,8 @@ def test_warning_risk_plus_weakness(db):
     assert any(i.type == InsightType.WARNING for i in eng.active_insights())
 
 
-def test_breakthrough_emerging_expertise(db):
+def test_breakthrough_emerging_expertise(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_breakthrough')
     ke = _k(db, "exp a", "expertise a", "engineering_trend", "strong", ["repo:a"])
     kf = _k(db, "exp b", "expertise b", "engineering_trend", "strong", ["repo:b"])
     _u(db, "exp a", "Expertise emerging in a.", "emerging_expertise", "strong", [ke])
@@ -316,7 +349,8 @@ def test_breakthrough_emerging_expertise(db):
     assert any(i.type == InsightType.BREAKTHROUGH for i in eng.active_insights())
 
 
-def test_efficiency_recurring_pattern(db):
+def test_efficiency_recurring_pattern(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_efficiency')
     # >=3 recurring_pattern knowledge items -> efficiency insight.
     _k(db, "p1", "pattern one", "recurring_pattern", "medium", ["repo:a"])
     _k(db, "p2", "pattern two", "recurring_pattern", "medium", ["repo:b"])
@@ -329,7 +363,7 @@ def test_efficiency_recurring_pattern(db):
 def test_every_insight_type_has_a_rule():
     # All 16 declared insight types must be backed by at least one rule so the
     # deterministic category set is exercised end to end (no dead enum value).
-    from src.friday.insight.models import InsightType
+    from friday.insight.models import InsightType
     triggered = {InsightType.REUSE, InsightType.OPPORTUNITY, InsightType.RISK,
                  InsightType.CONVERGENCE, InsightType.DIVERGENCE, InsightType.DEBT,
                  InsightType.BLIND_SPOT, InsightType.RECOMMENDATION,
@@ -381,7 +415,8 @@ def test_confidence_never_guessed_from_empty():
     assert aggregate_confidence([], []) == InsightConfidence.WEAK
 
 
-def test_cross_project_reinforcement_wired(db):
+def test_cross_project_reinforcement_wired(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     # Two understandings citing knowledge from DIFFERENT repos must score higher
     # (via cross-project multiplier) than the same two understandings in one repo.
     ka = _k(db, "auth", "auth in a", "recurring_pattern", "medium", ["repo:a"])
@@ -409,8 +444,9 @@ def _seeded_reuse(db):
     return InsightEngine(db)
 
 
-def test_history_append_only(db):
-    from src.friday.db import insight_history_for
+def test_history_append_only(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
+    from friday.db import insight_history_for
     eng = _seeded_reuse(db)
     eng.build()
     i = eng.active_insights()[0]
@@ -420,7 +456,8 @@ def test_history_append_only(db):
     assert after >= before
 
 
-def test_evolution_events_emitted(db):
+def test_evolution_events_emitted(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     eng = _seeded_reuse(db)
     eng.build()
     assert len(eng.evolution()) >= 1
@@ -439,7 +476,8 @@ def test_append_only_no_row_explosion(db):
 # idempotency / out-of-order
 # --------------------------------------------------------------------------
 
-def test_idempotent_rebuild(db):
+def test_idempotent_rebuild(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     eng = _seeded_reuse(db)
     r1 = eng.build()
     r2 = eng.build()
@@ -460,7 +498,8 @@ def test_out_of_order_timestamps(db):
 # ephemerality: insights retire when conditions vanish
 # --------------------------------------------------------------------------
 
-def test_ephemeral_retire_when_conditions_gone(db):
+def test_ephemeral_retire_when_conditions_gone(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     eng = _seeded_reuse(db)
     r1 = eng.build()
     assert r1.created >= 1
@@ -474,7 +513,8 @@ def test_ephemeral_retire_when_conditions_gone(db):
                for i in eng.all_insights())
 
 
-def test_ephemeral_reactivate_after_return(db):
+def test_ephemeral_reactivate_after_return(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     eng = _seeded_reuse(db)
     eng.build()
     for u in UnderstandingEngine(db).all_understanding():
@@ -498,7 +538,8 @@ def test_ephemeral_reactivate_after_return(db):
 # multi-project
 # --------------------------------------------------------------------------
 
-def test_multi_project_reuse(db):
+def test_multi_project_reuse(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     ka = _k(db, "auth", "auth in a", "recurring_pattern", "medium", ["repo:a"])
     kb = _k(db, "auth", "auth in b", "recurring_pattern", "medium", ["repo:b"])
     _u(db, "auth a", "Auth in a.", "engineering_habit", "medium", [ka])
@@ -513,8 +554,9 @@ def test_multi_project_reuse(db):
 # brain compatibility / no hallucination / valid citations
 # --------------------------------------------------------------------------
 
-def test_brain_compatibility_provider(db):
-    from src.friday.ask import _p_insight
+def test_brain_compatibility_provider(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
+    from friday.ask import _p_insight
     eng = _seeded_reuse(db)
     eng.build()
     ev = type("E", (), {"blocks": [], "raw": {}})()
@@ -523,7 +565,8 @@ def test_brain_compatibility_provider(db):
     assert ev.raw.get("insight_total", 0) >= 1
 
 
-def test_every_insight_cites_valid_ids(db):
+def test_every_insight_cites_valid_ids(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     eng = _seeded_reuse(db)
     eng.build()
     valid_u = {u.id for u in UnderstandingEngine(db).all_understanding()}
@@ -538,7 +581,8 @@ def test_every_insight_cites_valid_ids(db):
             assert kid in valid_k
 
 
-def test_no_duplicate_insights(db):
+def test_no_duplicate_insights(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     eng = _seeded_reuse(db)
     eng.build()
     eng.build()
@@ -546,7 +590,8 @@ def test_no_duplicate_insights(db):
     assert len(ids) == len(set(ids))
 
 
-def test_no_hallucination_semantic_titles(db):
+def test_no_hallucination_semantic_titles(db, monkeypatch):
+    _mock_llm_for_type(monkeypatch, 'engineering_reuse')
     eng = _seeded_reuse(db)
     eng.build()
     for i in eng.active_insights():
@@ -559,7 +604,7 @@ def test_no_direct_observation_access_in_rules():
     # entrypoint signature is (understanding, initiatives, knowledge); it must
     # not require observation/context inputs.
     import inspect
-    from src.friday.insight import derivation
+    from friday.insight import derivation
     sig = inspect.signature(derivation.detect)
     assert list(sig.parameters) == ["understanding", "initiatives", "knowledge"]
 

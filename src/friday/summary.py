@@ -553,14 +553,4 @@ def generate_summary(conn) -> str:
     rels = _stored_relationships(conn, views) or infer_relationships(views)
     obs = cross_project_observations(views, rels, today)
     text = render(views, rels, obs)
-    # Append deterministic insights (M2) below the existing observations.
-    try:
-        from .insights import generate_insights
-
-        extra = generate_insights(conn, today)
-        if extra:
-            block = "\n".join(f"• {i.text}" for i in extra)
-            text = text.rstrip() + "\n\nWorkspace insights\n\n" + block + "\n"
-    except Exception:
-        pass
     return text

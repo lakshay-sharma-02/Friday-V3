@@ -53,6 +53,15 @@ def _render_report(report, goal: str) -> int:
     )
 
     use_rich = _try_rich_import()
+    # Proportional UI: only the Mission Control renderer for multi-task or
+    # AI-involved goals; single deterministic tasks get a plain line.
+    if use_rich and len(report.tasks) <= 1:
+        from .runtime.executors import AI_EXECUTOR_IDS
+        has_ai = any(
+            (t.get("worker_id") or "").lower() in AI_EXECUTOR_IDS
+            for t in report.tasks)
+        if not has_ai:
+            use_rich = False
     if use_rich and report.duration_ms > 500:
         from rich.console import Console
         from rich.live import Live

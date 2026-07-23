@@ -251,8 +251,10 @@ def verify_creation_task(task, result, workspace: str = ".") -> VerificationResu
         return verify_task_artifacts(task, result, workspace)
     paths = expected_paths(task, workspace)
     if not paths:
-        # Creation task but planner named no file -> cannot evidence-check.
-        return VerificationResult(passed=True, reason="creation task, no named artifact")
+        return VerificationResult(
+            passed=False,
+            reason="creation task missing required artifact path from planner — planning bug, not worker failure"
+        )
     # Only the contracted path(s) satisfy a creation task. An unrelated artifact
     # (e.g. goodbye.py when hello.py was expected) is NOT sufficient.
     wanted = {Path(p).resolve() for p in paths}

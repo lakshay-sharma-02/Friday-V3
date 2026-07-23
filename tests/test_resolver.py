@@ -1268,3 +1268,93 @@ def test_engine_resolves_mechanical_task(tmp_path):
     resolver = CapabilityResolver(conn)
     r = resolver.resolve_graph("g1")
     assert r.results[0].worker_id == "worker:python"
+
+
+# ===================================================================
+# 37. AI-fallback routing (Task 2 regression)
+# ===================================================================
+
+def test_ai_fallback_when_no_deterministic_covers():
+    """select_assignment picks an AI worker when no deterministic worker
+    declares the required capabilities (judgment mode)."""
+    det = _make_worker("Shell", ["File Editing"], kind=WorkerKind.CLI,
+                       task_types=["infrastructure"], plan_types=["infrastructure"])
+    ai = _make_worker("Claude Code", ["Research", "Python"],
+                       kind=WorkerKind.AGENT, task_types=["analysis"],
+                       plan_types=["feature"])
+    # Judgment mode flips preference: AI executors get +50, deterministic get -40.
+    chosen, candidates, conf, matched, missing, reason, alts = \
+        select_assignment(
+            ["Research", "Python"], "analysis", "feature", [det, ai],
+            is_judgment=True)
+    assert chosen is not None, "should have selected a worker"
+    assert chosen.id == ai.id, \
+        f"expected AI fallback, got {chosen.id}: {reason}"
+    assert "Research" in matched
+    assert "Python" in matched
+
+
+def test_ai_fallback_no_deterministic_capability_coverage():
+    """When no deterministic worker satisfies the required capabilities,
+    select_assignment returns an AI executor even with is_judgment=False,
+    because the deterministic worker's missing-cap penalty outweighs its
+    determinism bonus."""
+    det = _make_worker("Shell", ["File Editing"], kind=WorkerKind.CLI,
+                       task_types=["infrastructure"], plan_types=["infrastructure"])
+    ai_claude = _make_worker("Claude Code", ["Research", "Python",
+                                              "Documentation"],
+                             kind=WorkerKind.AGENT, task_types=["analysis",
+                                                                "research"],
+                             plan_types=["feature"])
+    # det's penalties (P_MISSING_CAP*3=60, P_UNSUPPORTED_TASK=5, P_UNSUPPORTED_PLAN=3)
+    # exceed its deterministic bonus (+50). AI executor wins on net score.
+    chosen, candidates, conf, matched, missing, reason, alts = \
+        select_assignment(
+            ["Research", "Python", "Documentation"],
+            "analysis", "feature", [det, ai_claude],
+            is_judgment=False)
+    assert chosen is not None
+    assert chosen.id == ai_claude.id, \
+        f"expected AI fallback for uncovered caps, got {chosen.id}: {reason}"
+    assert "Python" in matched
+    assert "Research" in matched
+
+
+def test_ai_fallback_no_active_deterministic_workers():
+    """When the only deterministic workers are disabled/inactive,
+    select_assignment falls through to the AI executor."""
+    det = _make_worker("Python", ["Python", "Research"],
+                       kind=WorkerKind.FUNCTION, task_types=["analysis"],
+                       plan_types=["feature"], status="disabled")
+    ai = _make_worker("Claude Code", ["Python", "Research"],
+                       kind=WorkerKind.AGENT, task_types=["analysis"],
+                       plan_types=["feature"])
+    chosen, candidates, conf, matched, missing, reason, alts = \
+        select_assignment(
+            ["Python", "Research"], "analysis", "feature", [det, ai],
+            is_judgment=False)
+    assert chosen is not None
+    assert chosen.id == ai.id, \
+        f"expected AI fallback (det disabled), got {chosen.id}: {reason}"
+    assert "Python" in matched
+    assert "Research" in matched
+
+
+def test_ai_fallback_via_engine_resolve(tmp_path):
+    """CapabilityResolver routes to worker:claude when the graph's task
+    requires capabilities no builtin declares."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    reg.register_external()
+
+    _seed_graph(conn, "g-ai-fb", [{
+        "id": "t1", "title": "Research API design",
+        "task_type": "research", "required_capabilities": "research,python,architecture",
+        "plan_type": "feature", "sequence": 1, "complexity": "medium",
+        "priority": "medium", "estimated_effort": "medium",
+    }])
+
+    resolver = CapabilityResolver(conn)
+    r = resolver.resolve_graph("g-ai-fb")
+    assert r.results[0].worker_id == "worker:claude"
+    conn.close()

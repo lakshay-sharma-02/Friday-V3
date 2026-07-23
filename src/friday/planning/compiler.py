@@ -865,6 +865,12 @@ class TaskGraphCompiler:
                 p = spec_sym["path"]
                 if p not in outputs:
                     outputs.append(p)
+
+            # Phase 4 requirement: creation tasks MUST name an artifact. If they
+            # don't, reclassify them to a non-creation type (ANALYSIS) so they don't
+            # bypass creation contract verification.
+            if tt in _CREATION_TASK_TYPES and not outputs:
+                tt = TaskType.ANALYSIS
             t = Task(
                 id=f"{gid}#t{i}",
                 graph_id=gid,

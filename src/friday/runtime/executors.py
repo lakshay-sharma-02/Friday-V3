@@ -1024,11 +1024,12 @@ class ClaudeCodeWorker(CLIExecutor):
         try:
             obj = _json.loads(text)
         except (ValueError, TypeError):
-            # Not JSON: fall back to the generic "exit 0 + non-empty stdout".
+            # Phase 4 requirement: hard-fail on non-JSON instead of silently degrading.
+            sample = text[:200]
             return VerificationResult(
-                passed=bool(text),
-                reason=("exit 0 and non-empty stdout (non-JSON output)"
-                        if text else "exit 0 but empty stdout"))
+                passed=False,
+                reason=f"unexpected output format from claude CLI — expected JSON, got: {sample}"
+            )
         if isinstance(obj, dict) and obj.get("is_error"):
             msg = obj.get("result") or obj.get("subtype") or "claude reported error"
             return VerificationResult(passed=False, reason=f"claude is_error: {msg}")

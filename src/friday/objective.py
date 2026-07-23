@@ -786,8 +786,6 @@ def evidence_lessons(conn, today: dt.date) -> tuple[list[str], dict]:
     (the same problem solved twice) + converging tech trends. Distinct from
     THEMES (purpose) and INSIGHTS (surprising facts).
     """
-    from .insights import _engineering_insights
-
     blocks: list[str] = []
     lessons: list[str] = []
     rels = _get_all_relationships(conn)
@@ -808,9 +806,11 @@ def evidence_lessons(conn, today: dt.date) -> tuple[list[str], dict]:
                     f"You keep solving the same class of problem: {an} and {bn} "
                     f"repeat it ({rel.evidence}). The lesson is to extract it "
                     f"once rather than rebuild it per project.")
-    eng = [i.text for i in _engineering_insights(conn, today)]
-    if eng:
-        lessons.append("Patterns the evidence keeps surfacing: " + " ".join(eng))
+    from .insight import InsightEngine
+    eng_items = InsightEngine(conn).active_insights()
+    if eng_items:
+        for ins in eng_items:
+            lessons.append(f"Patterns the evidence keeps surfacing: [{ins.confidence.value}] {ins.title}: {ins.statement}")
     if lessons:
         blocks.append("Engineering lessons that keep repeating:")
         blocks.extend(f"- {l}" for l in lessons)
@@ -1026,16 +1026,17 @@ def evidence_surprise(conn, today: dt.date) -> tuple[list[str], dict]:
     Mirrors INSIGHTS but explicitly excludes the obvious factual lines; this is
     the 'surprise me' framing. Returns just the engineering-insight slice.
     """
-    from .insights import _engineering_insights
-    eng = [i.text for i in _engineering_insights(conn, today)]
-    if eng:
+    from .insight import InsightEngine
+    eng_items = InsightEngine(conn).active_insights()
+    if eng_items:
         blocks = ["Things about your engineering portfolio that are not obvious:"]
-        blocks.extend(f"- {e}" for e in eng)
+        for ins in eng_items:
+            blocks.append(f"- [{ins.confidence.value}] {ins.title}: {ins.statement}")
     else:
         blocks = ["Nothing non-obvious jumps out yet — no repeated solution, "
                   "converging trend, or commercial shift is recorded. Keep "
                   "ingesting and I'll surface surprises as they appear."]
-    return blocks, {"surprise": eng}
+    return blocks, {"surprise": [ins.statement for ins in eng_items]}
 
 
 def evidence_strategy(conn, today, axis: str) -> tuple[list[str], dict]:

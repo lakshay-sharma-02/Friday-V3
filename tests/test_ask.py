@@ -116,3 +116,54 @@ def test_inactive_empty_is_honest(conn):
     assert not ans.used_llm
     assert "Vivaha" in ans.text
     assert "Aether" not in ans.text.split("Vivaha")[0] or "Aether" in ans.text
+
+
+# --- Task 3 regression tests: general_reasoning + LLM gate ------------------
+
+
+def test_workspace_with_evidence_still_grounded(conn):
+    """(a) A workspace question with real evidence must produce an evidence-backed
+    answer, not fall through to 'not enough evidence'."""
+    ans = ask("Which projects use Rust?", conn, verbose=False)
+    assert "Aether" in ans.text
+    assert "enough evidence" not in ans.text.lower()
+
+
+def test_workspace_no_evidence_is_honest(conn):
+    """(b) A workspace question with NO matching evidence must get the honest
+    'not enough evidence' response, NOT an LLM guess from general knowledge."""
+    ans = ask("Which projects use Cobol?", conn, verbose=False)
+    assert "enough evidence" in ans.text.lower() or "don't" in ans.text.lower()
+
+
+def test_general_reasoning_offline_no_evidence(conn):
+    """(c) A general-reasoning question with zero workspace context gets an
+    answer in the deterministic path — clearly labeled, not claiming evidence."""
+    ans = ask("what is 2+2", conn, verbose=False)
+    # Without an LLM, the deterministic general_reasoning path says it can't
+    # answer workspace-unrelated questions. That's correct — the answer should
+    # acknowledge the question isn't about workspace evidence.
+    if ans.used_llm:
+        assert "[General reasoning" in ans.text or "general" in ans.text
+    else:
+        # Deterministic fallback for general_reasoning: provide graceful message
+        assert ans.text and "workspace" in ans.text.lower()
+
+
+def test_llm_gate_no_llm_group(conn):
+    """(d) When no FRIDAY_ANSWER_LLM is set but an LLM IS configured, synthesis
+    should NOT be blocked — the default is opt-in, not opt-out.
+
+    This test cannot set FRIDAY_LLM_MODEL because the fixture explicitly clears
+    it. We verify the code path by checking os.environ is NOT consulted for
+    FRIDAY_ANSWER_LLM at all: if the old opt-IN check is still in effect,
+    synthesis would be skipped even with an LLM configured."""
+    gate_in_source = False
+    with open(ask_mod.__file__) as f:
+        for line in f:
+            if 'os.environ.get("FRIDAY_ANSWER_LLM"' in line:
+                gate_in_source = True
+    assert not gate_in_source, (
+        "FRIDAY_ANSWER_LLM still referenced in ask.py — fix gate to "
+        "FRIDAY_DETERMINISTIC_ONLY"
+    )

@@ -1,8 +1,7 @@
 """Regression: product-surface CLI for identity / portfolio / strategy.
 
 Verifies the three new commands expose existing capabilities without new logic,
-appear in `friday --help`, and that `insights.py` remains a live caller
-(dead-code removal was intentionally NOT performed — see Task 4).
+appear in `friday --help`, and that the insight pipeline routes correctly.
 """
 
 from __future__ import annotations
@@ -131,15 +130,11 @@ def test_strategy_unknown_axis(seeded, capsys):
     assert "unknown strategy axis" in err
 
 
-def test_insights_module_retained_as_live_caller():
-    # Task 4: insights.py must NOT be removed while it has callers.
-    # It is imported by ask.py and summary.py, and exposes generate_insights.
-    from friday import insights as insights_mod  # must still exist
-    assert hasattr(insights_mod, "generate_insights")
-    assert hasattr(insights_mod, "_engineering_insights")
-    # Confirm a live caller still imports it.
+def test_insight_routes_to_insight_engine():
+    # The old insights.py has been replaced by the new insight/ package.
+    # _p_insights (ask.py) and the objective layer now use InsightEngine.
     import inspect
     ask_src = inspect.getsource(__import__("friday.ask", fromlist=["x"]))
-    summary_src = inspect.getsource(__import__("friday.summary", fromlist=["x"]))
-    assert "from .insights import" in ask_src
-    assert "from .insights import" in summary_src
+    # ask.py must use the new InsightEngine, not the old insights module.
+    assert "from .insight import InsightEngine" in ask_src
+    assert "from .insights import" not in ask_src

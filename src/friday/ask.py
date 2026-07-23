@@ -151,7 +151,7 @@ _NEED_TYPES = (
     "engineering-profile", "impact", "platform", "learning", "opportunity",
     "priority", "converge", "merge", "compare", "describe", "inactive",
     "newest", "recommend", "by-tech", "insights", "chitchat", "general",
-    "similarity", "theme-repeat", "lessons", "habits", "assumptions", "drift",
+    "general_reasoning", "similarity", "theme-repeat", "lessons", "habits", "assumptions", "drift",
     "surprise", "evolve", "direction", "blockers", "knowledge", "understanding",
     "initiative", "insight",
 )
@@ -832,17 +832,22 @@ def _p_similarity(req, conn, ev, today):
 
 @_provider("insights")
 def _p_insights(req, conn, ev, today):
-    from .insights import _engineering_insights
+    from .insight import InsightEngine
 
-    eng = _engineering_insights(conn, today)
-    if eng:
-        ev.blocks = [i.text for i in eng]
+    eng = InsightEngine(conn)
+    items = eng.active_insights()
+
+    if items:
+        ev.blocks = [
+            f"- [{i.confidence.value}] {i.title}: {i.statement}"
+            for i in items
+        ]
     else:
         ev.blocks = [
             "I don't see anything non-obvious in your workspace yet — no "
             "repeated solutions, emerging trends, or effort shifts are "
-            "evident from the stored evidence. Keep ingesting and I'll "
-            "surface them as they appear."
+            "evident from the stored evidence. Keep building understanding "
+            "and I'll surface them as they appear."
         ]
     ev.raw["insights"] = ev.blocks
     return
@@ -931,6 +936,17 @@ def _p_understanding(req, conn, ev, today):
 
     eng = UnderstandingEngine(conn)
     items = eng.all_understanding()
+
+    # Filter to only the most recent build — stale rows from old code
+    # (e.g. project_divergence, template-era boilerplate) have older
+    # build_at values and must not leak into chat answers.
+    if items:
+        latest_build = max(u.build_at for u in items)
+        filtered = [u for u in items if u.build_at == latest_build]
+        if len(filtered) != len(items):
+            items = filtered
+        # Also exclude retired understanding — no longer relevant.
+        items = [u for u in items if u.status.value != "retired"]
 
     blocks: list[str] = []
     if not items:
@@ -1231,6 +1247,9 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
     ev.raw["objective_reason"] = decision.reason
 
     if "chitchat" in decision.needs:
+        return ev
+
+    if "general_reasoning" in decision.needs:
         return ev
 
     providers = _select_providers_for_decision(decision)
@@ -1692,6 +1711,16 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
 
     if any(w in qlow for w in ("hello", "hi ", "hey", "thanks", "thank you", "who are you")):
         return mk(needs=("chitchat",))
+    # General-reasoning questions that need NO workspace evidence: math, logic,
+    # programming advice, language trivia — anything the LLM can answer without
+    # the workspace knowledge base. Any named project mention = not this.
+    _general_markers = ("what is ", "what's ", "how do i ", "how does ",
+                        "explain ", "define ", "difference between ", "should i ",
+                        "what does ", "why does ", "is it ", "can i ")
+    if not any(t in qlow for t in techs) and any(qlow.startswith(m) for m in _general_markers):
+        ws_names = {r.name.lower() for r in q.all_repositories(conn) if r.id is not None}
+        if not any(n in qlow for n in ws_names):
+            return mk(scope="repo", needs=("general_reasoning",), subjects=[])
     if "compare" in qlow or " vs " in qlow or " versus " in qlow or "difference" in qlow:
         return mk(scope="compare", subjects=_resolve_subjects(question, conn),
                   operation="compare", needs=("compare",))
@@ -1959,6 +1988,8 @@ def _label_of(req: RetrievalRequirements) -> str:
     n = set(req.needs)
     if "chitchat" in n:
         return "chitchat"
+    if "general_reasoning" in n:
+        return "general_reasoning"
     if "compare" in n:
         return "compare"
     if "relationships" in n:
@@ -2307,6 +2338,19 @@ def _synthesize(question: str, ev: Evidence, prev: Optional["Exchange"] = None,
     evidence_str = "\n".join(ev.blocks) if ev.blocks else json.dumps(ev.raw, indent=2)
     if not evidence_str.strip():
         evidence_str = "(no retrieved evidence)"
+
+    is_general_reasoning = "general_reasoning" in ev.requirements.needs
+    if is_general_reasoning:
+        # General-reasoning mode: no workspace evidence expected. Answer from
+        # general knowledge but tag the answer clearly so the user doesn't
+        # mistake it for evidence-grounded workspace insight.
+        _tag = (
+            "\nNote: this question does not involve your workspace evidence.\n"
+            "Answer from general knowledge, then add: "
+            "\"[General reasoning — not grounded in workspace evidence.]\""
+            "Do NOT claim workspace evidence you do not have."
+        )
+        evidence_str += _tag
     ctx = ""
     if prev is not None:
         ctx = (
@@ -2337,6 +2381,10 @@ def _deterministic_answer(question: str, ev: Evidence, label: str,
         return ("I'm Friday, your workspace operating partner. Ask me about your "
                 "projects — which use a technology, what a project is for, how two "
                 "repos relate, or which look abandoned.")
+    if label == "general_reasoning":
+        return ("I don't have workspace evidence for that question, so I can't "
+                "answer it from your projects. Try asking about your repositories, "
+                "technologies, or engineering work — that's what I know.")
     if not ev.blocks:
         return ("I don't have enough evidence to answer that. Try rephrasing, or set "
                 "FRIDAY_LLM_MODEL to let me handle open-ended questions.")
@@ -2599,7 +2647,7 @@ def _answer_followup(question: str, prev: "Exchange", conn) -> "Answer":
         meta_instruction = (
             "Answer this follow-up using ONLY the previous Evidence.")
 
-    if llm_enabled() and os.environ.get("FRIDAY_ANSWER_LLM") == "1":
+    if llm_enabled() and os.environ.get("FRIDAY_DETERMINISTIC_ONLY") != "1":
         decision = obj_mod.ObjectiveDecision(
             objective=ev.raw.get("objective", "general"),
             needs=list(ev.requirements.needs),
@@ -2674,12 +2722,17 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
 
     if llm_enabled():
         req = understand(question, conn)
+        # When the LLM understanding path fails (returns None), fall through
+        # to the offline heuristic rather than hard-failing. The offline
+        # heuristics handle general-reasoning, chitchat, and common workspace
+        # question shapes that the LLM's JSON output parser may reject.
+        if req is None:
+            req = requirements_from_question(question, conn)
     else:
         req = requirements_from_question(question, conn)
 
     if req is None:
-        # Could not confidently determine the question (LLM unavailable or it
-        # returned "Unknown" / an invalid label). Honest, extremely-rare case.
+        # Could not confidently determine the question. Honest, rare case.
         return Answer(
             text=("I couldn't confidently determine what you are asking. "
                   "Try rephrasing, or set FRIDAY_LLM_MODEL so I can interpret "
@@ -2701,7 +2754,10 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
     used_llm = False
     if "chitchat" in ev.requirements.needs:
         text = _deterministic_answer(question, ev, "chitchat", decision)
-    elif llm_enabled() and os.environ.get("FRIDAY_ANSWER_LLM") == "1":
+    elif "general_reasoning" in ev.requirements.needs:
+        text = _synthesize(question, ev, prev=prev, decision=decision)
+        used_llm = text is not None
+    elif llm_enabled() and os.environ.get("FRIDAY_DETERMINISTIC_ONLY") != "1":
         text = _synthesize(question, ev, prev=prev, decision=decision)
         used_llm = text is not None
     if text is None:

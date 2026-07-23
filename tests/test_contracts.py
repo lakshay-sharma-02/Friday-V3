@@ -304,11 +304,13 @@ def test_claude_verify_accepts_clean_json(tmp_path):
     assert vres.passed is True
 
 
-def test_claude_verify_fallback_non_json(tmp_path):
-    """Non-JSON output degrades to the exit-code rule (no crash)."""
+def test_claude_verify_hard_fails_non_json(tmp_path):
+    """Phase 4: Non-JSON output from Claude hard-fails instead of degrading."""
     worker = ClaudeCodeWorker()
-    vres = worker.verify(None, ExecutionResult(success=True, stdout="some text"))
-    assert vres.passed is True
+    vres = worker.verify(None, ExecutionResult(success=True, stdout="some arbitrary text"))
+    assert vres.passed is False
+    assert "unexpected output format from claude CLI" in vres.reason
+    assert "some arbitrary text" in vres.reason
 
 
 def test_claude_real_integration(tmp_path):
@@ -351,3 +353,31 @@ def test_claude_real_integration(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+def test_creation_task_without_artifact_fails(tmp_path):
+    from friday.planning.compiler import Task, TaskType
+    from friday.runtime.models import ExecutionResult
+    from friday.runtime.verification import verify_creation_task
+
+    # Create a task classified as a creation task (e.g. IMPLEMENTATION) but with NO expected outputs
+    task = Task(
+        id="t1", graph_id="g1", plan_id="p1", milestone_order=1,
+        title="Bad creation task", description="No file named",
+        task_type=TaskType.IMPLEMENTATION,
+        outputs=[],
+        required_capabilities=[],
+        complexity="medium",
+        priority="medium",
+        estimated_effort="low",
+        dependencies=[],
+        inputs=[],
+        acceptance_criteria=[],
+        verification=[],
+        rollback=[],
+        evidence=[],
+    )
+    result = ExecutionResult(success=True, artifacts=[], stdout="I did it")
+
+    v_result = verify_creation_task(task, result, str(tmp_path))
+    assert v_result.passed is False
+    assert "missing required artifact path" in v_result.reason

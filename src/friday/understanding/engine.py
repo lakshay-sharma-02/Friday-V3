@@ -30,6 +30,7 @@ from ..db import (
     update_understanding_status,
 )
 from ..knowledge.store import get_all_knowledge
+from ..services.llm import _enabled as llm_enabled
 from .confidence import (
     Contributor,
     aggregate_confidence,
@@ -54,6 +55,7 @@ class UnderstandingBuildResult:
     stable: int
     candidates: int
     events: int = 0
+    note: str = ""
 
     def to_text(self) -> str:
         lines = [
@@ -67,8 +69,11 @@ class UnderstandingBuildResult:
             f"Candidates: {self.candidates}",
             f"Evolution events: {self.events}",
             "",
-            "Done.",
         ]
+        if self.note:
+            lines.insert(2, f"Note: {self.note}")
+            lines.insert(3, "")
+        lines.append("Done.")
         return "\n".join(lines) + "\n"
 
 
@@ -100,6 +105,11 @@ class UnderstandingEngine:
 
         candidates = detect(knowledge, evo_events)
         merged = self._merge_candidates(candidates)
+
+        # When no LLM is configured and there's knowledge, note it.
+        no_per_subject = False
+        if knowledge and not llm_enabled():
+            no_per_subject = True
 
         # Normalize to Understanding dataclasses so .status/.confidence are enums
         # (the db rows carry plain strings).
@@ -173,6 +183,8 @@ class UnderstandingEngine:
         candidates_n = sum(1 for u in all_u if u.status == UnderstandingStatus.CANDIDATE)
         stable_n = sum(1 for u in all_u if u.status == UnderstandingStatus.STABLE)
 
+        note = "Per-subject understanding requires an LLM — none configured." if no_per_subject else ""
+
         return UnderstandingBuildResult(
             total=len(all_u),
             created=created,
@@ -181,6 +193,7 @@ class UnderstandingEngine:
             stable=stable_n,
             candidates=candidates_n,
             events=n_events,
+            note=note,
         )
 
     # --- READ (never mutate) --------------------------------------------------
