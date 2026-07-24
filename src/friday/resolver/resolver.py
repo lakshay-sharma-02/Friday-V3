@@ -140,12 +140,18 @@ def score_worker(
     intent: str = "",
     expected_artifacts: Optional[List[str]] = None,
     is_judgment: bool = False,
+    capability_reliability: Optional[dict] = None,
 ) -> Tuple[ScoreBreakdown, List[str], List[str]]:
     """Score one (task, worker) pair.
 
     Returns (breakdown, matched_caps, missing_caps). Missing mandatory
     capabilities are reported but the penalty is applied by the caller's
     rejection rule; the score still reflects the gap for explainability.
+
+    If `capability_reliability` is provided (dict mapping capability name
+    -> reliability ratio 0.0-1.0), the worker's score is adjusted downward
+    for capabilities it claims but has poor reliability on. This is a
+    conservative signal — it rank-adjusts but never auto-blocks.
 
     Capability matching is EXACT and case-insensitive: the task's required
     capabilities are canonicalized via the Worker Registry vocabulary (which
@@ -209,6 +215,19 @@ def score_worker(
 
     sb.confidence = _W_CONFIDENCE.get(worker.confidence, 0)
 
+    # Part C: capability_reliability signal. If this worker claims a capability
+    # that has poor reliability history, we add a small penalty to the score.
+    # This is a warning signal for rank-adjustment, not a hard block.
+    if capability_reliability:
+        for cap in matched:
+            cap_lower = cap.lower()
+            ratio = capability_reliability.get(cap_lower)
+            if ratio is not None and ratio < 0.5:
+                # Poor reliability: penalize proportionally to how bad it is.
+                # E.g., 20% reliability -> 0.8 * _W_RELIABILITY penalty.
+                sb.penalty += int((1.0 - ratio) * 10)
+                sb.confidence -= 1  # reduce confidence for unreliable caps
+
     # Separately record determinism preference (not a penalty on the base
     # score, so it does not distort the capability explanation).
     if missing:
@@ -262,6 +281,7 @@ def rank_workers(
     successful_history: Optional[dict] = None,
     expected_artifacts: Optional[List[str]] = None,
     is_judgment: bool = False,
+    capability_reliability: Optional[dict] = None,
 ) -> List[Tuple[Worker, ScoreBreakdown, List[str], List[str], str]]:
     """Score + rank workers for a task, deterministically.
 
@@ -276,6 +296,10 @@ def rank_workers(
       4) estimated cost,
       5) alphabetical worker id.
 
+    `capability_reliability` maps lowercase capability name -> success ratio
+    (0.0-1.0). When present, workers with poor reliability on matched
+    capabilities are penalized in ranking but never auto-blocked.
+
     Returns a list of (worker, score, matched, missing, confidence) sorted
     best-first. Empty only when there are no active workers at all.
     """
@@ -285,7 +309,8 @@ def rank_workers(
     for w in workers:
         sb, matched, missing = score_worker(
             task_required, task_type, plan_type, w, intent=intent,
-            expected_artifacts=expected_artifacts, is_judgment=is_judgment)
+            expected_artifacts=expected_artifacts, is_judgment=is_judgment,
+            capability_reliability=capability_reliability)
         # Disabled workers can never run — exclude. Missing caps are NOT fatal;
         # the penalty already pushes them below capable workers.
         if w.status != "active":
@@ -325,6 +350,7 @@ def select_assignment(
     successful_history: Optional[dict] = None,
     expected_artifacts: Optional[List[str]] = None,
     is_judgment: bool = False,
+    capability_reliability: Optional[dict] = None,
 ) -> Tuple[Optional[Worker], List[Worker], str, List[str], List[str], str, List[dict]]:
     """Pick the assignment for a task.
 
@@ -334,10 +360,15 @@ def select_assignment(
 
     `chosen_worker` is None and `missing` is populated when no worker satisfied
     mandatory capabilities (UNRESOLVED). Workers are NEVER invented.
+
+    `capability_reliability` maps lowercase capability name -> success ratio
+    (0.0-1.0). When present, workers with poor reliability on matched
+    capabilities are penalized but never auto-blocked.
     """
     ranked = rank_workers(
         task_required, task_type, plan_type, workers, successful_history,
-        expected_artifacts=expected_artifacts, is_judgment=is_judgment)
+        expected_artifacts=expected_artifacts, is_judgment=is_judgment,
+        capability_reliability=capability_reliability)
 
     if not ranked:
         return (None, [], "low", [], list(task_required),

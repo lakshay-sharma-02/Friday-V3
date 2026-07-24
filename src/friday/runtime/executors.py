@@ -973,10 +973,44 @@ def _resolve_binary(name: str) -> str:
 
 class ClaudeCodeWorker(CLIExecutor):
     worker_id = "worker:claude"
+
+    @staticmethod
+    def _dependency_context(task) -> str:
+        """Build a compact dependency context block for the prompt.
+
+        Reads task.dependency_summaries (populated by the wave executor
+        after each wave completes). Returns empty string when there are
+        no completed dependencies.
+        """
+        summaries = getattr(task, "dependency_summaries", None) or {}
+        if not summaries:
+            return ""
+        lines = ["\n--- Upstream task outputs (completed dependencies) ---"]
+        for dep_id, summary in summaries.items():
+            lines.append(f"  [{dep_id}] {summary}")
+        lines.append("--- End upstream outputs ---\n")
+        return "\n".join(lines)
+
     def build_invocation(self, task):
         # Compose a real prompt from task fields (claude --print requires a
         # non-empty prompt; runtime_payload is usually empty for plan tasks).
         title = getattr(task, "title", "") or "Task"
+        desc = getattr(task, "description", "") or ""
+        acs = getattr(task, "acceptance_criteria", []) or []
+        lines = [f"# {title}", ""]
+        if desc:
+            lines.append(desc)
+            lines.append("")
+        if acs:
+            lines.append("## Acceptance criteria")
+            for a in acs:
+                lines.append(f"- {a}")
+            lines.append("")
+        # Inject dependency summaries if available.
+        dep_ctx = self._dependency_context(task)
+        if dep_ctx:
+            lines.append(dep_ctx)
+        prompt = "\n".join(lines).rstrip() + "\n"
         desc = getattr(task, "description", "") or ""
         acs = getattr(task, "acceptance_criteria", []) or []
         lines = [f"# {title}", ""]

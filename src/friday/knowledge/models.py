@@ -35,6 +35,8 @@ class KnowledgeType(str, Enum):
     PROJECT_STACK = "project_stack"
     PORTFOLIO_TECHNOLOGY = "portfolio_technology"
     PORTFOLIO_INTEGRATION = "portfolio_integration"
+    CAPABILITY_RELIABILITY = "capability_reliability"
+    EXECUTION_BOTTLENECK = "execution_bottleneck"
 
     @classmethod
     def from_str(cls, s: str) -> "KnowledgeType":

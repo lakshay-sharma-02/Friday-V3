@@ -52,6 +52,7 @@ from .cli_runtime import (
 from .cli_capability import cmd_capability
 from .cli_watch import cmd_watch
 from .cli_suggest import cmd_suggest
+from .cli_repair import cmd_repair
 from .context import ContextEngine
 from .db import connect
 from .doctor import cmd_doctor
@@ -781,6 +782,20 @@ def main(argv: list[str] | None = None) -> int:
         "--graph", default=None,
         help="Generate a Task Graph from a suggestion by its id (run `friday suggest` to see ids).")
     p_suggest.set_defaults(func=cmd_suggest)
+
+    p_repair = sub.add_parser(
+        "repair",
+        help="Detect and propose repairs for failed task executions (Law 16).")
+    p_repair.add_argument(
+        "action", nargs="?", default="pending",
+        choices=["pending", "approve", "reject"],
+        help="'pending' (default), 'approve <id>', or 'reject <id>'.",
+    )
+    p_repair.add_argument(
+        "rest", nargs="*",
+        help="Proposal ID for approve/reject/pending detail.",
+    )
+    p_repair.set_defaults(func=cmd_repair)
 
     p_doctor = sub.add_parser(
         "doctor", help="Check system health (DB, deps, workers, README, watch).")

@@ -31,6 +31,7 @@ from .patterns import (
     detect_repeated_usage,
 )
 from .relationships import detect_project_evolution, detect_relationships
+from .execution import detect_capability_reliability, detect_repair_bottlenecks
 from .static import detect_static_knowledge
 from .store import get_all_knowledge, insert_knowledge
 from .trends import detect_trends
@@ -110,6 +111,10 @@ class KnowledgeEngine:
 
         # Habits
         new_knowledge.extend(detect_habits(sessions))
+
+        # Execution knowledge (Law 17 — Learning from runtime observations)
+        new_knowledge.extend(detect_capability_reliability(observations))
+        new_knowledge.extend(detect_repair_bottlenecks(observations))
 
         # Relationships
         new_knowledge.extend(detect_relationships(sessions))

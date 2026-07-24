@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
+
+from .models import ExecutionResult
 
 from ..db import now_iso
 from .dispatcher import dispatch
@@ -36,6 +38,49 @@ from .state import (
     mark_cancelled,
     next_state_for_result,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Part B — task-to-task dependency summaries.
+# ---------------------------------------------------------------------------
+
+
+def _build_dependency_summaries(
+    completed: List[tuple[RuntimeTask, ExecutionResult]],
+) -> Dict[str, str]:
+    """Build a dict of task_id -> compact summary for completed tasks.
+
+    Each summary is a few lines: the task's title plus a snippet of stdout
+    (first 200 chars) or an error description. Empty if nothing useful.
+    """
+    summaries: Dict[str, str] = {}
+    for task, result in completed:
+        title = getattr(task, "title", "") or task.task_id
+        if result.success:
+            stdout = (result.stdout or "").strip()
+            snippet = stdout[:200].replace("\n", " | ")
+            if snippet:
+                summaries[task.task_id] = f"{title}: {snippet}"
+            else:
+                summaries[task.task_id] = f"{title}: completed successfully"
+        else:
+            err = (result.error or result.stderr or "failed").strip()[:200]
+            summaries[task.task_id] = f"{title}: FAILED — {err}"
+    return summaries
+
+
+def _update_dependency_summaries(
+    pending_tasks: List[RuntimeTask],
+    completed_summaries: Dict[str, str],
+    by_id: Dict[str, RuntimeTask],
+) -> None:
+    """For each pending task, copy summaries of its completed dependencies
+    into its dependency_summaries field."""
+    for task in pending_tasks:
+        for dep_id in task.dependencies:
+            summary = completed_summaries.get(dep_id)
+            if summary:
+                task.dependency_summaries[dep_id] = summary
 
 
 # A callback the engine supplies to persist a task-state change.
@@ -182,6 +227,21 @@ def execute_schedule(
                     attempt=last_attempt, exit_code=result.exit_code,
                     error=result.error, stdout=result.stdout, stderr=result.stderr,
                     artifacts=result.artifacts, duration_ms=result.duration_ms)
+
+        # --- Part B: Build dependency summaries for the next wave. ---
+        completed_summaries = _build_dependency_summaries(
+            [(task, result) for task, started, result, state, last_attempt in outcomes
+             if result is not None]
+        )
+        # Update pending tasks in subsequent waves with dependency summaries.
+        for next_wave_num in wave_nums:
+            if next_wave_num <= wave:
+                continue
+            next_wave_tasks = [
+                t for t in waves[next_wave_num]
+                if states[t.task_id] == RunState.PENDING
+            ]
+            _update_dependency_summaries(next_wave_tasks, completed_summaries, by_id)
 
         # Propagate BLOCKING failures: cancel all transitive descendants.
         # NON-blocking failures (e.g. a formatter/linter) let the mission

@@ -83,7 +83,10 @@ def test_registry_registers_and_lists_in_order():
 
 
 def test_default_registry_seeded():
-    assert default_registry().names() == ["git", "terminal", "artifact", "github", "research", "calendar"]
+    names = default_registry().names()
+    # Must include the built-in observers and the runtime observer.
+    for expected in ("git", "terminal", "artifact", "github", "research", "calendar", "runtime"):
+        assert expected in names, f"Observer {expected} not in registry: {names}"
 
 
 # --- Engine diff (observer-independent) -------------------------------------

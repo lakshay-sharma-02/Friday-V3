@@ -232,6 +232,18 @@ def _run_once(args: argparse.Namespace) -> int:
             # Check for high-confidence initiatives worth surfacing.
             new_pending = _harvest_initiatives(conn, history_id)
 
+            # Check for failed runtime sessions that need repair attention.
+            # Best-effort: failure to detect candidates does not fail the cycle.
+            try:
+                from .repair import detect_repair_candidates, propose_repair
+                candidates = detect_repair_candidates(conn)
+                for c in candidates:
+                    propose_repair(conn, c)
+                if candidates and not args.quiet:
+                    print(f"[friday-watch] {len(candidates)} repair candidate(s) detected.")
+            except Exception:
+                pass
+
             # Write outcome.
             conn.execute(
                 "UPDATE watch_history SET finished_at=?, outcome=?, "

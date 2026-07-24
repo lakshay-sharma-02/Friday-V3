@@ -48,6 +48,7 @@ def default_registry() -> ObserverRegistry:
     from .git_observer import GitObserver
     from .github_observer import GitHubObserver
     from .research_observer import ResearchObserver
+    from .runtime_observer import RuntimeObserver
     from .terminal_observer import TerminalObserver
 
     reg = ObserverRegistry()
@@ -57,4 +58,5 @@ def default_registry() -> ObserverRegistry:
     reg.register(GitHubObserver())
     reg.register(ResearchObserver())
     reg.register(CalendarObserver())
+    reg.register(RuntimeObserver())
     return reg

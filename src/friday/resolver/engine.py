@@ -35,6 +35,8 @@ from ..worker.models import validate_capabilities
 from ..worker.genesis import propose_worker, reset_gap_tracking
 from ..planning import TaskGraphEngine
 from ..worker.engine import WorkerRegistry
+from ..knowledge.models import KnowledgeType
+from ..knowledge.store import get_knowledge_by_type
 from .models import (
     Assignment,
     ResolutionResult,
@@ -231,6 +233,29 @@ class CapabilityResolver:
         assignments: List[Assignment] = []
         resolved_at = now_iso()
 
+        # Part C: Query capability_reliability Knowledge for resolver ranking.
+        # Build a dict mapping lowercase capability name -> success ratio (0-1).
+        # Graceful degradation: no reliability data means current behavior.
+        capability_reliability: Dict[str, float] = {}
+        try:
+            rel_entries = get_knowledge_by_type(self.conn, KnowledgeType.CAPABILITY_RELIABILITY.value)
+            for k in rel_entries:
+                # Parse statement like "python capability: 3/4 successful executions (75%)."
+                stmt = k.statement or ""
+                subject = (k.subject or "").lower().strip()
+                try:
+                    import re
+                    match = re.search(r"(\d+)/(\d+)", stmt)
+                    if match:
+                        successes = int(match.group(1))
+                        total = int(match.group(2))
+                        if total > 0:
+                            capability_reliability[subject] = successes / total
+                except (ValueError, IndexError):
+                    pass
+        except Exception:
+            pass
+
         # Reset gap tracking at the start of each resolution run so each run
         # independently detects gaps (duplicate detection is per-run).
         reset_gap_tracking()
@@ -252,6 +277,7 @@ class CapabilityResolver:
                         successful_history=hist_counts,
                         expected_artifacts=list(task.outputs),
                         is_judgment=is_judgment,
+                        capability_reliability=capability_reliability or None,
                     )
 
                 # Emit CapabilityGapEvent when missing capabilities exist.

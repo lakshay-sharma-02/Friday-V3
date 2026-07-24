@@ -24,6 +24,7 @@ the existing template fallback is used.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -381,16 +382,156 @@ def _llm_milestones(goal: str, ev: Evidence) -> Optional[List[dict]]:
             "acceptance_criteria": ac if isinstance(ac, list) else [str(ac)],
             "parallel_next": bool(t.get("parallel_next", False)),
         })
+
+    # Verify the LLM output before trusting it. Build repo roots from
+    # available evidence (same as initiative path does).
+    repo_roots: Optional[List[str]] = None
+    try:
+        from ..db import connect, get_repositories
+        c = connect()
+        try:
+            repos = get_repositories(c)
+            if repos:
+                repo_roots = [r.path for r in repos if getattr(r, 'path', None)]
+        finally:
+            c.close()
+    except Exception:
+        pass
+
+    if not verify_llm_milestones(milestones, repo_roots=repo_roots):
+        return None
+
     return milestones
 
 
 # ---------------------------------------------------------------------------
-# 6c. Milestones — template per plan_type, evidence-tagged.
+# 6c. Milestone verification — shared between direct goal and initiative paths.
 # ---------------------------------------------------------------------------
 
-def _milestones(ptype: PlanType, ev: Evidence, init_ids, ins_ids, u_ids, k_ids) -> List[dict]:
+# Known software development file extensions. Broad enough to allow
+# legitimate new files but narrow enough to catch fabricated types.
+_KNOWN_EXTENSIONS: set = {
+    # Languages
+    '.py', '.pyi', '.pyx', '.pxd',
+    '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts',
+    '.rs', '.rlib',
+    '.go',
+    '.java', '.class', '.jar', '.kt', '.kts',
+    '.rb', '.erb', '.rake', '.gemspec',
+    '.c', '.h', '.cpp', '.hpp', '.cxx', '.hxx', '.cc', '.hh',
+    '.cs', '.fs', '.vb',
+    '.swift',
+    '.scala', '.sc',
+    '.ex', '.exs',
+    '.php', '.phtml',
+    '.r', '.rda',
+    '.lua',
+    '.pl', '.pm', '.t',
+    '.dart',
+    '.zig',
+    # Web / config
+    '.html', '.css', '.scss', '.sass', '.less', '.styl',
+    '.json', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.conf',
+    '.xml', '.xsl', '.xslt', '.xsd', '.dtd',
+    '.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp',
+    # Documentation
+    '.md', '.mdx', '.rst', '.txt', '.adoc', '.wiki',
+    # Scripts / shell
+    '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+    # Build / CI
+    '.gradle', '.groovy', '.mvn', '.cmake', '.make', '.mk',
+    '.dockerfile', '.containerfile',
+    # Database
+    '.sql', '.sqlite', '.db',
+    # Python packaging
+    '.toml', '.lock', '.whl', '.egg',
+    # Environment / secrets
+    '.env', '.envrc',
+}
+
+_KNOWN_COMMANDS = {
+    'python', 'python3', 'pip', 'pip3', 'poetry', 'conda',
+    'npm', 'npx', 'yarn', 'pnpm', 'bun',
+    'cargo', 'rustc', 'rustup',
+    'go', 'gofmt',
+    'docker', 'docker-compose', 'dockerfile',
+    'git',
+    'make', 'cmake', 'bazel', 'mvn', 'gradle', 'sbt',
+    'node', 'deno', 'tsc', 'esbuild', 'webpack', 'vite',
+    'pytest', 'nosetests', 'unittest',
+    'jest', 'mocha', 'vitest', 'cypress', 'playwright',
+    'cargo test',
+    'go test',
+    'rails', 'rake',
+    'curl', 'wget',
+    'kubectl', 'helm', 'terraform', 'ansible', 'pulumi',
+    'ssh', 'scp', 'rsync',
+    'cat', 'echo', 'ls', 'mkdir', 'mv', 'cp', 'rm', 'chmod', 'chown',
+    'grep', 'sed', 'awk', 'sort', 'uniq', 'wc', 'tee',
+    'sleep', 'timeout', 'date',
+}
+
+
+def verify_llm_milestones(
+    milestones: List[dict],
+    repo_roots: Optional[List[str]] = None,
+) -> bool:
+    """Verify each LLM-proposed milestone against real workspace evidence.
+
+    Checks:
+    1. File paths (symbolic.path) — the extension must be a known
+       software development file extension.
+    2. File existence — if repo roots are known, check that referenced
+       paths actually exist under at least one repo root (loud refusal
+       rather than silent hallucination).
+    3. Commands — must reference a known tool/language.
+
+    Returns True if the milestone list passes verification (or has no
+    specific claims to verify). Returns False if a milestone makes an
+    unverifiable claim, causing fallback to the template path.
+    """
+    for m in milestones:
+        sym = m.get('symbolic', {}) or {}
+        path = sym.get('path', '') or ''
+        command = sym.get('command', '') or ''
+
+        # Check 1: File path verification.
+        if path:
+            _, ext = os.path.splitext(path)
+            if ext and ext not in _KNOWN_EXTENSIONS:
+                if '/' in path and ext:
+                    return False
+            # Check 1b: File existence (when repo roots are known).
+            if repo_roots and '/' in path:
+                exists = any(
+                    os.path.isfile(os.path.join(rr, path))
+                    for rr in repo_roots
+                )
+                if not exists:
+                    return False
+
+        # Check 2: Command verification.
+        if command:
+            cmd_name = command.strip().split()[0].lower()
+            if cmd_name not in _KNOWN_COMMANDS:
+                return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 6d. Milestones — template per plan_type, evidence-tagged.
+# ---------------------------------------------------------------------------
+
+def _milestones(ptype: PlanType, ev: Evidence, init_ids, ins_ids, u_ids, k_ids,
+                goal_text: str = "") -> List[dict]:
     """Generate ordered milestones. Each carries a deterministic title and the
-    evidence kind it is grounded in (so workers know WHY a step exists)."""
+    evidence kind it is grounded in (so workers know WHY a step exists).
+
+    `goal_text` is the original goal string, used to gate Backend/Frontend
+    insertion on actual goal signals rather than always inserting them for
+    every FEATURE/INTEGRATION plan type.
+    """
     tok = "initiative" if init_ids else (
         "insight" if ins_ids else (
             "understanding" if u_ids else ("knowledge" if k_ids else "goal")))
@@ -408,8 +549,21 @@ def _milestones(ptype: PlanType, ev: Evidence, init_ids, ins_ids, u_ids, k_ids) 
         {"order": 6, "title": "Roll out & monitor", "detail":
          "Ship with rollback ready.", "evidence": "rollback"},
     ]
-    # Type-specific shaping (still deterministic).
-    if ptype == PlanType.FEATURE or ptype == PlanType.INTEGRATION:
+    # Gate for frontend/backend split: only inject Backend + Frontend
+    # milestones when the goal actually signals a web/fullstack intent.
+    # Check against the actual goal text passed in. Without this gate,
+    # every FEATURE/INTEGRATION plan unconditionally gets Backend/Frontend
+    # milestones even for goals like "Create a Python calculator" that
+    # have no UI split.
+    _g = goal_text.lower() if goal_text else ""
+    _has_split_signal = any(kw in _g for kw in (
+        "web", "ui", "frontend", "backend", "api", "server", "client",
+        "fullstack", "full-stack", "dashboard", "interface", "portal",
+        "app", "mobile", "screen", "page", "view", "component",
+        "rest", "graphql", "endpoint", "route",
+    ))
+
+    if (ptype == PlanType.FEATURE or ptype == PlanType.INTEGRATION) and _has_split_signal:
         base.insert(3, {"order": 3, "title": "Backend",
                         "detail": "Implement server-side logic.", "evidence": tok})
         base.insert(4, {"order": 4, "title": "Frontend",
@@ -655,7 +809,7 @@ def _generate_milestones(goal: str, ptype: PlanType, ev: Evidence,
     trivial = _trivial_milestones(goal)
     if trivial is not None:
         return trivial
-    return _milestones(ptype, ev, init_ids, ins_ids, u_ids, k_ids)
+    return _milestones(ptype, ev, init_ids, ins_ids, u_ids, k_ids, goal_text=goal)
 
 
 def plan(goal: str, ev: Evidence) -> Plan:

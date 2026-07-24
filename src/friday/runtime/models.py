@@ -306,6 +306,12 @@ class RuntimeTask:
     # Phase 3/4: symbolic engineering intent (op + target). The runtime
     # translates this into a concrete executor payload at execution time.
     symbolic: dict = field(default_factory=dict)
+    # Part B: Per-dependency summaries (task_id -> stdout snippet) populated
+    # by the wave executor after each wave completes. Empty before the first
+    # wave. Each summary is a compact (few-line) excerpt of what the upstream
+    # task produced, so downstream task prompts can reference real prior work
+    # instead of being blind to it.
+    dependency_summaries: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {

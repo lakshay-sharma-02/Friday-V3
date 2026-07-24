@@ -132,7 +132,7 @@ def _call(system: str, user: str) -> Optional[str]:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 raw = resp.read().decode("utf-8")
             result = _extract_content(raw)
             if result:

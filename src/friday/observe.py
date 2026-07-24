@@ -618,21 +618,28 @@ def refresh(conn, repos: Optional[list] = None,
         if rid is not None:
             ident_before[str(d.path)] = _identity_signature_for(conn, rid, str(d.path))
 
-    # `--changed`: only re-ingest repos whose current disk state differs from
-    # the prior baseline. Skips untouched repositories entirely.
-    if only_changed:
-        discovered = [
-            d for d in discovered
-            if baseline_sig.get(str(d.path)) is None
-            or baseline_sig.get(str(d.path)) != cur_sig[str(d.path)]
-        ]
+    # Always filter to only repos whose observable disk state actually differs
+    # from the prior baseline. Skips untouched repositories entirely so we never
+    # re-ingest (and re-call LLM for) repos that haven't changed.
+    discovered = [
+        d for d in discovered
+        if baseline_sig.get(str(d.path)) is None
+        or baseline_sig.get(str(d.path)) != cur_sig[str(d.path)]
+    ]
 
     # Record the current disk state for the next run's baseline.
     take_snapshot(conn)
 
     # Re-ingest (idempotent). Architecture/README/tech/quality + relationships.
+    # Graceful degradation: a slow/failing ingest (e.g. LLM timeout) must not
+    # abort the entire refresh — the pipeline continues with what it has.
     if discovered:
-        ingest_paths([d.path for d in discovered], conn)
+        try:
+            ingest_paths([d.path for d in discovered], conn)
+        except Exception as exc:
+            import sys
+            print(f"[observe] ingest skipped for {len(discovered)} repo(s): {exc}",
+                  file=sys.stderr)
 
     rows = get_repositories(conn)
     path_to_id = {r.path: r.id for r in rows if r.id is not None}

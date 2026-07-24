@@ -610,6 +610,26 @@ CREATE TABLE IF NOT EXISTS operator_preferences (
 );
 
 -- ===========================================================================
+-- M10.1 Observer Cursors (Law 18 — per-layer bookkeeping, NOT operator state)
+-- ===========================================================================
+
+-- Normalized per-observer set of already-observed session IDs. One row per
+-- (observer_name, session_id) composite PK. Used by RuntimeObserver to track
+-- which sessions have been observed without relying on timestamp watermarks
+-- (which have a clock-mismatch off-by-one). The cursor is mutable bookkeeping
+-- in the Observation layer (Law 18 compliant: separated from operator state).
+-- Append-only fact tables (observations, runtime_*) are never mutated by
+-- this cursor — it only points INTO them.
+-- Versioned per Law 24: schema_version = 1.
+CREATE TABLE IF NOT EXISTS observed_session_ids (
+    observer_name   TEXT NOT NULL,
+    session_id      TEXT NOT NULL,
+    observed_at     TEXT NOT NULL,
+    schema_version  TEXT NOT NULL DEFAULT '1',
+    PRIMARY KEY (observer_name, session_id)
+);
+
+-- ===========================================================================
 -- M9.3 Capability Resolver (dedicated tables; Worker Registry is NOT overloaded)
 -- ===========================================================================
 
@@ -859,7 +879,6 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_evolution_graph_id ON scheduler_evoluti
 -- Worker & proposal lookups
 CREATE INDEX IF NOT EXISTS idx_worker_history_worker_id ON worker_history(worker_id);
 CREATE INDEX IF NOT EXISTS idx_proposed_workers_status ON proposed_workers(status);
-
 -- Knowledge evolution FK lookups
 CREATE INDEX IF NOT EXISTS idx_knowledge_history_knowledge_id ON knowledge_history(knowledge_id);
 CREATE INDEX IF NOT EXISTS idx_evolution_events_knowledge_id ON evolution_events(knowledge_id);
@@ -1062,6 +1081,34 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "source" not in tg_cols:
         conn.execute(
             "ALTER TABLE task_graphs ADD COLUMN source TEXT")
+
+    # Phase 5: repair_proposals and repair_history tables (Law 16) + indexes.
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS repair_proposals (
+            id                  TEXT PRIMARY KEY,
+            original_graph_id   TEXT NOT NULL,
+            original_task_id    TEXT NOT NULL,
+            failure_reason      TEXT NOT NULL,
+            capability          TEXT NOT NULL DEFAULT '',
+            repair_depth        INTEGER NOT NULL DEFAULT 0,
+            decision            TEXT NOT NULL,
+            evidence_ids        TEXT NOT NULL DEFAULT '[]',
+            proposed_goal       TEXT NOT NULL,
+            status              TEXT NOT NULL DEFAULT 'pending',
+            created_at          TEXT NOT NULL,
+            reviewed_at         TEXT,
+            schema_version      TEXT NOT NULL DEFAULT '1'
+        );
+        CREATE TABLE IF NOT EXISTS repair_history (
+            proposal_id         TEXT NOT NULL REFERENCES repair_proposals(id) ON DELETE CASCADE,
+            event_type          TEXT NOT NULL,
+            detail              TEXT NOT NULL DEFAULT '',
+            recorded_at         TEXT NOT NULL,
+            PRIMARY KEY (proposal_id, recorded_at)
+        );
+        CREATE INDEX IF NOT EXISTS idx_repair_proposals_status ON repair_proposals(status);
+        CREATE INDEX IF NOT EXISTS idx_repair_history_proposal_id ON repair_history(proposal_id);
+    """)
 
     # Phase 4: watch_history table (created fresh each time).
     conn.executescript("""

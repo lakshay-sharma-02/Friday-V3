@@ -12,6 +12,10 @@ from .evolution import (
     history_timeline,
     weighted_evidence_score,
 )
+from .execution import (
+    detect_capability_reliability,
+    detect_repair_bottlenecks,
+)
 from .models import (
     Knowledge,
     KnowledgeConfidence,
@@ -64,6 +68,8 @@ __all__ = [
     "detect_relationships",
     "detect_project_evolution",
     "detect_static_knowledge",
+    "detect_capability_reliability",
+    "detect_repair_bottlenecks",
     "update_confidence",
     "verify_knowledge",
     "insert_knowledge",

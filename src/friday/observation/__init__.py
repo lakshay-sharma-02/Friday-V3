@@ -35,6 +35,7 @@ from .research_observer import (
     classify_research,
     topic_of,
 )
+from .runtime_observer import RuntimeObserver
 from .terminal_observer import TerminalObserver, categorize
 
 __all__ = [
@@ -55,6 +56,7 @@ __all__ = [
     "CalendarCategory",
     "Category",
     "ArtifactObserver",
+    "RuntimeObserver",
     "categorize",
     "classify_research",
     "topic_of",

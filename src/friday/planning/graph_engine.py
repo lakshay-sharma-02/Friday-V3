@@ -43,7 +43,7 @@ from .compiler import Task, TaskGraph, TaskType, _graph_id, compile_plan
 from .graph_schema import validate_task_graph
 from .engine import PlanEngine
 from .models import Plan, PlanType, now_iso
-from .derive import Evidence
+from .derive import Evidence, verify_llm_milestones
 from ..knowledge.store import get_all_knowledge
 from ..understanding import UnderstandingEngine
 import os
@@ -431,142 +431,11 @@ class TaskGraphEngine:
         repo_paths = [r.path for r in repos if getattr(r, 'path', None)]
 
         # Run the verification gate on LLM output.
-        verified = self._verify_llm_milestones(milestones, repo_roots=repo_paths)
+        verified = verify_llm_milestones(milestones, repo_roots=repo_paths)
         if not verified:
             # Verification failed — fall back to template path.
             return None
         return milestones
-
-    def _verify_llm_milestones(
-        self, milestones: List[dict],
-        repo_roots: Optional[list[str]] = None,
-    ) -> bool:
-        """Verify each LLM-proposed milestone against real workspace evidence.
-
-        Checks:
-        1. File paths (symbolic.path) — the extension must be a known
-           software development file extension.
-        2. File existence — if repo roots are known, check that referenced
-           paths actually exist under at least one repo root (loud refusal
-           rather than silent hallucination).
-        3. Commands — must reference a known tool/language.
-
-        The known-extensions list is deliberately broad (all common lang/tool
-        formats) so the gate catches obviously fabricated file types while
-        allowing legitimate new files in any standard language. Unknown
-        extensions at the project root are allowed (could be new config files);
-        unknown extensions in nested paths are rejected.
-
-        File-existence checks are lenient by design: a path is accepted if it
-        exists under ANY known repo root. This avoids false-rejecting paths
-        for files that happen to be created during the initiative. However, a
-        task that claims to modify a file that doesn't actually exist anywhere
-        in the workspace is flagged. We use os.path.isfile (not .exists)
-        so directories aren't counted as files — the task should name the
-        actual source file, not its parent directory.
-
-        Returns True if the milestone list passes verification (or has no
-        specific claims to verify). Returns False if a milestone makes an
-        unverifiable claim, causing fallback to the template path.
-        """
-        # Known software development file extensions. Broad enough to allow
-        # legitimate new files but narrow enough to catch fabricated types.
-        known_extensions: set = {
-            # Languages
-            '.py', '.pyi', '.pyx', '.pxd',
-            '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts',
-            '.rs', '.rlib',
-            '.go',
-            '.java', '.class', '.jar', '.kt', '.kts',
-            '.rb', '.erb', '.rake', '.gemspec',
-            '.c', '.h', '.cpp', '.hpp', '.cxx', '.hxx', '.cc', '.hh',
-            '.cs', '.fs', '.vb',
-            '.swift',
-            '.scala', '.sc',
-            '.ex', '.exs',
-            '.php', '.phtml',
-            '.r', '.rda',
-            '.lua',
-            '.pl', '.pm', '.t',
-            '.dart',
-            '.zig',
-            # Web / config
-            '.html', '.css', '.scss', '.sass', '.less', '.styl',
-            '.json', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.conf',
-            '.xml', '.xsl', '.xslt', '.xsd', '.dtd',
-            '.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp',
-            # Documentation
-            '.md', '.mdx', '.rst', '.txt', '.adoc', '.wiki',
-            # Scripts / shell
-            '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
-            # Build / CI
-            '.gradle', '.groovy', '.mvn', '.cmake', '.make', '.mk',
-            '.dockerfile', '.containerfile',
-            # Database
-            '.sql', '.sqlite', '.db',
-            # Python packaging
-            '.toml', '.lock', '.whl', '.egg',
-            # Environment / secrets
-            '.env', '.envrc',
-        }
-
-        known_commands = {
-            'python', 'python3', 'pip', 'pip3', 'poetry', 'conda',
-            'npm', 'npx', 'yarn', 'pnpm', 'bun',
-            'cargo', 'rustc', 'rustup',
-            'go', 'gofmt',
-            'docker', 'docker-compose', 'dockerfile',
-            'git',
-            'make', 'cmake', 'bazel', 'mvn', 'gradle', 'sbt',
-            'node', 'deno', 'tsc', 'esbuild', 'webpack', 'vite',
-            'pytest', 'nosetests', 'unittest',
-            'jest', 'mocha', 'vitest', 'cypress', 'playwright',
-            'cargo test',
-            'go test',
-            'rails', 'rake',
-            'curl', 'wget',
-            'kubectl', 'helm', 'terraform', 'ansible', 'pulumi',
-            'ssh', 'scp', 'rsync',
-            'cat', 'echo', 'ls', 'mkdir', 'mv', 'cp', 'rm', 'chmod', 'chown',
-            'grep', 'sed', 'awk', 'sort', 'uniq', 'wc', 'tee',
-            'sleep', 'timeout', 'date',
-        }
-
-        for m in milestones:
-            sym = m.get('symbolic', {}) or {}
-            path = sym.get('path', '') or ''
-            command = sym.get('command', '') or ''
-
-            # Check 1: File path verification.
-            # If the LLM proposes a file with an unknown extension at a
-            # nested path, reject it (unknown extension at root level is
-            # allowed — could be a new config file).
-            if path:
-                _, ext = os.path.splitext(path)
-                if ext and ext not in known_extensions:
-                    if '/' in path and ext:
-                        return False
-
-                # Check 1b: File existence (when repo roots are known).
-                # A path with a directory separator should exist somewhere
-                # in the workspace. Root-level bare filenames are allowed
-                # (new config files, generation targets).
-                if repo_roots and '/' in path:
-                    exists = any(
-                        os.path.isfile(os.path.join(rr, path))
-                        for rr in repo_roots
-                    )
-                    if not exists:
-                        return False
-
-            # Check 2: Command verification.
-            # Unknown commands with no tool match are rejected.
-            if command:
-                cmd_name = command.strip().split()[0].lower()
-                if cmd_name not in known_commands:
-                    return False
-
-        return True
 
     # -------------------------------------------------------------------
 
