@@ -64,6 +64,13 @@ from .ingest import ingest_paths
 from .observe import format_report, observe, observe_via_engine
 from .observation import default_registry, format_run
 from .summary import generate_summary
+from .cross_project import (
+    run_correlation,
+    structural_pass,
+    semantic_pass,
+    scan_project_docs,
+    format_correlations,
+)
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
@@ -80,6 +87,51 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         f"({report.llm_summaries} with LLM README summaries)."
     )
     return 0
+
+
+def cmd_correlate(args: argparse.Namespace) -> int:
+    """Run or inspect cross-project correlations."""
+    from .db import get_repositories
+
+    conn = connect()
+    try:
+        if args.scan_docs:
+            n = scan_project_docs(conn)
+            print(f"Scanned project docs: {n} new/updated.")
+            return 0
+
+        if args.detail:
+            repo_a, repo_b = args.detail
+            pairs = structural_pass(conn)
+            matching = [p for p in pairs
+                        if p["repo_a_name"] == repo_a and p["repo_b_name"] == repo_b
+                        or p["repo_a_name"] == repo_b and p["repo_b_name"] == repo_a]
+            if matching:
+                p = matching[0]
+                print(f"Correlation: {p['repo_a_name']} ↔ {p['repo_b_name']}")
+                print(f"  Structural score: {p['structural_score']}")
+                print(f"  Volatility (recency): {p['volatility']}")
+                print(f"  Adjusted score: {p['adjusted_score']}")
+                for e in p.get("evidence", []):
+                    print(f"  • {e}")
+            else:
+                print(f"No correlation data for {repo_a} ↔ {repo_b}.")
+                print("Run `friday correlate` first to compute.")
+            return 0
+
+        # Full pipeline.
+        print("Running cross-project correlation...")
+        results = run_correlation(conn)
+        if results:
+            print(format_correlations(results))
+            print(f"\n{len(results)} high-confidence correlation(s) promoted to Insights.")
+            print("View them: friday insights")
+        else:
+            print("No high-confidence correlations found.")
+            print("Repos may need more activity or project docs to produce signal.")
+        return 0
+    finally:
+        conn.close()
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
@@ -876,6 +928,17 @@ def main(argv: list[str] | None = None) -> int:
 
     from .cli_meta import add_subparser as add_meta
     add_meta(sub)
+
+    p_correlate = sub.add_parser(
+        "correlate",
+        help="Cross-project correlation: find structural and semantic similarities between repos.")
+    p_correlate.add_argument(
+        "--detail", nargs=2, metavar=("REPO_A", "REPO_B"), default=None,
+        help="Show detailed correlation between two specific repos.")
+    p_correlate.add_argument(
+        "--scan-docs", action="store_true",
+        help="Scan repos for project docs (PRDs, design docs) without running correlation.")
+    p_correlate.set_defaults(func=cmd_correlate)
 
     args = parser.parse_args(argv)
     return args.func(args)

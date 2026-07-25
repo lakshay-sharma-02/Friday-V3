@@ -47,7 +47,7 @@ _PHASE_A_FIELDS = ("new_suggestions", "high_severity_suggestions",
                     "new_gaps", "open_gaps",
                     "new_patterns", "top_patterns",
                     "new_intents", "high_conf_intents",
-                    "new_skills")
+                    "new_skills", "new_correlations")
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +273,19 @@ def _run_cycle() -> dict:
         except Exception as exc:
             _log(f"Ambient analysis (gaps) failed: {exc}")
 
+        # Cross-project correlation: run doc scanner + structural + semantic pass.
+        # Discovers conceptual overlap between repositories and promotes
+        # high-confidence correlations to Insights.
+        new_correlations = 0
+        try:
+            from .cross_project import run_correlation
+            cors = run_correlation(conn)
+            new_correlations = len(cors)
+            if new_correlations:
+                _log(f"Cross-project: {new_correlations} correlation(s) detected.")
+        except Exception as exc:
+            _log(f"Cross-project correlation failed: {exc}")
+
         # Pillar B Stage 2: Run sequence mining on accumulated action events.
         # Discovers repeated action patterns (e.g. "open terminal → cd X → run Y")
         # that appear across sessions. Deterministic and fast — pure SQLite scan
@@ -383,6 +396,7 @@ def _run_cycle() -> dict:
             "new_intents": new_intents,
             "high_conf_intents": high_conf_intents,
             "new_skills": new_skills,
+            "new_correlations": new_correlations,
         })
 
     except Exception as exc:
@@ -627,11 +641,13 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
         top_patterns = cycle.get("top_patterns", 0)
         new_intents = cycle.get("new_intents", 0)
         high_conf_intents = cycle.get("high_conf_intents", 0)
+        new_correlations = cycle.get("new_correlations", 0)
 
         _log(f"Cycle #{cycle_num + 1} complete: {changed}/{scanned} repos changed, "
              f"{knowledge} knowledge updates, {pending} new initiatives, "
              f"{new_suggestions} suggestions, {new_gaps} new gaps, "
-             f"{new_patterns} patterns, {new_intents} intents.")
+             f"{new_patterns} patterns, {new_intents} intents, "
+             f"{new_correlations} correlations.")
 
         # Build notification parts for ambient findings.
         notify_parts = []
@@ -660,6 +676,8 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
         new_skills = cycle.get("new_skills", 0)
         if new_skills:
             notify_parts.append(f"{new_skills} new skill(s) formed")
+        if new_correlations:
+            notify_parts.append(f"{new_correlations} cross-project correlation(s)")
 
         if notify_parts and not effective_no_notify:
             _notify(
@@ -683,6 +701,9 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
         if new_skills:
             _log(f"  {new_skills} skill(s) formed from workflow intents "
                  f"(run `friday patterns form` to review)")
+        if new_correlations:
+            _log(f"  {new_correlations} cross-project correlation(s) detected "
+                 f"(run `friday correlate` to view)")
 
 
 # ---------------------------------------------------------------------------
