@@ -823,6 +823,7 @@ CREATE TABLE IF NOT EXISTS runtime_results (
     exit_code            INTEGER,
     duration_ms          INTEGER NOT NULL DEFAULT 0,
     error                TEXT NOT NULL DEFAULT '',
+    payload              TEXT,                    -- JSON: worker_id + input args, for replay
     verification_passed  INTEGER,
     verification_evidence TEXT NOT NULL DEFAULT '{}',
     recorded_at          TEXT NOT NULL
@@ -1076,6 +1077,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE runtime_results ADD COLUMN verification_evidence "
             "TEXT NOT NULL DEFAULT '{}'")
+    if "payload" not in rr_cols:
+        conn.execute(
+            "ALTER TABLE runtime_results ADD COLUMN payload TEXT")
     # Suggestion -> Graph Bridge: add source column to task_graphs.
     tg_cols = {r["name"] for r in conn.execute("PRAGMA table_info(task_graphs)")}
     if "source" not in tg_cols:
@@ -1110,6 +1114,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_repair_history_proposal_id ON repair_history(proposal_id);
     """)
 
+    # Operator profile_history table (append-only audit log for preference changes).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS profile_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            key         TEXT NOT NULL,
+            old_value   TEXT,
+            new_value   TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'explicit',
+            changed_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_profile_history_key ON profile_history(key);
+    """)
+
     # Phase 4: watch_history table (created fresh each time).
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS watch_history (
@@ -1141,6 +1158,103 @@ def _migrate(conn: sqlite3.Connection) -> None:
             dismissed_at     TEXT,
             action_taken     TEXT
         );
+    """)
+    conn.commit()
+
+    # Phase 7: Self-Improvement (Meta-Engine) tables.
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS capability_gaps (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            description     TEXT NOT NULL,
+            evidence_refs   TEXT NOT NULL DEFAULT '[]',
+            frequency       INTEGER NOT NULL DEFAULT 0,
+            score           REAL NOT NULL DEFAULT 0.0,
+            status          TEXT NOT NULL DEFAULT 'open',
+            attempt_count   INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_capability_gaps_status ON capability_gaps(status);
+        CREATE INDEX IF NOT EXISTS idx_capability_gaps_score ON capability_gaps(score);
+        CREATE TABLE IF NOT EXISTS self_improvement_runs (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            gap_id              INTEGER NOT NULL REFERENCES capability_gaps(id),
+            plan_id             TEXT NOT NULL DEFAULT '',
+            sandbox_path        TEXT NOT NULL DEFAULT '',
+            diff_path           TEXT NOT NULL DEFAULT '',
+            verification_result TEXT NOT NULL DEFAULT '{}',
+            verification_log    TEXT NOT NULL DEFAULT '',
+            deployed            INTEGER NOT NULL DEFAULT 0,
+            human_approved      INTEGER NOT NULL DEFAULT 0,
+            human_reviewed_at   TEXT,
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_si_runs_gap_id ON self_improvement_runs(gap_id);
+    """)
+    conn.commit()
+
+    # Pillar B: Action Log table (append-only event log for user + Friday actions).
+    # Used by sequence mining (Stage 2) to detect repeated patterns. Each row
+    # is one action event with context for enrichment.
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS actions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            source          TEXT NOT NULL,
+            action_type     TEXT NOT NULL,
+            target          TEXT NOT NULL DEFAULT '',
+            detail          TEXT NOT NULL DEFAULT '{}',
+            workspace_id    TEXT,
+            project         TEXT,
+            session_id      TEXT,
+            confidence      TEXT NOT NULL DEFAULT 'observed',
+            observed_at     TEXT NOT NULL,
+            recorded_at     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_actions_source ON actions(source);
+        CREATE INDEX IF NOT EXISTS idx_actions_action_type ON actions(action_type);
+        CREATE INDEX IF NOT EXISTS idx_actions_observed_at ON actions(observed_at);
+        CREATE INDEX IF NOT EXISTS idx_actions_project ON actions(project);
+    """)
+    conn.commit()
+
+    # Pillar B Stage 2: Mined patterns table (persisted sequence-mining results).
+    # Each row is one discovered pattern: a repeated action subsequence with
+    # frequency count and context metadata. Deterministic, LLM-free.
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mined_patterns (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            sequence_json   TEXT NOT NULL,
+            count           INTEGER NOT NULL DEFAULT 0,
+            distinct_sessions INTEGER NOT NULL DEFAULT 0,
+            first_seen      TEXT NOT NULL DEFAULT '',
+            last_seen       TEXT NOT NULL DEFAULT '',
+            common_workspace TEXT NOT NULL DEFAULT '',
+            common_project  TEXT NOT NULL DEFAULT '',
+            confidence      TEXT NOT NULL DEFAULT 'derived',
+            mined_at        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mined_patterns_count ON mined_patterns(count);
+    """)
+    conn.commit()
+
+    # Pillar B Stage 3: Workflow intents table (LLM-labeled workflow descriptions
+    # derived from mined action patterns). Each row is one labeled intent with
+    # the LLM's description, steps, and confidence. FK to mined_patterns so
+    # intents cascade-delete when patterns are cleared.
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS workflow_intents (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern_id          INTEGER NOT NULL REFERENCES mined_patterns(id) ON DELETE CASCADE,
+            intent_label        TEXT NOT NULL,
+            intent_description  TEXT NOT NULL DEFAULT '',
+            steps_text          TEXT NOT NULL DEFAULT '[]',
+            confidence          TEXT NOT NULL DEFAULT 'low',
+            pattern_summary     TEXT NOT NULL DEFAULT '',
+            labeled_at          TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_intents_pattern_id ON workflow_intents(pattern_id);
+        CREATE INDEX IF NOT EXISTS idx_workflow_intents_confidence ON workflow_intents(confidence);
     """)
     conn.commit()
 
@@ -4222,8 +4336,19 @@ def set_operator_preference(
     for evidence-computed fields (never triggered by inference — see operator.py
     for the derive-on-read-only discipline).
 
+    Records the change in profile_history for audit. The old value is captured
+    before the upsert so the history shows the actual transition. When the value
+    is unchanged, no history row is written (avoids log noise on re-derivation).
+
     Use commit_if_top for safe composition inside atomic() blocks.
     """
+    # Capture the old value before upsert.
+    old_row = conn.execute(
+        "SELECT value FROM operator_preferences WHERE key = ?",
+        (key,),
+    ).fetchone()
+    old_value = old_row["value"] if old_row else None
+
     conn.execute(
         """
         INSERT INTO operator_preferences (key, value, set_at, source)
@@ -4233,6 +4358,15 @@ def set_operator_preference(
         """,
         (key, value, now_iso(), source),
     )
+
+    # Write to profile_history only when the value actually changed.
+    if old_value != value:
+        conn.execute(
+            "INSERT INTO profile_history (key, old_value, new_value, source, changed_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (key, old_value, value, source, now_iso()),
+        )
+
     commit_if_top(conn)
 
 
@@ -4860,15 +4994,16 @@ def insert_runtime_result(conn: sqlite3.Connection, row: dict) -> None:
         """
         INSERT INTO runtime_results
             (execution_id, session_id, task_id, worker_id, success, stdout,
-             stderr, artifacts, exit_code, duration_ms, error,
+             stderr, artifacts, exit_code, duration_ms, error, payload,
              verification_passed, verification_evidence, recorded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (row["execution_id"], row["session_id"], row["task_id"],
          row.get("worker_id"),
          1 if row.get("success") else 0,
          row.get("stdout", ""), row.get("stderr", ""), row.get("artifacts", "[]"),
          row.get("exit_code"), row.get("duration_ms", 0), row.get("error", ""),
+         row.get("payload"),
          row.get("verification_passed"), row.get("verification_evidence", "{}"),
          row["recorded_at"]),
     )
@@ -4933,3 +5068,183 @@ def get_runtime_evolution(conn: sqlite3.Connection,
             "SELECT * FROM runtime_evolution WHERE session_id = ? "
             "ORDER BY evolved_at", (session_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ===========================================================================
+# Meta-Engine storage (Phase 7) — capability gaps + self-improvement runs.
+# ===========================================================================
+
+
+def get_capability_gaps(conn, status=None):
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM capability_gaps WHERE status = ? ORDER BY score DESC",
+            (status,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM capability_gaps ORDER BY score DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_capability_gap(conn, gap_id):
+    row = conn.execute(
+        "SELECT * FROM capability_gaps WHERE id = ?", (gap_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def insert_capability_gap(conn, row):
+    from datetime import datetime, timezone
+    cur = conn.execute(
+        """INSERT INTO capability_gaps
+           (description, evidence_refs, frequency, score, status,
+            attempt_count, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row["description"], row.get("evidence_refs", "[]"),
+         row.get("frequency", 0), row.get("score", 0.0),
+         row.get("status", "open"), row.get("attempt_count", 0),
+         row.get("created_at", datetime.now(timezone.utc).isoformat()),
+         row.get("updated_at", datetime.now(timezone.utc).isoformat())))
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_capability_gap(conn, gap_id, **kw):
+    sets = ", ".join(f"{k} = ?" for k in kw)
+    vals = list(kw.values()) + [gap_id]
+    conn.execute(f"UPDATE capability_gaps SET {sets} WHERE id = ?", vals)
+    conn.commit()
+
+
+def get_si_runs(conn, gap_id=None):
+    if gap_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM self_improvement_runs WHERE gap_id = ? ORDER BY created_at DESC",
+            (gap_id,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM self_improvement_runs ORDER BY created_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_si_run(conn, run_id):
+    row = conn.execute(
+        "SELECT * FROM self_improvement_runs WHERE id = ?", (run_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def insert_si_run(conn, row):
+    from datetime import datetime, timezone
+    cur = conn.execute(
+        """INSERT INTO self_improvement_runs
+           (gap_id, plan_id, sandbox_path, diff_path, verification_result,
+            verification_log, deployed, human_approved, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row["gap_id"], row.get("plan_id", ""), row.get("sandbox_path", ""),
+         row.get("diff_path", ""), row.get("verification_result", "{}"),
+         row.get("verification_log", ""),
+         1 if row.get("deployed") else 0,
+         1 if row.get("human_approved") else 0,
+         row.get("created_at", datetime.now(timezone.utc).isoformat()),
+         row.get("updated_at", datetime.now(timezone.utc).isoformat())))
+    conn.commit()
+    return cur.lastrowid
+
+
+def update_si_run(conn, run_id, **kw):
+    sets = ", ".join(f"{k} = ?" for k in kw)
+    vals = list(kw.values()) + [run_id]
+    conn.execute(f"UPDATE self_improvement_runs SET {sets} WHERE id = ?", vals)
+    conn.commit()
+
+
+# ===========================================================================
+# Pillar B Stage 2 — Sequence Mining (mined_patterns table helpers)
+# ===========================================================================
+
+
+def insert_mined_pattern(conn, row):
+    """Persist one mined pattern row. Returns the new row id."""
+    from datetime import datetime, timezone
+    cur = conn.execute(
+        """INSERT INTO mined_patterns
+           (sequence_json, count, distinct_sessions, first_seen, last_seen,
+            common_workspace, common_project, confidence, mined_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row["sequence_json"], row.get("count", 0),
+         row.get("distinct_sessions", 0),
+         row.get("first_seen", ""), row.get("last_seen", ""),
+         row.get("common_workspace", ""), row.get("common_project", ""),
+         row.get("confidence", "derived"),
+         row.get("mined_at", datetime.now(timezone.utc).isoformat())))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_mined_patterns(conn, min_count=0, limit=50):
+    """Return mined patterns, most frequent first, optionally filtered by min_count."""
+    if min_count > 0:
+        rows = conn.execute(
+            "SELECT * FROM mined_patterns WHERE count >= ? "
+            "ORDER BY count DESC LIMIT ?", (min_count, limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM mined_patterns ORDER BY count DESC LIMIT ?",
+            (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_mined_patterns(conn):
+    """Delete all mined patterns (for re-mining)."""
+    conn.execute("DELETE FROM mined_patterns")
+    conn.commit()
+
+
+# ===========================================================================
+# Pillar B Stage 3 — Workflow Intents (LLM-labeled workflow descriptions)
+# ===========================================================================
+
+
+def insert_workflow_intent(conn, row):
+    """Persist one workflow intent. Returns the new row id."""
+    from datetime import datetime, timezone
+    cur = conn.execute(
+        """INSERT INTO workflow_intents
+           (pattern_id, intent_label, intent_description, steps_text,
+            confidence, pattern_summary, labeled_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (row["pattern_id"], row["intent_label"],
+         row.get("intent_description", ""),
+         row.get("steps_text", "[]"),
+         row.get("confidence", "low"),
+         row.get("pattern_summary", ""),
+         row.get("labeled_at", datetime.now(timezone.utc).isoformat())))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_workflow_intents(conn, min_confidence=None, limit=50):
+    """Return workflow intents, newest first, optionally filtered by min confidence."""
+    if min_confidence:
+        rows = conn.execute(
+            "SELECT * FROM workflow_intents WHERE confidence >= ? "
+            "ORDER BY labeled_at DESC LIMIT ?",
+            (min_confidence, limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM workflow_intents ORDER BY labeled_at DESC LIMIT ?",
+            (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_workflow_intents_for_pattern(conn, pattern_id):
+    """Return all workflow intents for a specific pattern."""
+    rows = conn.execute(
+        "SELECT * FROM workflow_intents WHERE pattern_id = ? "
+        "ORDER BY labeled_at DESC", (pattern_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_workflow_intents(conn):
+    """Delete all workflow intents (re-label on re-mine)."""
+    conn.execute("DELETE FROM workflow_intents")
+    conn.commit()

@@ -49,6 +49,7 @@ from .identity import explain_project_from_conn
 from .services.llm import _enabled as llm_enabled
 from .services.llm import _call
 from . import objective as obj_mod
+from .context_prompter import build_context_prompt
 
 # Objectives the online LLM understanding can produce from a noisy bag that we
 # do NOT trust over the deterministic offline heuristic (see retrieve_requirements).
@@ -1714,12 +1715,21 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
     # General-reasoning questions that need NO workspace evidence: math, logic,
     # programming advice, language trivia — anything the LLM can answer without
     # the workspace knowledge base. Any named project mention = not this.
+    # Exception: questions containing "architecture", "architect", "component",
+    # or "universe" should not be caught here — they need the workspace knowledge
+    # base for an answer.
     _general_markers = ("what is ", "what's ", "how do i ", "how does ",
                         "explain ", "define ", "difference between ", "should i ",
                         "what does ", "why does ", "is it ", "can i ")
-    if not any(t in qlow for t in techs) and any(qlow.startswith(m) for m in _general_markers):
+    _workspace_keywords = ("architecture", "architect", "component", "universe")
+    if (not any(t in qlow for t in techs)
+            and any(qlow.startswith(m) for m in _general_markers)
+            and not any(w in qlow for w in _workspace_keywords)):
         ws_names = {r.name.lower() for r in q.all_repositories(conn) if r.id is not None}
-        if not any(n in qlow for n in ws_names):
+        # Also check individual words from repo names (e.g. "Friday" from
+        # "Friday V3" matching "Explain Friday." without the "V3" suffix).
+        ws_words = {w for n in ws_names for w in n.split() if len(w) > 2}
+        if not any(n in qlow for n in ws_names) and not any(w in qlow for w in ws_words):
             return mk(scope="repo", needs=("general_reasoning",), subjects=[])
     if "compare" in qlow or " vs " in qlow or " versus " in qlow or "difference" in qlow:
         return mk(scope="compare", subjects=_resolve_subjects(question, conn),
@@ -2322,7 +2332,8 @@ _SYSTEM = (
 )
 
 
-def _synthesize(question: str, ev: Evidence, prev: Optional["Exchange"] = None,
+def _synthesize(question: str, ev: Evidence, conn=None,
+                prev: Optional["Exchange"] = None,
                 decision: Optional[object] = None) -> Optional[str]:
     """Call the LLM to produce an answer from the evidence. Returns None on any
     failure (caller falls back).
@@ -2332,12 +2343,29 @@ def _synthesize(question: str, ev: Evidence, prev: Optional["Exchange"] = None,
     must never be treated by the model as a fact to cite. `decision` carries the
     engineering objective + answer contract so the model frames the answer to the
     judgment being requested.
+
+    `conn` is an optional DB connection used to enrich the prompt with learned
+    context (Pillar C — workflows, recent sessions, active projects). When
+    omitted or None, no enrichment is added.
     """
     if not llm_enabled():
         return None
     evidence_str = "\n".join(ev.blocks) if ev.blocks else json.dumps(ev.raw, indent=2)
     if not evidence_str.strip():
         evidence_str = "(no retrieved evidence)"
+
+    # Pillar C: enrich prompt with learned context (workflows, recent activity,
+    # active projects) when a DB connection is available. This is background
+    # context, not evidence — the LLM may reference it naturally but must never
+    # cite it as a fact.
+    learned_context = ""
+    if conn is not None:
+        try:
+            ctx = build_context_prompt(conn)
+            if ctx:
+                learned_context = f"\n\n{ctx}\n"
+        except Exception:
+            pass  # Learned context is best-effort; never block the answer.
 
     is_general_reasoning = "general_reasoning" in ev.requirements.needs
     if is_general_reasoning:
@@ -2370,7 +2398,7 @@ def _synthesize(question: str, ev: Evidence, prev: Optional["Exchange"] = None,
     user = (
         f"Question: {question}\n\n"
         f"Evidence:\n{evidence_str}\n\n"
-        f"Answer (grounded only in Evidence):{ctx}{objective_line}"
+        f"Answer (grounded only in Evidence):{ctx}{objective_line}{learned_context}"
     )
     return _call(_SYSTEM, user)
 
@@ -2670,7 +2698,7 @@ def _answer_followup(question: str, prev: "Exchange", conn) -> "Answer":
                 _p_describe.fn(ev.requirements, conn, side2, _today())
                 if side2.blocks:
                     extra_evidence.extend(side2.blocks)
-        text = _synthesize_followup(question, ev, prev, meta_instruction, decision, extra_evidence)
+        text = _synthesize_followup(question, ev, prev, meta_instruction, decision, extra_evidence, conn=conn)
         if text:
             return Answer(text=text, evidence=ev, used_llm=True)
     # Deterministic fallback: restate the prior answer (never loses context).
@@ -2679,18 +2707,34 @@ def _answer_followup(question: str, prev: "Exchange", conn) -> "Answer":
 
 def _synthesize_followup(question: str, ev: Evidence, prev: "Exchange",
                          meta_instruction: str, decision,
-                         extra_evidence: Optional[list[str]] = None) -> Optional[str]:
-    """Synthesize a follow-up answer grounded ONLY in the previous Evidence."""
+                         extra_evidence: Optional[list[str]] = None,
+                         conn=None) -> Optional[str]:
+    """Synthesize a follow-up answer grounded ONLY in the previous Evidence.
+
+    `conn` is an optional DB connection for learned context enrichment (Pillar C).
+    """
     evidence_str = "\n".join(ev.blocks) if ev.blocks else json.dumps(ev.raw, indent=2)
     extra_str = ""
     if extra_evidence:
         extra_str = "\n\nADDITIONAL EVIDENCE for the named project (the only extra source):\n" + "\n".join(extra_evidence)
+
+    # Pillar C: enrich with learned context when available.
+    learned_context = ""
+    if conn is not None:
+        try:
+            ctx = build_context_prompt(conn)
+            if ctx:
+                learned_context = f"\n\n{ctx}\n"
+        except Exception:
+            pass
+
     user = (
         f"Follow-up question: {question}\n\n"
         f"{meta_instruction}\n\n"
         f"PREVIOUS ANSWER (context only):\n{prev.answer.text}\n\n"
         f"PREVIOUS EVIDENCE (the ONLY source you may cite):\n{evidence_str}{extra_str}\n\n"
         f"Answer the follow-up grounded only in the PREVIOUS EVIDENCE."
+        f"{learned_context}"
     )
     return _call(_SYSTEM, user)
 
@@ -2755,10 +2799,10 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
     if "chitchat" in ev.requirements.needs:
         text = _deterministic_answer(question, ev, "chitchat", decision)
     elif "general_reasoning" in ev.requirements.needs:
-        text = _synthesize(question, ev, prev=prev, decision=decision)
+        text = _synthesize(question, ev, conn=conn, prev=prev, decision=decision)
         used_llm = text is not None
     elif llm_enabled() and os.environ.get("FRIDAY_DETERMINISTIC_ONLY") != "1":
-        text = _synthesize(question, ev, prev=prev, decision=decision)
+        text = _synthesize(question, ev, conn=conn, prev=prev, decision=decision)
         used_llm = text is not None
     if text is None:
         text = _deterministic_answer(

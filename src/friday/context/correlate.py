@@ -103,14 +103,16 @@ def _signals(session: EngineeringSession, facts, conn=None) -> dict:
     for o in obs_list:
         _fold(out, o)
 
-    # commit_count: use DELTA, not absolute value. Absolute is always >0 on
-    # any repo with history — using it raw labels every observed repo as
-    # "committing".
-    # Strategy: take the delta between first and last commit_count obs
-    # within this session (two observations = multiple observe ticks while
-    # commits were happening). Single obs: compare against prior DB row, or
-    # return 0 (baseline).
-    commit_obs = [o for o in obs_list if o.aspect == "commit_count"]
+    # commit_count: NOT folded (that would set the ABSOLUTE value, which is
+    # always >0 on any repo with history and would label every observed repo
+    # as "committing"). Instead, compute the DELTA within the session for the
+    # session's PRIMARY repo only. With merged sessions containing observations
+    # from multiple repos, cross-repo delta is meaningless: Aether's 11 vs
+    # codebuff's 7688 would produce a fake delta of 7677.
+    primary = session.primary_repo
+    commit_obs = [o for o in obs_list
+                  if o.aspect == "commit_count"
+                  and o.subject == primary]
     if len(commit_obs) >= 2:
         # Within-session delta tells the real story
         try:
@@ -145,12 +147,11 @@ def _signals(session: EngineeringSession, facts, conn=None) -> dict:
 def _fold(out: dict, o) -> None:
     a = o.aspect
     v = o.value
-    if a == "commit_count":
-        try:
-            out["commit_count"] = int(v)
-        except (TypeError, ValueError):
-            out["commit_count"] = 0
-    elif a == "dirty":
+    # NOTE: commit_count is NOT folded here because it would set the ABSOLUTE
+    # value, which is overwritten by the DELTA logic in _signals().
+    # Keeping it in _fold would mislead readers into thinking the fold value
+    # is used, when actually the delta logic always overrides it.
+    if a == "dirty":
         out["dirty"] = (v == "true")
     elif a == "merge_events":
         out["merge_events"] = _int(v)

@@ -88,11 +88,12 @@ _CAP_BE = "backend"
 _CAP_INFRA = "infrastructure"
 _CAP_RESEARCH = "research"
 _CAP_CONFIG = "configuration"
+_CAP_SYNTHESIS = "synthesis"
 
 # Closed capability set, used to validate inference (no hallucinated caps).
 _ALL_CAPS = {
     _CAP_RUST, _CAP_PYTHON, _CAP_TS, _CAP_SQL, _CAP_ARCH, _CAP_TEST, _CAP_DOC,
-    _CAP_FE, _CAP_BE, _CAP_INFRA, _CAP_RESEARCH, _CAP_CONFIG,
+    _CAP_FE, _CAP_BE, _CAP_INFRA, _CAP_RESEARCH, _CAP_CONFIG, _CAP_SYNTHESIS,
 }
 
 # Language keywords scanned from the goal (deterministic, lowercased).
@@ -519,7 +520,7 @@ def _expected_artifacts(task_type: str, title: str, goal: str) -> List[str]:
 _CREATION_TASK_TYPES = frozenset({
     TaskType.IMPLEMENTATION, TaskType.DOCUMENTATION, TaskType.TESTING,
     TaskType.CONFIGURATION, TaskType.CLEANUP, TaskType.MIGRATION,
-    TaskType.INFRASTRUCTURE, TaskType.DEPLOYMENT,
+    TaskType.INFRASTRUCTURE,
 })
 
 
@@ -586,13 +587,18 @@ def _expand(milestone: dict, plan: Plan, ptype: str = "") -> List[dict]:
         tt = milestone["task_type"]
         sym = milestone.get("symbolic", {}) or {}
         ac = milestone.get("acceptance_criteria", []) or []
-        return [{
+        result = {
             "task_type": tt,
             "title": milestone.get("title", ""),
             "parallel_next": bool(milestone.get("parallel_next", False)),
             "symbolic": sym,
             "acceptance_criteria": ac if isinstance(ac, list) else [str(ac)],
-        }]
+        }
+        # Propagate explicit required_capabilities from milestone (used by
+        # IntegrationEngine to route tasks to the synthesis executor).
+        if milestone.get("required_capabilities"):
+            result["required_capabilities"] = milestone["required_capabilities"]
+        return [result]
 
     def spec(tt, t, par=False):
         # Propagate an explicit parallel_next hint from the milestone itself
@@ -850,7 +856,7 @@ class TaskGraphCompiler:
                 tt = TaskType.IMPLEMENTATION  # fallback for unknown task_type
             m = self._milestone_for(phase, milestones)
             title = spec["title"]
-            caps = _infer_capabilities(m.get("title", ""), tt, plan)
+            caps = spec.get("required_capabilities") or _infer_capabilities(m.get("title", ""), tt, plan)
             desc = (m.get("detail") or "")
             conf = plan.confidence.value if plan.confidence else "medium"
             # Phase 1: propagate symbolic/ac from milestone (LLM/trivial planners

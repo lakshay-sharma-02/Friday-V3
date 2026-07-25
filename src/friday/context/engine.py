@@ -77,26 +77,16 @@ class ContextEngine:
 
     # --- WRITE: derivation + persistence ------------------------------------
 
-    def build(self, source: str = "git",
-              as_of: Optional[str] = None) -> ContextBuildResult:
+    def build(self, source: str = "git") -> ContextBuildResult:
         """Derive sessions from observations of `source`, correlate, persist.
 
-        WRITE operation. The only mutating entrypoint. `as_of` defaults to the
-        latest observation timestamp, so re-running over the same data is
-        idempotent (same window key → INSERT OR REPLACE) rather than appending
-        duplicate sessions. Returns a ContextBuildResult (counts) and does NOT
-        print.
+        WRITE operation. The only mutating entrypoint. Idempotent: re-running
+        over the same observations replaces sessions in place (INSERT OR REPLACE
+        on the deterministic session id) rather than appending duplicates.
+        Returns a ContextBuildResult (counts) and does NOT print.
         """
         obs = _rows_to_obs(observations_all(self.conn))
         obs = [o for o in obs if o.source == source]
-        if as_of is None:
-            # Anchor the build to the GLOBAL latest observation time, not the
-            # per-source max. `friday observe` runs every observer in one pass,
-            # and each observer stamps a slightly different timestamp; anchoring
-            # to only `source`'s max would make the build look older than the
-            # newest observation, so `is_stale()` would report the freshly built
-            # context as immediately stale. The build represents the whole run.
-            as_of = latest_observation_time(self.conn) or now_iso()
 
         prior_ids = {r["id"] for r in
                      self.conn.execute("SELECT id FROM sessions").fetchall()}
@@ -105,8 +95,16 @@ class ContextEngine:
 
         sessions = build_sessions(obs)
         sessions = build_correlated(sessions, conn=self.conn)
+        # Use current wall-clock time for built_at, NOT as_of (latest observation
+        # at the start of build). If the daemon records a new observation while
+        # the build is running (reading all obs, building sessions, correlating,
+        # validating, inserting), built_at=as_of would be OLDER than the new
+        # observation, making is_stale() report a freshly-built context as
+        # immediately stale. built_at=now_iso() means staleness only triggers
+        # for observations recorded AFTER this build completed.
+        build_completed_at = now_iso()
         for s in sessions:
-            s.built_at = as_of
+            s.built_at = build_completed_at
 
         # Validate no session ID collisions before persisting
         session_ids = [s.id for s in sessions]
@@ -123,6 +121,14 @@ class ContextEngine:
         self.conn.commit()
         self.conn.execute("BEGIN TRANSACTION")
         try:
+            # Clear all existing sessions before rebuilding.
+            # Session IDs are derived from observation data (primary_repo +
+            # start_time). When the derivation logic changes (e.g. merge fix,
+            # primary_repo selection), old session IDs become orphaned and are
+            # never cleaned up by INSERT OR REPLACE (which only replaces rows
+            # with matching IDs). Safe: sessions are derived from observations
+            # — the source of truth — not independently created.
+            self.conn.execute("DELETE FROM sessions")
             insert_sessions(self.conn, [s.to_row() for s in sessions])
             self.conn.commit()
         except Exception:

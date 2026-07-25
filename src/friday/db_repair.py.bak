@@ -1,0 +1,147 @@
+"""Repair Loop DB helpers (Law 16).
+
+Adds repair_proposals table, RepairProposalRow dataclass, and helper
+functions to db.py. Separated into its own file to keep db.py manageable.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Optional
+
+from .db import commit_if_top, now_iso
+
+# SCHEMA fragment for the repair_proposals and repair_history tables.
+# This is appended to the main SCHEMA in db.py.
+REPAIR_SCHEMA = """
+
+-- M10.x: Repair Loop (Law 16). Append-only proposals + history.
+-- One repair proposal per failed task awaiting human approval.
+-- Never auto-approved; status transitions: pending -> approved | rejected.
+-- Versioned per Law 24: schema_version = 1.
+CREATE TABLE IF NOT EXISTS repair_proposals (
+    id                  TEXT PRIMARY KEY,
+    original_graph_id   TEXT NOT NULL,
+    original_task_id    TEXT NOT NULL,
+    failure_reason      TEXT NOT NULL,
+    capability          TEXT NOT NULL DEFAULT '',
+    repair_depth        INTEGER NOT NULL DEFAULT 0,
+    decision            TEXT NOT NULL,
+    evidence_ids        TEXT NOT NULL DEFAULT '[]',
+    proposed_goal       TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    created_at          TEXT NOT NULL,
+    reviewed_at         TEXT,
+    schema_version      TEXT NOT NULL DEFAULT '1'
+);
+
+-- Append-only history of repair events (proposed, approved, rejected, executed).
+CREATE TABLE IF NOT EXISTS repair_history (
+    proposal_id         TEXT NOT NULL REFERENCES repair_proposals(id) ON DELETE CASCADE,
+    event_type          TEXT NOT NULL,
+    detail              TEXT NOT NULL DEFAULT '',
+    recorded_at         TEXT NOT NULL,
+    PRIMARY KEY (proposal_id, recorded_at)
+);
+"""
+
+
+@dataclass
+class RepairProposalRow:
+    """One repair proposal (task failure awaiting human decision)."""
+    id: str
+    original_graph_id: str
+    original_task_id: str
+    failure_reason: str
+    capability: str
+    repair_depth: int = 0
+    decision: str = "auto_eligible"  # auto_eligible | escalate_bottleneck | escalate_depth_cap
+    evidence_ids: str = "[]"
+    proposed_goal: str = ""
+    status: str = "pending"  # pending | approved | rejected
+    created_at: str = ""
+    reviewed_at: Optional[str] = None
+
+
+def insert_repair_proposal(conn, rp: RepairProposalRow) -> None:
+    """Insert a repair proposal. Idempotent on id."""
+    conn.execute(
+        """INSERT OR IGNORE INTO repair_proposals
+           (id, original_graph_id, original_task_id, failure_reason,
+            capability, repair_depth, decision, evidence_ids,
+            proposed_goal, status, created_at, reviewed_at, schema_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            rp.id, rp.original_graph_id, rp.original_task_id,
+            rp.failure_reason, rp.capability, rp.repair_depth,
+            rp.decision, rp.evidence_ids, rp.proposed_goal,
+            rp.status, rp.created_at, rp.reviewed_at, "1",
+        ),
+    )
+    commit_if_top(conn)
+
+
+def get_repair_proposal(conn, pid: str) -> Optional[RepairProposalRow]:
+    """Get a repair proposal by id."""
+    row = conn.execute(
+        "SELECT * FROM repair_proposals WHERE id = ?", (pid,)
+    ).fetchone()
+    if row is None:
+        return None
+    return RepairProposalRow(
+        id=row["id"],
+        original_graph_id=row["original_graph_id"],
+        original_task_id=row["original_task_id"],
+        failure_reason=row["failure_reason"],
+        capability=row["capability"],
+        repair_depth=row["repair_depth"],
+        decision=row["decision"],
+        evidence_ids=row["evidence_ids"],
+        proposed_goal=row["proposed_goal"],
+        status=row["status"],
+        created_at=row["created_at"],
+        reviewed_at=row["reviewed_at"],
+    )
+
+
+def get_repair_proposals(conn, status: Optional[str] = None) -> List[RepairProposalRow]:
+    """Get repair proposals, optionally filtered by status."""
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM repair_proposals WHERE status = ? ORDER BY created_at DESC",
+            (status,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM repair_proposals ORDER BY created_at DESC"
+        ).fetchall()
+    return [
+        RepairProposalRow(
+            id=r["id"],
+            original_graph_id=r["original_graph_id"],
+            original_task_id=r["original_task_id"],
+            failure_reason=r["failure_reason"],
+            capability=r["capability"],
+            repair_depth=r["repair_depth"],
+            decision=r["decision"],
+            evidence_ids=r["evidence_ids"],
+            proposed_goal=r["proposed_goal"],
+            status=r["status"],
+            created_at=r["created_at"],
+            reviewed_at=r["reviewed_at"],
+        )
+        for r in rows
+    ]
+
+
+def update_repair_proposal_status(
+    conn, pid: str, status: str, reviewed_at: Optional[str] = None,
+) -> None:
+    """Update a proposal's status (pending -> approved | rejected)."""
+    if reviewed_at is None:
+        reviewed_at = now_iso()
+    conn.execute(
+        "UPDATE repair_proposals SET status = ?, reviewed_at = ? WHERE id = ?",
+        (status, reviewed_at, pid),
+    )
+    commit_if_top(conn)

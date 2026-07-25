@@ -22,6 +22,7 @@ portion of the graph on failure.
 
 from __future__ import annotations
 
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional, Tuple
@@ -32,6 +33,7 @@ from ..db import now_iso
 from .dispatcher import dispatch
 from .models import RunState, RuntimeTask, Worker
 from .executors import execute_with_fallback, _is_ai_executor_id
+from .confirm_gate import is_action_worker, prompt_confirm
 from .state import (
     blocked_descendants,
     can_transition,
@@ -125,6 +127,27 @@ def _is_non_blocking(task_type: str) -> bool:
     return (task_type or "").lower() in _NON_BLOCKING_TYPES
 
 
+def _parse_action_task(task: RuntimeTask) -> tuple[str, str]:
+    """Extract action + target from a task's runtime_payload (JSON).
+
+    The expected payload format for action workers is:
+      {"action": "workspace", "target": "3"}
+
+    Returns (action, target) — both empty strings if the payload isn't
+    valid JSON or doesn't have an 'action' field.
+    """
+    raw = getattr(task, "runtime_payload", "") or ""
+    if not raw:
+        return "", ""
+    try:
+        obj = json.loads(raw)
+        action = (obj.get("action") or "").lower().strip()
+        target = (obj.get("target") or "").strip()
+        return action, target
+    except (ValueError, TypeError):
+        return "", ""
+
+
 def _dependents_by_task(tasks: List[RuntimeTask]) -> Dict[str, List[str]]:
     deps: Dict[str, List[str]] = {t.task_id: [] for t in tasks}
     for t in tasks:
@@ -185,6 +208,32 @@ def execute_schedule(
         def _execute(task: RuntimeTask):
             worker = worker_resolver(task.worker_id)
             started = now_iso()
+
+            # --- SAFETY GATE (defense-in-depth): confirm action workers ---
+            # Action workers (hyprctl, browser, etc.) have real-world side
+            # effects outside Friday's sandbox. Even if the executor has its
+            # own confirm gate, the scheduler-level check here ensures every
+            # task is gated BEFORE the retry loop — the user confirms once,
+            # not per attempt. Meta-generated workers that lack their own gate
+            # are also caught by this central check.
+            wid = (worker.worker_id if worker else task.worker_id or "")
+            if is_action_worker(wid):
+                action, target = _parse_action_task(task)
+                if not prompt_confirm(
+                    action=action,
+                    target=target,
+                    worker_id=wid,
+                    skip_prompt=False,
+                ):
+                    # Cancelled by user — return failed result immediately,
+                    # skipping execution entirely. The retry loop below sees
+                    # this as a failed, non-recoverable result.
+                    return task, started, ExecutionResult(
+                        success=False, stdout="", stderr="cancelled",
+                        exit_code=None, duration_ms=0,
+                        error=f"action cancelled by user: {action} {target}".strip(),
+                    ), RunState.FAILED, 1
+
             # Robust fallback (Phase 3): if the resolver found no adapter for
             # the assigned worker, or the assigned worker is a non-deterministic
             # AI executor, run the full fallback chain (other AI executors ->
@@ -226,7 +275,12 @@ def execute_schedule(
                     started, finished, worker_id=task.worker_id, wave=task.wave,
                     attempt=last_attempt, exit_code=result.exit_code,
                     error=result.error, stdout=result.stdout, stderr=result.stderr,
-                    artifacts=result.artifacts, duration_ms=result.duration_ms)
+                    artifacts=result.artifacts, duration_ms=result.duration_ms,
+                    payload=json.dumps({
+                        "worker_id": task.worker_id,
+                        "input": task.runtime_payload,
+                        "workspace": workspace,
+                    }))
 
         # --- Part B: Build dependency summaries for the next wave. ---
         completed_summaries = _build_dependency_summaries(

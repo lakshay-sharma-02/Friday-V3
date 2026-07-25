@@ -458,6 +458,9 @@ class RefreshReport:
         lines.append(f"Portfolio updated:      {'yes' if self.portfolio_updated else 'no'}")
         lines.append(f"Insights updated:       {self.insights_changed}")
         lines.append(f"Elapsed:               {self.elapsed_ms / 1000:.1f}s")
+        if self.repos_changed == 0:
+            lines.append("")
+            lines.append("All repositories are up to date.")
         return "\n".join(lines) + "\n"
 
 

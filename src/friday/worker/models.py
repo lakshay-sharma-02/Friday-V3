@@ -111,6 +111,11 @@ _CAP_CANON = (
     "Refactoring", "Research", "Planning", "Configuration", "Benchmarking",
     "Static Analysis", "Code Review", "Reasoning", "Large Context",
     "Long Running", "File Editing", "Git Operations", "Shell Commands",
+    "Synthesis",
+    # Pillar A — Desktop / Window / App control capabilities.
+    "Window Management", "Workspace Control", "Application Launcher",
+    # Pillar A Layer 2 — Browser automation capabilities.
+    "Browser Automation",
 )
 
 # Lowercase alias -> canonical (Capitalized) form. Deterministic single source.
@@ -127,6 +132,21 @@ _ALIASES = {
     "file editing": "File Editing",
     "shell commands": "Shell Commands",
     "git operations": "Git Operations",
+    "synthesis": "Synthesis",
+    # Pillar A — Desktop / Window / App control aliases.
+    "window management": "Window Management",
+    "window": "Window Management",
+    "workspace control": "Workspace Control",
+    "workspace": "Workspace Control",
+    "application launcher": "Application Launcher",
+    "app launcher": "Application Launcher",
+    "applauncher": "Application Launcher",
+    "launcher": "Application Launcher",
+    # Pillar A Layer 2 — Browser automation aliases.
+    "browser automation": "Browser Automation",
+    "browser": "Browser Automation",
+    "web automation": "Browser Automation",
+    "web": "Browser Automation",
 }
 
 
@@ -426,6 +446,26 @@ class Worker:
             "availability": self.availability,
             "manifest_ref": self.manifest_ref,
         }
+
+
+def normalize_worker_input(raw: str) -> str:
+    """Ensure a string is parseable as JSON. If it is a raw string (not valid
+    JSON), wrap it as a JSON string literal so that ``json.loads()`` always
+    succeeds. This is the contract normalization that matches the LLM codegen
+    prompt: generated workers expect to receive valid JSON as ``input_data``.
+
+    Used in both ``DynamicWorkerExecutor.execute()`` (live dispatch) and
+    ``_build_invoke_code()`` (verification replay) to keep the two paths in
+    agreement — never change one without the other.
+    """
+    if not raw:
+        return raw
+    import json
+    try:
+        json.loads(raw)
+    except (ValueError, TypeError):
+        raw = json.dumps(raw)
+    return raw
 
 
 def _split(s: str) -> List[str]:

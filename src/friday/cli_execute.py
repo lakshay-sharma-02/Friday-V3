@@ -202,7 +202,13 @@ def cmd_execute(args: argparse.Namespace, conn=None) -> int:
 
     # 1. Plan the goal into a task graph.
     graph_eng = TaskGraphEngine(conn)
-    g = graph_eng.generate(goal)
+    # Check for cached graph — skip re-planning if this goal was already
+    # compiled. The graph ID is deterministic from the goal, so re-running
+    # generates the same graph and replaces the same row. Cache lookup avoids
+    # the planning overhead entirely for repeat invocations.
+    g = graph_eng.graph_by_goal(goal)
+    if g is None:
+        g = graph_eng.generate(goal)
 
     # CONFIRMATION GATE (Phase 6 emergency patch): show the plan and require
     # interactive y/n before any resolution, scheduling, or execution.

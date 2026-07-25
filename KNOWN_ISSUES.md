@@ -375,3 +375,15 @@ integration paths:
   entity resolution
 
 **Logged 2026-07-23.**
+
+## 26. Hyprland verify-by-diff `_read_active_window()` parsed `workspace: 2 (2)` as `"2 (2)"` — never matched target `"2"` [FIXED 2026-07-25]
+
+**What happened:** Ground-truth test against real `hyprctl` on this machine revealed that `_read_active_window()` parsed the raw `workspace: 2 (2)` output as `"2 (2)"` instead of `"2"`. The very first verified write action (workspace switch to 2) returned `success=False` with "verification failed" even though `hyprctl dispatch` actually switched the workspace.
+
+**Outcome:** Every HyprlandExecutor write action using workspace target would fail verify-by-diff. The action executed (dispatch always sent) but the executor reported failure — a false negative. Safe direction (never fabricated success), but would cascade-cancel dependent tasks in any scheduling chain.
+
+**Root cause:** `hyprctl activewindow` outputs `workspace: N (N)` — a numeric ID followed by a name alias in parentheses. The parser split on `:` and took the rest verbatim without stripping the name suffix.
+
+**Fix (one line):** Added `if key == "workspace": val = val.split()[0]` in `_read_active_window()` to extract only the numeric workspace ID.
+
+**Lesson (policy):** `hyprctl` output format is not the same shape a developer imagines from documentation. Parsing real CLI output is exactly the kind of thing that looks correct in code review and is subtly wrong against the real string. **Any change to `_read_active_window()`, `_read_workspace_list()`, or any new CLI-parsing helper in the hyprland executor requires a ground-truth run against the real `hyprctl` before being considered verified — mocked tests alone are insufficient.** This bug was invisible to all 46 unit/mocked tests and was caught by one manual `friday execute` against the real WM. Same standard applies to CDP output parsing in `browser_util.py` when that path is exercised.

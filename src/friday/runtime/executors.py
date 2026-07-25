@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .models import ExecutionResult, Executor, VerificationResult
+from ..worker.models import normalize_worker_input
 
 
 # Honour a global timeout (seconds) for any external process.
@@ -708,6 +709,354 @@ class DocumentationExecutor(Executor):
 # backward-compat alias
 DocumentationWorker = DocumentationExecutor
 
+
+# ---------------------------------------------------------------------------
+# Synthesis — LLM-powered content generation for integration/analysis tasks.
+# ---------------------------------------------------------------------------
+
+class SynthesisExecutor(Executor):
+    """Generate rich analysis content using the Friday LLM service.
+
+    Designed for integration/analysis tasks where the task description contains
+    rich synthesis evidence but the FileExecutor would write template stubs.
+    Reads the task's title, description, acceptance criteria, and symbolic
+    metadata, builds an LLM prompt to generate proper analysis content, and
+    writes the result to the target file.
+
+    Falls back to DocumentationExecutor-style content derivation when the LLM
+    is unavailable or fails — the task always produces a file, never crashes.
+    """
+
+    DEFAULT_PATH = "analysis.md"
+
+    def __init__(self, worker_id: str = "worker:synthesis",
+                 workspace: str = ".", timeout: int = 60) -> None:
+        self.worker_id = worker_id
+        self._ws = workspace
+        self._timeout = timeout
+
+    def execute(self, task) -> ExecutionResult:
+        raw = _payload(task).strip()
+        ws = _ws(task, self._ws)
+        t0 = time.monotonic()
+
+        # Step 1: determine the target path and any pre-existing content hint.
+        path, content_hint = self._resolve_path_and_hint(raw, task)
+
+        # Step 2: try LLM synthesis.
+        generated = self._try_llm_synthesis(task, content_hint)
+
+        # Step 3: if LLM succeeded, use generated content; otherwise fall back
+        # to the DocumentationExecutor approach (derive from task fields).
+        if generated:
+            content = generated
+        else:
+            content = self._fallback_content(task, path)
+
+        # Step 4: write the file.
+        p = Path(path)
+        if not p.is_absolute():
+            p = (Path(ws) / p).resolve()
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+            dur = int((time.monotonic() - t0) * 1000)
+            if not p.exists() or p.stat().st_size == 0:
+                return _fail("", "", None, dur,
+                             f"synthesis write produced empty/missing: {p}")
+            return _ok(f"wrote {p} ({len(content)} chars)", "", 0, dur, [str(p)])
+        except Exception as e:
+            dur = int((time.monotonic() - t0) * 1000)
+            return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
+
+    def _resolve_path_and_hint(self, raw: str, task) -> Tuple[str, str]:
+        """Extract target path and content hint from payload or task fields."""
+        if raw.startswith("{"):
+            try:
+                obj = json.loads(raw)
+                if isinstance(obj, dict):
+                    p = obj.get("path", "") or ""
+                    hint = obj.get("content", "") or ""
+                    if p:
+                        return p, hint
+            except (ValueError, TypeError):
+                pass
+        # Fall back to symbolic metadata.
+        sym = getattr(task, "symbolic", None) or {}
+        p = sym.get("path", "") or ""
+        hint = sym.get("content", "") or ""
+        if p:
+            return p, hint
+        # Last resort: derive from title.
+        title = getattr(task, "title", "") or "analysis"
+        slug = "".join(c if c.isalnum() else "_" for c in title.lower())[:40].strip("_")
+        return f"{slug}.md", hint
+
+    def _read_repo_files(self, sym: dict) -> str:
+        """Read key files from repo paths to enrich analysis content.
+
+        Reads README, config files (package.json, pyproject.toml, etc.),
+        and a few source files from each repo path. File contents are
+        truncated to avoid overflowing the LLM context window.
+
+        Performance: globbing is depth-limited to avoid scanning large
+        directories like node_modules/ or .git/. Total output is capped
+        at 25K chars to keep the LLM prompt within a reasonable window.
+
+        Returns a formatted string with repo file contents, or empty
+        string if no repo paths are available or files can't be read.
+        """
+        repo_paths = sym.get("repo_paths") or []
+        if not repo_paths:
+            return ""
+
+        lines: List[str] = []
+        _MAX_FILE_SIZE = 5000  # max chars per file
+        _MAX_FILES_PER_REPO = 4
+        _MAX_TOTAL_CHARS = 25000  # total cap to prevent context overflow
+
+        for repo_idx, rp in enumerate(repo_paths):
+            if not rp or not Path(rp).is_dir():
+                continue
+            repo_name = Path(rp).name
+            lines.append(f"\n=== Source Files from {repo_name} ({rp}) ===")
+
+            # Key files to read: config + entry points + README.
+            # Only shallow-level config files (no deep recursion needed).
+            candidates = [
+                "README.md", "readme.md", "Readme.md",
+                "package.json", "pyproject.toml", "Cargo.toml",
+                "go.mod", "Gemfile", "setup.py", "setup.cfg",
+                "requirements.txt", "Makefile", "Dockerfile",
+            ]
+            # Also check key subdirectories at depth 1 only (avoids scanning
+            # node_modules/, .git/, vendor/, etc. which cause performance issues).
+            for sub_dir in ("src", "cli", "lib", "app"):
+                sub_path = Path(rp) / sub_dir
+                if sub_path.is_dir():
+                    for f in sorted(sub_path.iterdir())[:_MAX_FILES_PER_REPO]:
+                        if f.is_file() and f.suffix in (".py", ".ts", ".js", ".rs", ".go", ".sh"):
+                            rel = str(f.relative_to(Path(rp)))
+                            if rel not in candidates:
+                                candidates.append(rel)
+
+            # Deduplicate and read files.
+            seen_files: set = set()
+            count = 0
+            for candidate in candidates:
+                if count >= _MAX_FILES_PER_REPO:
+                    break
+                # Check total size cap.
+                current_total = sum(len(l) for l in lines)
+                if current_total >= _MAX_TOTAL_CHARS:
+                    break
+                fp = Path(rp) / candidate
+                resolved = fp.resolve()
+                if resolved.exists() and resolved.is_file() and str(resolved) not in seen_files:
+                    seen_files.add(str(resolved))
+                    try:
+                        text = resolved.read_text(
+                            encoding="utf-8", errors="replace")
+                        if len(text) > _MAX_FILE_SIZE:
+                            text = text[:_MAX_FILE_SIZE] + "\n... (truncated)"
+                        # Check if adding this file would exceed total cap.
+                        if current_total + len(text) > _MAX_TOTAL_CHARS:
+                            remaining = _MAX_TOTAL_CHARS - current_total
+                            if remaining > 200:
+                                text = text[:remaining] + "\n... (truncated)"
+                            else:
+                                break
+                        lines.append(f"\n--- {candidate} ---")
+                        lines.append(text)
+                        count += 1
+                    except (OSError, IOError):
+                        pass
+
+        return "\n".join(lines)
+
+    def _try_llm_synthesis(self, task, content_hint: str) -> Optional[str]:
+        """Attempt to generate content via the Friday LLM service.
+
+        Builds a structured prompt from the task's title, description,
+        acceptance criteria, AND actual repo source files read from disk.
+        The content_hint is deliberately NOT passed to the LLM because it
+        contains template instructions that confuse the model.
+
+        The task's description field (which carries synthesis evidence) is
+        used alongside actual source files read from the repo paths stored
+        in the task's symbolic metadata (repo_paths).
+
+        Returns generated markdown or None on failure.
+        """
+        title = getattr(task, "title", "") or "Analysis"
+        desc = getattr(task, "description", "") or ""
+        acs = getattr(task, "acceptance_criteria", []) or []
+
+        if not desc:
+            return None  # Nothing to synthesize from.
+
+        # Determine document type from the target file path.
+        sym = getattr(task, "symbolic", None) or {}
+        path = sym.get("path", "") or ""
+
+        # Read actual repo source files for deeper analysis.
+        repo_files = self._read_repo_files(sym)
+
+        doc_type_map = {
+            "integration-analysis": "architecture comparative analysis",
+            "shared-patterns": "shared patterns and divergences documentation",
+            "integration-plan": "feasibility assessment and integration plan",
+            "adapter-design": "adapter/interface design specification",
+        }
+        doc_purpose = "analysis document"
+        doc_sections = ""
+        for key, purpose in doc_type_map.items():
+            if key in path:
+                doc_purpose = purpose
+                if key == "integration-analysis":
+                    doc_sections = (
+                        "## Project overview for each repo\n"
+                        "## Architecture comparison\n"
+                        "## Technology stack comparison\n"
+                        "## Structural similarities and differences\n"
+                        "## Integration opportunities\n"
+                        "## Recommendations\n"
+                    )
+                elif key == "shared-patterns":
+                    doc_sections = (
+                        "## Shared technologies\n"
+                        "## Common architectural patterns\n"
+                        "## Shared components and utilities\n"
+                        "## Key divergences\n"
+                        "## Reuse opportunities\n"
+                    )
+                elif key == "integration-plan":
+                    doc_sections = (
+                        "## Feasibility summary\n"
+                        "## Integration strategies considered\n"
+                        "## Recommended approach\n"
+                        "## Effort breakdown by phase\n"
+                        "## Risk assessment and mitigations\n"
+                        "## Migration roadmap\n"
+                        "## Success metrics\n"
+                    )
+                elif key == "adapter-design":
+                    doc_sections = (
+                        "## Integration approach and rationale\n"
+                        "## Interface specification (APIs, data formats, schemas)\n"
+                        "## Data flow between systems\n"
+                        "## Error handling and edge cases\n"
+                        "## Testing strategy\n"
+                        "## Deployment and rollout plan\n"
+                    )
+                break
+
+        # Check LLM availability before building the prompt.
+        try:
+            from ..services.llm import _call as _llm_call
+        except ImportError:
+            return None
+
+        system = (
+            "You write thorough, self-contained markdown documents for "
+            "software engineering tasks. You will be given:\n"
+            "1. A document purpose (what type of document to produce)\n"
+            "2. Source evidence (raw findings to work from)\n"
+            "3. Required sections (headings to include)\n"
+            "4. Acceptance criteria (quality gates)\n\n"
+            "CRITICAL RULES:\n"
+            "- Write COMPLETE analysis content for EVERY section listed.\n"
+            "- Never write instructions like 'TBD', 'Fill this in', "
+            "'Document: architecture pattern...', or placeholder text.\n"
+            "- Every section must contain specific, concrete analysis with "
+            "real technology names, patterns, and architectural details.\n"
+            "- Use proper markdown: headings (##), bullet lists, tables, "
+            "and code blocks where appropriate.\n"
+            "- Output ONLY the markdown content. No commentary, no JSON, "
+            "no code fences wrapping the document.\n"
+        )
+
+        ac_text = "\n".join(f"- {a}" for a in acs) if acs else "None specified."
+        user = (
+            f"## Document Purpose\n"
+            f"Create a {doc_purpose} for the following task.\n\n"
+            f"## Synthesis Evidence\n"
+            f"{desc}\n\n"
+            f"## Repository Source Files\n"
+            f"Here are actual source files read from the repositories on disk. "
+            f"Use these to provide specific, concrete analysis with real "
+            f"code patterns, dependencies, and architectural details.\n"
+            f"{repo_files}\n\n"
+            f"## Required Sections\n"
+            f"{doc_sections}\n"
+            f"## Acceptance Criteria\n"
+            f"{ac_text}\n\n"
+            f"Generate the complete markdown document now. Every section "
+            f"listed above must contain substantive, specific analysis "
+            f"content based on the synthesis evidence AND the actual "
+            f"source files provided. Write real content, not instructions."
+        )
+
+        try:
+            result = _llm_call(system, user)
+            if result:
+                text = result.strip()
+                # Strip markdown code fences if the LLM wraps output.
+                for fence in ("```markdown", "```markdown\n", "```"):
+                    if text.startswith(fence):
+                        text = text[len(fence):].strip()
+                    if text.endswith("```"):
+                        text = text[:-3].strip()
+                if len(text) > 100:
+                    return text
+        except Exception:
+            pass
+        return None
+
+    def _fallback_content(self, task, path: str) -> str:
+        """Fallback content derivation when LLM is unavailable.
+
+        Mirrors DocumentationExecutor._resolve() behaviour: derive content
+        from the task's own evidence fields.
+        """
+        title = getattr(task, "title", "") or "Analysis"
+        desc = getattr(task, "description", "") or ""
+        acs = getattr(task, "acceptance_criteria", []) or []
+        lines = [f"# {title}", ""]
+        if desc:
+            lines.append(desc)
+            lines.append("")
+        if acs:
+            lines.append("## Acceptance criteria")
+            for a in acs:
+                lines.append(f"- {a}")
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    def verify(self, task, result: ExecutionResult) -> VerificationResult:
+        """File-existence and non-empty verification."""
+        artifacts = result.artifacts or []
+        if artifacts:
+            paths_to_check = list(artifacts)
+        else:
+            sym = getattr(task, "symbolic", None) or {}
+            p = sym.get("path", "")
+            paths_to_check = [p] if p else []
+
+        for p in paths_to_check:
+            pp = Path(p)
+            if pp.exists() and pp.stat().st_size > 0:
+                return VerificationResult(
+                    passed=True,
+                    reason=f"artifact {p} exists ({pp.stat().st_size} bytes)")
+        return VerificationResult(
+            passed=False,
+            reason=f"no artifact produced by synthesis executor")
+
+
+# backward-compat alias
+SynthesisWorker = SynthesisExecutor
+
 # ---------------------------------------------------------------------------
 # Worker resolution — maps a registry worker_id to its execution adapter.
 # ---------------------------------------------------------------------------
@@ -715,6 +1064,110 @@ DocumentationWorker = DocumentationExecutor
 def resolve_worker(worker_id: str, workspace: str = ".") -> Optional[Worker]:
     """DEPRECATED: use resolve_executor. Kept for backward compatibility."""
     return resolve_executor(worker_id, workspace)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic worker dispatch — wraps a self-generated worker module.
+# ---------------------------------------------------------------------------
+
+class DynamicWorkerExecutor(Executor):
+    """Generic adapter for self-generated workers (from the meta-engine).
+
+    Wraps a Python module that exports ``execute(input_data, workspace)``
+    returning ``{"success": bool, "output": str, ...}``. The module is
+    dynamically imported from ``src.friday.workers.<name>`` and its
+    ``execute()`` is called with the task's ``runtime_payload`` as input_data.
+    """
+
+    def __init__(self, module, worker_id: str, workspace: str = ".") -> None:
+        self.worker_id = worker_id
+        self._module = module
+        self._ws = workspace
+
+    def execute(self, task) -> ExecutionResult:
+        inp = _payload(task).strip()
+        inp = normalize_worker_input(inp)
+        ws = _ws(task, self._ws)
+        t0 = time.monotonic()
+        try:
+            result = self._module.execute(inp, ws)
+            dur = int((time.monotonic() - t0) * 1000)
+            if not isinstance(result, dict):
+                return _fail("", str(result), None, dur,
+                             f"auto worker returned non-dict: {type(result).__name__}")
+            success = bool(result.get("success", False))
+            if success:
+                return _ok(
+                    result.get("output", ""),
+                    "",
+                    0,
+                    dur,
+                    artifacts=result.get("artifacts", []),
+                )
+            return _fail(
+                result.get("output", ""),
+                result.get("error", ""),
+                None,
+                dur,
+                error=result.get("error", "auto worker returned success=False"),
+            )
+        except Exception as e:
+            dur = int((time.monotonic() - t0) * 1000)
+            return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
+
+    def verify(self, task, result: ExecutionResult) -> VerificationResult:
+        """Trust the worker's own success flag (same as base Executor.verify).
+
+        The meta-engine's Stage 3 replay is the authoritative verification
+        gate for auto-generated workers. This verify() mirrors the base
+        class default — trust success, don't add false-negative checks.
+        """
+        return VerificationResult(
+            passed=result.success,
+            reason="auto worker success" if result.success
+            else "auto worker failure",
+        )
+
+
+def _find_auto_worker_module(worker_id: str) -> Optional[str]:
+    """Extract the module name from an auto-generated worker_id.
+
+    Auto-generated worker_ids follow the pattern ``worker:<name>:<hex>``
+    (set by ``deploy._register_worker``). We extract ``<name>`` and look for
+    ``src/friday.workers.<name>`` on the Python path (the module the
+    meta-engine wrote during deploy).
+
+    Uses ``importlib.import_module`` directly with ``sys.path`` adjusted so
+    the Friday project root is importable — same pattern as verification's
+    ``_build_invoke_code``. Does NOT check the worker registry; registration
+    and module-writing happen atomically during deploy, so the module's
+    filesystem presence is a reliable proxy for a completed deploy.
+
+    Returns the loaded module, or None if not found.
+    """
+    import sys as _sys
+    import importlib as _il
+
+    wid = worker_id or ""
+    if not wid.startswith("worker:"):
+        return None
+    rest = wid[len("worker:"):]
+    # Strip the hex suffix: worker:name:hex -> name
+    parts = rest.split(":")
+    if not parts or not parts[0]:
+        return None
+    name = parts[0]
+    fq_name = f"src.friday.workers.{name}"
+
+    # Ensure the project root is on sys.path (same pattern as verification).
+    here = Path(__file__).resolve().parents[2]  # src/friday/runtime -> project root
+    if str(here) not in _sys.path:
+        _sys.path.insert(0, str(here))
+
+    try:
+        return _il.import_module(fq_name)
+    except (ImportError, ModuleNotFoundError, ValueError, AttributeError):
+        return None
 
 
 def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]:
@@ -725,8 +1178,14 @@ def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]
     adapter; unavailability is reported by the adapter's own verify() (exit
     code / missing binary), never by fabricating success. Returns None only
     for ids with no execution adapter so the runtime records a clean failure.
+
+    After the hardcoded table, falls back to dynamic import of a module at
+    ``src.friday.workers/<name>`` — the convention used by the meta-engine
+    when deploying a self-generated worker. This is the dispatch link that
+    makes auto-deployed workers invocable by the runtime.
     """
     name = (worker_id or "").lower()
+    # Hardcoded built-in executors (unchanged — fast path for known ids).
     if name == "worker:shell":
         return BuiltinShellExecutor(workspace=workspace)
     if name == "worker:git":
@@ -739,6 +1198,8 @@ def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]
         return TestingExecutor(workspace=workspace)
     if name == "worker:documentation":
         return DocumentationExecutor(workspace=workspace)
+    if name == "worker:synthesis":
+        return SynthesisExecutor(workspace=workspace)
     if name == "worker:claude":
         return ClaudeCodeWorker(workspace=workspace)
     if name == "worker:codex":
@@ -751,13 +1212,27 @@ def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]
         return AiderWorker(workspace=workspace)
     if name == "worker:deepseek":
         return DeepSeekWorker(workspace=workspace)
+
+    if name == "worker:hyprctl":
+        from .hyprland_executor import HyprlandExecutor
+        return HyprlandExecutor(workspace=workspace)
+    if name == "worker:browser":
+        from .browser_executor import BrowserExecutor
+        return BrowserExecutor()
+
+    # Dynamic fallback: try to find and load a self-generated worker module.
+    module = _find_auto_worker_module(worker_id)
+    if module is not None and hasattr(module, "execute"):
+        return DynamicWorkerExecutor(
+            module, worker_id=worker_id, workspace=workspace)
+
     return None
 
 
 # Registry id -> the execution worker_id used for resolution (1:1 here).
 BUILTIN_EXECUTION_IDS = (
     "worker:shell", "worker:git", "worker:filesystem", "worker:python",
-    "worker:testing", "worker:documentation",
+    "worker:testing", "worker:documentation", "worker:synthesis",
 )
 
 # External AI executor ids (non-deterministic; used only as a fallback when no

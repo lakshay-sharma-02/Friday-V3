@@ -376,7 +376,7 @@ class RuntimeEngine:
                  *, worker_id: str = "", wave: int = 1, attempt: int = 1,
                  exit_code=None, error: str = "", stdout: str = "",
                  stderr: str = "", artifacts=None, duration_ms: int = 0,
-                 reason: str = "") -> None:
+                 reason: str = "", payload: str = "") -> None:
         """Single persistence entrypoint used by the executor.
 
         Writes the latest runtime_tasks row, an append-only runtime_results row
@@ -414,6 +414,7 @@ class RuntimeEngine:
                     if exit_code is not None else result.exit_code,
                     "duration_ms": duration_ms or result.duration_ms,
                     "error": error or result.error,
+                    "payload": payload,
                     "verification_passed": result.verification_passed,
                     "verification_evidence": json.dumps(
                         verify_evidence or {}),

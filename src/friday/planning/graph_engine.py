@@ -132,6 +132,25 @@ class TaskGraphEngine:
             return None
         return self._rebuild(row)
 
+    def graph_by_goal(self, goal: str) -> Optional[TaskGraph]:
+        """Return the most recent compiled/approved graph for a goal string.
+
+        Used by `friday execute` to skip re-planning when the same goal has
+        already been planned. Only returns graphs in a usable state (compiled,
+        approved, or proposal) — never rejected graphs.
+
+        Returns None if no usable graph exists for this goal.
+        """
+        row = self.conn.execute(
+            "SELECT id FROM task_graphs "
+            "WHERE goal = ? AND status IN ('compiled', 'approved', 'proposal') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (goal,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self.graph_by_id(row["id"])
+
     def _rebuild(self, row: TaskGraphRow) -> TaskGraph:
         tasks = [
             self._task_from_row(r) for r in get_tasks_for_graph(self.conn, row.id)]

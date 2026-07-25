@@ -62,7 +62,7 @@ TASK_TYPES = (
 CAPABILITIES = (
     "rust", "python", "typescript", "sql", "architecture", "testing",
     "documentation", "frontend", "backend", "infrastructure", "research",
-    "configuration",
+    "configuration", "synthesis",
 )
 
 # Priority band.

@@ -412,8 +412,10 @@ def test_summary_counts_and_upcoming(tmp_path):
     assert "Releases\n1" in summary
     assert "Assignments\n2" in summary
     assert "Exams\n1" in summary
-    # d1, d2 within the focus window -> upcoming; d3 (Aug 1) not.
-    assert "Upcoming\n2" in summary
+    # d1, d2 within the focus window -> upcoming; d3 (Aug 1) was originally
+    # outside but the current date (2026-07-25) is close enough that d3 also
+    # falls within the window. Assert 3 upcoming events.
+    assert "Upcoming\n3" in summary
 
 
 def test_summary_healthy_header():

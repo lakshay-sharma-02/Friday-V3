@@ -39,6 +39,7 @@ _W_CONFIDENCE = {"high": 5, "medium": 2, "low": 0}
 # to Claude.
 _W_DETERMINISTIC = 50    # bonus for a deterministic (non-AI) executor
 _W_AI_PENALTY = 40       # penalty for an AI executor (LLM/service/agent)
+_W_PREFERRED = 15       # bonus for a worker matching operator profile preferences
 
 # Phase 1.5: explicit artifact contract -> capability. When the planner declares
 # an expected artifact (e.g. "calculator.py"), an executor whose capability
@@ -141,6 +142,7 @@ def score_worker(
     expected_artifacts: Optional[List[str]] = None,
     is_judgment: bool = False,
     capability_reliability: Optional[dict] = None,
+    preferred_worker_ids: Optional[set] = None,
 ) -> Tuple[ScoreBreakdown, List[str], List[str]]:
     """Score one (task, worker) pair.
 
@@ -228,6 +230,13 @@ def score_worker(
                 sb.penalty += int((1.0 - ratio) * 10)
                 sb.confidence -= 1  # reduce confidence for unreliable caps
 
+    # Operator profile preference boost: if the operator has set preferred worker
+    # types via `friday profile set preferred_worker_types`, workers appearing in
+    # that list get a transparent bonus. This is additive and never blocks — it
+    # affects ranking order but the operator can always see WHY.
+    if preferred_worker_ids and worker.id in preferred_worker_ids:
+        sb.executor_pref += _W_PREFERRED
+
     # Separately record determinism preference (not a penalty on the base
     # score, so it does not distort the capability explanation).
     if missing:
@@ -282,6 +291,7 @@ def rank_workers(
     expected_artifacts: Optional[List[str]] = None,
     is_judgment: bool = False,
     capability_reliability: Optional[dict] = None,
+    preferred_worker_ids: Optional[set] = None,
 ) -> List[Tuple[Worker, ScoreBreakdown, List[str], List[str], str]]:
     """Score + rank workers for a task, deterministically.
 
@@ -310,7 +320,8 @@ def rank_workers(
         sb, matched, missing = score_worker(
             task_required, task_type, plan_type, w, intent=intent,
             expected_artifacts=expected_artifacts, is_judgment=is_judgment,
-            capability_reliability=capability_reliability)
+            capability_reliability=capability_reliability,
+            preferred_worker_ids=preferred_worker_ids)
         # Disabled workers can never run — exclude. Missing caps are NOT fatal;
         # the penalty already pushes them below capable workers.
         if w.status != "active":
@@ -351,6 +362,7 @@ def select_assignment(
     expected_artifacts: Optional[List[str]] = None,
     is_judgment: bool = False,
     capability_reliability: Optional[dict] = None,
+    preferred_worker_ids: Optional[set] = None,
 ) -> Tuple[Optional[Worker], List[Worker], str, List[str], List[str], str, List[dict]]:
     """Pick the assignment for a task.
 
@@ -368,7 +380,8 @@ def select_assignment(
     ranked = rank_workers(
         task_required, task_type, plan_type, workers, successful_history,
         expected_artifacts=expected_artifacts, is_judgment=is_judgment,
-        capability_reliability=capability_reliability)
+        capability_reliability=capability_reliability,
+        preferred_worker_ids=preferred_worker_ids)
 
     if not ranked:
         return (None, [], "low", [], list(task_required),

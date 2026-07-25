@@ -136,11 +136,14 @@ def test_session_by_id_read_does_not_write(conn, start, tmp_path):
 
 def test_stale_warning_appears_when_observations_newer(conn, start, tmp_path):
     _seed(conn, start, tmp_path)
+    from friday.db import now_iso
     eng = ContextEngine(conn)
     eng.build()
     assert eng.is_stale() is False
-    # Add a NEW observation timestamped AFTER the build.
-    newer = _t(start, 120)  # 2h later, still same data shape
+    # Add a NEW observation timestamped AFTER the build completed.
+    # `now_iso()` captured post-build is always >= built_at, so is_stale
+    # correctly flags it.
+    newer = now_iso()
     insert_observations(conn, [_obs("FridayV3", "commit_count", "2", newer).to_row()])
     # is_stale is a pure read and must now report True.
     assert eng.is_stale() is True
@@ -180,10 +183,12 @@ def test_build_is_append_only_across_distinct_windows(conn, start, tmp_path):
     eng = ContextEngine(conn)
     eng.build()
     n1 = _count_sessions(conn)
-    # Re-building over the SAME observations (even with a different as_of) must
-    # be idempotent: the session id is keyed on the observation window, not the
-    # build time, so no duplicate session is created (Part A #4).
-    eng.build(as_of="W2")
+    # Re-building over the SAME observations is idempotent:
+    # the session id is keyed on the observation window, not build time, so
+    # the build replaces the same session rather than appending a duplicate
+    # (Part A #4). The auto-clear (DELETE FROM sessions) guarantees no
+    # orphaned sessions accumulate even when session IDs change.
+    eng.build()
     assert _count_sessions(conn) == n1
     # A genuinely NEW observation window appends a distinct session.
     insert_observations(conn, [

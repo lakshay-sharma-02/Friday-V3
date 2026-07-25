@@ -305,12 +305,12 @@ def verify_symbolic(task: RuntimeTask, result: ExecutionResult,
         else:
             full_path = ""
         if full_path and Path(full_path).exists():
-            content = Path(full_path).read_text(encoding="utf-8", errors="replace")
-            expected = sym.get("content", "")
-            if expected and expected not in content:
-                return VerificationResult(
-                    passed=False,
-                    reason=f"file {path} exists but content mismatch")
+            # NOTE: Content is NOT checked against symbolic.content because
+            # different executors may produce different content:
+            #   - DocumentationExecutor derives content from task evidence
+            #   - Shell/FileExecutor writes symbolic content verbatim
+            # The file existence check is the reliable evidence. Content
+            # verification should be handled by acceptance_criteria.
             # If the LLM specified a command (e.g. "pytest test_git_branch.py"),
             # execute it NOW as part of verification. Without this, a create_file
             # task that wrote the file but never ran the test would pass

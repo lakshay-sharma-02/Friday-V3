@@ -19,6 +19,20 @@ from typing import Dict, List, Optional
 
 _LAZY_DISCOVERY_RAN = False
 
+# AI executor binary map: worker ID -> binary name on PATH.
+# Defined at module level so it can be mocked in tests and is not recreated
+# on every resolve_graph() call. The resolver filters out AI executors whose
+# underlying binary is not available on PATH, preventing the runtime fallback
+# chain from wasting time on missing AI CLIs.
+_AI_BINARY_MAP = {
+    "worker:claude": "claude",
+    "worker:codex": "codex",
+    "worker:gemini": "gemini",
+    "worker:opencode": "opencode",
+    "worker:aider": "aider",
+    "worker:deepseek": "deepseek",
+}
+
 from ..db import (
     atomic,
     get_resolver_assignments,
@@ -227,6 +241,16 @@ class CapabilityResolver:
         workers = [w for w in workers
                    if resolve_executor(w.id) is not None
                    or not (w.id.endswith(" llm") or w.kind.value == "service")]
+
+        # Filter out AI executors whose underlying binary is not available.
+        # The resolver would otherwise assign tasks to AI workers, and the
+        # execution fallback chain would waste time trying each missing binary
+        # before falling back to deterministic built-ins. Check at resolution
+        # time so the selector picks a viable worker immediately.
+        import shutil
+        workers = [w for w in workers
+                   if w.id not in _AI_BINARY_MAP
+                   or shutil.which(_AI_BINARY_MAP[w.id]) is not None]
         hist_counts = self._successful_history()
 
         results: List[ResolutionResult] = []
@@ -256,6 +280,19 @@ class CapabilityResolver:
         except Exception:
             pass
 
+        # Read preferred worker types from operator profile and resolve to IDs.
+        preferred_worker_ids: Optional[set] = None
+        try:
+            from ..operator.engine import get_preferred_worker_types
+            preferred_types = get_preferred_worker_types(self.conn)
+            if preferred_types:
+                preferred_worker_ids = {
+                    w.id for w in workers
+                    if w.id in preferred_types
+                }
+        except Exception:
+            pass
+
         # Reset gap tracking at the start of each resolution run so each run
         # independently detects gaps (duplicate detection is per-run).
         reset_gap_tracking()
@@ -278,6 +315,7 @@ class CapabilityResolver:
                         expected_artifacts=list(task.outputs),
                         is_judgment=is_judgment,
                         capability_reliability=capability_reliability or None,
+                        preferred_worker_ids=preferred_worker_ids,
                     )
 
                 # Emit CapabilityGapEvent when missing capabilities exist.

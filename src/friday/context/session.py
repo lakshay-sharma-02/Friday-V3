@@ -88,16 +88,16 @@ def _to_events(observations: List[Observation]) -> List["_Event"]:
         by_time.setdefault(o.observed_at, []).append(o)
     events: List[_Event] = []
     for ts in sorted(by_time):
-        facts = by_time[ts]
-        # Group facts by repo so each repo gets its own session.
-        # A single `friday observe` run stamps all repos at once; without
-        # splitting, every repo would collapse into one event with the
-        # alphabetically-first repo as primary_repo — false sessions.
-        by_subject: dict[str, List[Observation]] = {}
-        for f in facts:
-            by_subject.setdefault(f.subject, []).append(f)
-        for subject in sorted(by_subject):
-            events.append(_Event(ts=ts, facts=by_subject[subject]))
+        # Merge all observations at the same timestamp into one event.
+        # A single `friday observe` run stamps all repos at once with the
+        # same timestamp. Splitting by repo within that timestamp creates
+        # separate sessions with start == end == 0m duration because every
+        # point-observation has no temporal width of its own. Merging means
+        # the session's duration comes from the gap to the next observation
+        # run — which is the actual time the user spent working across the
+        # repos observed in that pass. Multiple repos in one session is fine:
+        # they were observed simultaneously in the same observation run.
+        events.append(_Event(ts=ts, facts=by_time[ts]))
     return events
 
 
@@ -136,9 +136,14 @@ class _OpenSession:
         self.end = ev.ts
         self.obs_ids.extend(f.id for f in ev.facts)
         self.obs_objects.extend(ev.facts)
-        if repo:
-            self.repos.append(repo)
-            self._repo_counts[repo] = self._repo_counts.get(repo, 0) + 1
+        # Track ALL repos from the merged event, not just the primary one.
+        # With merged events (all repos at one timestamp), only tracking
+        # the first-alphabetical repo would lose all other repos from the
+        # session's repositories list and make primary_repo wrong.
+        for r in ev.repos:
+            if r:
+                self.repos.append(r)
+                self._repo_counts[r] = self._repo_counts.get(r, 0) + 1
         if branch:
             self.branch = branch
 

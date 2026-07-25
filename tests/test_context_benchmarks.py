@@ -159,13 +159,15 @@ def test_bench_append_only_no_overwrite(conn, start, tmp_path):
            _obs("FridayV3", "branch", "main", _t(start, 5))]
     insert_observations(conn, [o.to_row() for o in obs])
     eng = ContextEngine(conn)
-    eng.build(as_of="2026-07-14T09:00:00+00:00")
+    eng.build()
     first = len(eng.sessions())
     assert first == 1
-    # Re-building over the SAME observations (different as_of) is idempotent:
-    # the session id is keyed on the observation window, not build time, so no
-    # duplicate session is created (Part A #4).
-    eng.build(as_of="2026-07-14T17:00:00+00:00")
+    # Re-building over the SAME observations is idempotent:
+    # the session id is keyed on the observation window, not build time, so the
+    # build replaces the same session rather than appending a duplicate (Part A
+    # #4). The auto-clear (DELETE FROM sessions before INSERT) guarantees no
+    # orphaned sessions accumulate, even when session IDs change.
+    eng.build()
     assert len(eng.sessions()) == 1
     # A genuinely new observation window appends a distinct session instead.
     insert_observations(conn, [
@@ -187,8 +189,8 @@ def test_bench_same_window_is_idempotent(conn, start, tmp_path):
     obs = [_obs("FridayV3", "commit_count", "1", _t(start, 0))]
     insert_observations(conn, [o.to_row() for o in obs])
     eng = ContextEngine(conn)
-    eng.build(as_of="W1")
-    eng.build(as_of="W1")  # identical window key
+    eng.build()
+    eng.build()  # identical data => same window
     # Same (built_at, repo, start) => one row, not two.
     assert len(eng.sessions()) == 1
 
@@ -262,9 +264,9 @@ def test_bench_no_duplicated_sessions(conn, start, tmp_path):
            _obs("FridayV3", "commit_count", "2", _t(start, 10))]
     insert_observations(conn, [o.to_row() for o in obs])
     eng = ContextEngine(conn)
-    eng.build(as_of="A")
-    eng.build(as_of="B")
-    eng.build(as_of="C")
+    eng.build()
+    eng.build()
+    eng.build()
     ids = [s.id for s in eng.sessions()]
     assert len(ids) == len(set(ids))  # never duplicates a session row
 

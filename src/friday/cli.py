@@ -53,6 +53,10 @@ from .cli_capability import cmd_capability
 from .cli_watch import cmd_watch
 from .cli_suggest import cmd_suggest
 from .cli_repair import cmd_repair
+from .cli_integration import cmd_integrate
+from .cli_daemon import cmd_daemon
+from .cli_patterns import cmd_patterns
+from .cli_actions import cmd_actions
 from .context import ContextEngine
 from .db import connect
 from .doctor import cmd_doctor
@@ -114,6 +118,11 @@ def cmd_ask(args: argparse.Namespace) -> int:
                 print("  Coverage widened:    yes (adaptive expansion, once)")
         print(f"\n[synthesized via LLM: {answer.used_llm}]\n")
     print(answer.text)
+    # Always show confidence — no --verbose needed for this signal.
+    audit = answer.evidence.raw.get("retrieval_audit")
+    confidence = audit.get("confidence") if audit else None
+    if confidence:
+        print(f"\n[Confidence: {confidence}]")
     return 0
 
 
@@ -530,8 +539,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_profile.add_argument(
         "action", nargs="?", default="show",
-        choices=["show", "set", "unset"],
-        help="'show' (default), 'set <key> <value>', or 'unset <key>'.",
+        choices=["show", "set", "unset", "history", "derive", "stats"],
+        help="'show' (default), 'set <key> <value>', 'unset <key>', 'history', "
+             "'derive' (force re-derive), or 'stats'.",
     )
     p_profile.add_argument(
         "key", nargs="?", default=None,
@@ -783,6 +793,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Generate a Task Graph from a suggestion by its id (run `friday suggest` to see ids).")
     p_suggest.set_defaults(func=cmd_suggest)
 
+    p_integrate = sub.add_parser(
+        "integrate",
+        help="Analyse two repositories for integration opportunities and generate a Task Graph.")
+    p_integrate.add_argument(
+        "repo_a",
+        help="First repository name.")
+    p_integrate.add_argument(
+        "repo_b",
+        help="Second repository name.")
+    p_integrate.set_defaults(func=cmd_integrate)
+
     p_repair = sub.add_parser(
         "repair",
         help="Detect and propose repairs for failed task executions (Law 16).")
@@ -797,12 +818,60 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_repair.set_defaults(func=cmd_repair)
 
+    p_daemon = sub.add_parser(
+        "daemon",
+        help="Ambient observation daemon (always-on mode).")
+    p_daemon.add_argument(
+        "action", nargs="?", default="status",
+        choices=["start", "stop", "restart", "status", "logs"],
+        help="'start', 'stop', 'restart', 'status' (default), or 'logs'.")
+    p_daemon.add_argument(
+        "--interval", type=int, default=900,
+        help="Seconds between observation cycles (default: 900 = 15 min).")
+    p_daemon.add_argument(
+        "--no-notify", action="store_true",
+        help="Suppress desktop notifications.")
+    p_daemon.add_argument(
+        "--lines", type=int, default=50,
+        help="Number of log lines to show with 'logs' action (default: 50).")
+    p_daemon.set_defaults(func=cmd_daemon)
+
+    p_patterns = sub.add_parser(
+        "patterns",
+        help="Mine and show repeated action patterns from the actions log (Pillar B Stage 2).")
+    p_patterns.add_argument(
+        "action", nargs="?", default=None,
+        choices=["mine", "clear", "label"],
+        help="'mine' to run sequence mining, 'label' to run LLM intent labeling, "
+             "'clear' to delete all patterns, omit to show.")
+    p_patterns.add_argument(
+        "--min-count", type=int, default=0,
+        help="Minimum pattern count to show (default: 0 = all).")
+    p_patterns.add_argument(
+        "--limit", type=int, default=50,
+        help="Max patterns to show (default: 50).")
+    p_patterns.set_defaults(func=cmd_patterns)
+
+    p_actions = sub.add_parser(
+        "actions",
+        help="Show recent action events logged by Friday (Pillar B Stage 1).")
+    p_actions.add_argument(
+        "n", nargs="?", type=int, default=50,
+        help="Number of recent actions to show (default: 50).")
+    p_actions.add_argument(
+        "--source", type=str, default=None,
+        help="Filter by source (friday, hyprland, browser, etc.).")
+    p_actions.set_defaults(func=cmd_actions)
+
     p_doctor = sub.add_parser(
         "doctor", help="Check system health (DB, deps, workers, README, watch).")
     p_doctor.set_defaults(func=cmd_doctor)
 
     from .cli_synthesize import add_subparser as add_synthesize
     add_synthesize(sub)
+
+    from .cli_meta import add_subparser as add_meta
+    add_meta(sub)
 
     args = parser.parse_args(argv)
     return args.func(args)
