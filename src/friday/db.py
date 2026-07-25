@@ -1059,6 +1059,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE workers ADD COLUMN availability TEXT NOT NULL DEFAULT 'available'")
     if "manifest_ref" not in worker_cols:
         conn.execute("ALTER TABLE workers ADD COLUMN manifest_ref TEXT")
+    if "worker_kind" not in worker_cols:
+        conn.execute(
+            "ALTER TABLE workers ADD COLUMN worker_kind TEXT NOT NULL DEFAULT 'function'")
+    # Pillar B Stage 4: exemplars column on mined_patterns for skill formation.
+    mp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mined_patterns)")}
+    if "exemplars" not in mp_cols:
+        conn.execute(
+            "ALTER TABLE mined_patterns ADD COLUMN exemplars TEXT NOT NULL DEFAULT '{}'")
     # Phase 3: symbolic task intent (planner emits engineering op, resolver
     # enriches with repo info). Additive JSON column on tasks.
     task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
@@ -1255,6 +1263,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_workflow_intents_pattern_id ON workflow_intents(pattern_id);
         CREATE INDEX IF NOT EXISTS idx_workflow_intents_confidence ON workflow_intents(confidence);
+    """)
+    conn.commit()
+
+    # Pillar B Stage 4: Formed skills table (deployable replay workflows derived
+    # from labeled intents).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS formed_skills (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_intent_id INTEGER NOT NULL REFERENCES workflow_intents(id) ON DELETE CASCADE,
+            task_graph      TEXT NOT NULL,
+            exemplars       TEXT NOT NULL DEFAULT '{}',
+            invocation_count INTEGER NOT NULL DEFAULT 0,
+            last_invoked_at TEXT,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_formed_skills_wfi ON formed_skills(workflow_intent_id);
     """)
     conn.commit()
 
@@ -5247,4 +5272,68 @@ def get_workflow_intents_for_pattern(conn, pattern_id):
 def clear_workflow_intents(conn):
     """Delete all workflow intents (re-label on re-mine)."""
     conn.execute("DELETE FROM workflow_intents")
+    conn.commit()
+
+
+# ===========================================================================
+# Pillar B Stage 4 — Formed Skills (replayable workflow skills)
+# ===========================================================================
+
+
+def insert_formed_skill(conn, row: dict) -> int:
+    """Persist one formed skill. Returns the new row id."""
+    from datetime import datetime, timezone
+    cur = conn.execute(
+        """INSERT INTO formed_skills
+           (workflow_intent_id, task_graph, exemplars,
+            invocation_count, last_invoked_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (row["workflow_intent_id"], row["task_graph"], row.get("exemplars", "{}"),
+         row.get("invocation_count", 0), row.get("last_invoked_at"),
+         row.get("created_at", datetime.now(timezone.utc).isoformat()),
+         row.get("updated_at", datetime.now(timezone.utc).isoformat())))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_formed_skill(conn, skill_id: int) -> Optional[dict]:
+    """Return a formed skill by id."""
+    row = conn.execute(
+        "SELECT * FROM formed_skills WHERE id = ?", (skill_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_formed_skill_by_intent(conn, workflow_intent_id: int) -> Optional[dict]:
+    """Return a formed skill for a given workflow intent, or None."""
+    row = conn.execute(
+        "SELECT * FROM formed_skills WHERE workflow_intent_id = ?",
+        (workflow_intent_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_all_formed_skills(conn) -> list[dict]:
+    """Return all formed skills, newest first."""
+    rows = conn.execute(
+        "SELECT * FROM formed_skills ORDER BY created_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def increment_formed_skill_invocation(conn, skill_id: int) -> None:
+    """Increment invocation count and update last_invoked_at."""
+    from datetime import datetime, timezone
+    conn.execute(
+        "UPDATE formed_skills SET invocation_count = invocation_count + 1, "
+        "last_invoked_at = ?, updated_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(),
+         datetime.now(timezone.utc).isoformat(), skill_id)
+    )
+    conn.commit()
+
+
+def delete_formed_skill(conn, skill_id: int) -> None:
+    """Delete a formed skill by id."""
+    conn.execute("DELETE FROM formed_skills WHERE id = ?", (skill_id,))
     conn.commit()
