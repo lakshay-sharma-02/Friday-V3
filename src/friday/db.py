@@ -1284,6 +1284,43 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """)
     conn.commit()
 
+    # Cross-project correlation: project docs table (PRDs, design docs, architecture).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS project_docs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id     INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            path        TEXT NOT NULL,
+            title       TEXT NOT NULL DEFAULT '',
+            content     TEXT NOT NULL,
+            doc_type    TEXT NOT NULL DEFAULT 'design',
+            ingested_at TEXT NOT NULL,
+            checksum    TEXT NOT NULL DEFAULT '',
+            UNIQUE(repo_id, path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_docs_repo ON project_docs(repo_id);
+        CREATE INDEX IF NOT EXISTS idx_project_docs_type ON project_docs(doc_type);
+    """)
+    conn.commit()
+
+    # Cross-project correlation: per-pair results (append-only, resumable).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS correlation_results (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_a_id    INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            repo_b_id    INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            structural_score REAL NOT NULL DEFAULT 0.0,
+            semantic_score    REAL,
+            semantic_reason   TEXT,
+            semantic_label    TEXT,
+            semantic_confidence TEXT,
+            volatility         REAL NOT NULL DEFAULT 0.0,
+            run_at         TEXT NOT NULL,
+            UNIQUE(repo_a_id, repo_b_id, run_at)
+        );
+        CREATE INDEX IF NOT EXISTS idx_correlation_scores ON correlation_results(structural_score DESC);
+    """)
+    conn.commit()
+
 
 def _ensure_snapshots_signature_cols(conn: sqlite3.Connection) -> None:
     """Add head_sha / manifest_hash to snapshots if absent (idempotent)."""
@@ -5342,3 +5379,86 @@ def delete_formed_skill(conn, skill_id: int) -> None:
     """Delete a formed skill by id."""
     conn.execute("DELETE FROM formed_skills WHERE id = ?", (skill_id,))
     conn.commit()
+
+
+# ===========================================================================
+# Cross-Project Correlation — project docs + per-pair correlation results
+# ===========================================================================
+
+
+def upsert_project_doc(conn, row: dict) -> int:
+    """Insert or update a project doc by (repo_id, path). Returns row id."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """INSERT INTO project_docs (repo_id, path, title, content, doc_type, ingested_at, checksum)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(repo_id, path) DO UPDATE SET
+               title=excluded.title, content=excluded.content,
+               doc_type=excluded.doc_type, ingested_at=excluded.ingested_at,
+               checksum=excluded.checksum""",
+        (row["repo_id"], row["path"], row.get("title", ""), row["content"],
+         row.get("doc_type", "design"), now, row.get("checksum", "")))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_project_docs(conn, repo_id: int) -> list[dict]:
+    """Return all project docs for a repo."""
+    rows = conn.execute(
+        "SELECT * FROM project_docs WHERE repo_id = ? ORDER BY ingested_at DESC",
+        (repo_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_project_docs(conn) -> list[dict]:
+    """Return all project docs across all repos."""
+    rows = conn.execute(
+        "SELECT * FROM project_docs ORDER BY ingested_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_correlation_result(conn, row: dict) -> int:
+    """Persist one correlation result. Returns row id."""
+    from datetime import datetime, timezone
+    cur = conn.execute(
+        """INSERT INTO correlation_results
+           (repo_a_id, repo_b_id, structural_score, semantic_score,
+            semantic_reason, semantic_label, semantic_confidence,
+            volatility, run_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row["repo_a_id"], row["repo_b_id"],
+         row.get("structural_score", 0.0),
+         row.get("semantic_score"),
+         row.get("semantic_reason"),
+         row.get("semantic_label"),
+         row.get("semantic_confidence"),
+         row.get("volatility", 0.0),
+         datetime.now(timezone.utc).isoformat()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_recent_correlations(conn, min_structural: float = 0.0, limit: int = 20) -> list[dict]:
+    """Return most recent correlation results, optionally filtered by structural score."""
+    if min_structural > 0:
+        rows = conn.execute(
+            "SELECT * FROM correlation_results WHERE structural_score >= ? "
+            "ORDER BY run_at DESC LIMIT ?", (min_structural, limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM correlation_results ORDER BY run_at DESC LIMIT ?",
+            (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_repo_commit_count_recent(conn, repo_id: int, days: int = 30) -> int:
+    """Count commits in the last N days for a repo using snapshot history."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    # Use git snapshots to estimate activity — count distinct snapshot dates.
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT date(observed_at)) as c FROM snapshots "
+        "WHERE repo_path = (SELECT path FROM repositories WHERE id = ?) "
+        "AND observed_at >= ?", (repo_id, cutoff)).fetchone()
+    return row["c"] if row else 0
