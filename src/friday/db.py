@@ -1063,10 +1063,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE workers ADD COLUMN worker_kind TEXT NOT NULL DEFAULT 'function'")
     # Pillar B Stage 4: exemplars column on mined_patterns for skill formation.
-    mp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mined_patterns)")}
-    if "exemplars" not in mp_cols:
-        conn.execute(
-            "ALTER TABLE mined_patterns ADD COLUMN exemplars TEXT NOT NULL DEFAULT '{}'")
+    if "mined_patterns" in _existing_tables(conn):
+        mp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mined_patterns)")}
+        if "exemplars" not in mp_cols:
+            conn.execute(
+                "ALTER TABLE mined_patterns ADD COLUMN exemplars TEXT NOT NULL DEFAULT '{}'")
     # Phase 3: symbolic task intent (planner emits engineering op, resolver
     # enriches with repo info). Additive JSON column on tasks.
     task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
