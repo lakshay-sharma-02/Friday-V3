@@ -96,6 +96,7 @@ def _mine() -> int:
                 "common_workspace": p.common_workspace,
                 "common_project": p.common_project,
                 "confidence": "derived",
+                "exemplars": json.dumps(p.exemplars) if p.exemplars else "{}",
                 "mined_at": now_iso(),
             })
 

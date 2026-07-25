@@ -141,3 +141,61 @@ def test_insert_formed_skill():
     row = conn.execute("SELECT * FROM formed_skills WHERE id = ?", (skill_id,)).fetchone()
     assert row is not None
     assert row["workflow_intent_id"] == intent_id
+
+
+def test_mine_sequences_stores_exemplars():
+    """mine_sequences stores concrete value distributions per step position."""
+    from src.friday.sequence_miner import mine_sequences
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS actions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            source          TEXT NOT NULL,
+            action_type     TEXT NOT NULL,
+            target          TEXT NOT NULL DEFAULT '',
+            detail          TEXT NOT NULL DEFAULT '{}',
+            workspace_id    TEXT,
+            project         TEXT,
+            session_id      TEXT,
+            confidence      TEXT NOT NULL DEFAULT 'observed',
+            observed_at     TEXT NOT NULL,
+            recorded_at     TEXT NOT NULL
+        );
+    """)
+    from datetime import datetime, timezone
+    base = datetime.now(timezone.utc)
+    # Session 1: workspace_switch -> 3, app_launch -> firefox
+    t1 = base.isoformat()
+    conn.execute(
+        "INSERT INTO actions (source, action_type, target, workspace_id, observed_at, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("hyprland", "workspace_switch", "3", "3", t1, t1)
+    )
+    conn.execute(
+        "INSERT INTO actions (source, action_type, target, workspace_id, observed_at, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("hyprland", "app_launch", "firefox", "3", t1, t1)
+    )
+    # Session 2: workspace_switch -> 5, app_launch -> firefox (same pattern, different workspace)
+    t2 = (base.replace(second=(base.second + 5) % 60)).isoformat()
+    conn.execute(
+        "INSERT INTO actions (source, action_type, target, workspace_id, observed_at, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("hyprland", "workspace_switch", "5", "5", t2, t2)
+    )
+    conn.execute(
+        "INSERT INTO actions (source, action_type, target, workspace_id, observed_at, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("hyprland", "app_launch", "firefox", "5", t2, t2)
+    )
+    conn.commit()
+
+    patterns = mine_sequences(conn, min_support=1)
+    assert len(patterns) >= 1
+    p = patterns[0]
+    assert hasattr(p, "exemplars"), "MinedPattern should have exemplars field"
+    assert isinstance(p.exemplars, dict)
+    # Step 0 (workspace_switch): should have "3" and "5"
+    step0 = p.exemplars.get("0", {})
+    assert len(step0) >= 2, f"Expected 2+ values for step 0, got {step0}"
+    # Step 1 (app_launch): "firefox" should appear twice
+    step1 = p.exemplars.get("1", {})
+    assert step1.get("firefox", 0) >= 2, f"Expected firefox>=2 for step 1, got {step1}"

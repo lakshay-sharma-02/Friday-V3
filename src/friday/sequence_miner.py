@@ -50,6 +50,10 @@ _NORMALIZABLE_TYPES = frozenset({
     "workspace_switch", "app_launch", "app_close", "window_focus",
 })
 
+#: Per-ngram-key concrete value distributions
+#: {ngram_tuple: {step_idx_str: {concrete_value: count}}}
+_PATTERN_EXEMPLARS: dict = {}
+
 
 @dataclass
 class MinedPattern:
@@ -69,6 +73,7 @@ class MinedPattern:
     common_workspace: str = ""
     common_project: str = ""
     confidence: str = "derived"       # always "derived" for deterministic mining
+    exemplars: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -211,6 +216,8 @@ def _mine(
     """
     from collections import Counter
 
+    _PATTERN_EXEMPLARS.clear()
+
     # ngram_key -> set of session indices (for distinct session counting)
     ngram_sessions: dict[tuple, set[int]] = {}
 
@@ -222,6 +229,15 @@ def _mine(
         for length in range(2, max_length + 1):
             for i in range(len(normalized) - length + 1):
                 ngram = tuple(normalized[i: i + length])
+                # Track concrete target values for exemplar extraction.
+                for pos, raw_action in enumerate(session[i: i + length]):
+                    concrete_target = raw_action.get("target", "") or ""
+                    if concrete_target:
+                        pos_key = str(pos)
+                        if ngram not in _PATTERN_EXEMPLARS:
+                            _PATTERN_EXEMPLARS[ngram] = {}
+                        pos_map = _PATTERN_EXEMPLARS[ngram].setdefault(pos_key, {})
+                        pos_map[concrete_target] = pos_map.get(concrete_target, 0) + 1
                 if ngram not in seen_in_session:
                     seen_in_session.add(ngram)
                     ngram_sessions.setdefault(ngram, set()).add(sidx)
@@ -234,6 +250,7 @@ def _mine(
         patterns.append(MinedPattern(
             sequence=list(ngram),
             count=len(session_indices),
+            exemplars=_PATTERN_EXEMPLARS.get(ngram, {}),
         ))
 
     return patterns
