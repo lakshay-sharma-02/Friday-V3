@@ -143,6 +143,379 @@ def test_insert_formed_skill():
     assert row["workflow_intent_id"] == intent_id
 
 
+def _full_schema(conn: sqlite3.Connection) -> None:
+    """Apply all tables needed for skill formation tests."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mined_patterns (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            sequence_json   TEXT NOT NULL,
+            count           INTEGER NOT NULL DEFAULT 0,
+            distinct_sessions INTEGER NOT NULL DEFAULT 0,
+            first_seen      TEXT NOT NULL DEFAULT '',
+            last_seen       TEXT NOT NULL DEFAULT '',
+            common_workspace TEXT NOT NULL DEFAULT '',
+            common_project  TEXT NOT NULL DEFAULT '',
+            confidence      TEXT NOT NULL DEFAULT 'derived',
+            mined_at        TEXT NOT NULL,
+            exemplars       TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS workflow_intents (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern_id          INTEGER NOT NULL REFERENCES mined_patterns(id) ON DELETE CASCADE,
+            intent_label        TEXT NOT NULL,
+            intent_description  TEXT NOT NULL DEFAULT '',
+            steps_text          TEXT NOT NULL DEFAULT '[]',
+            confidence          TEXT NOT NULL DEFAULT 'low',
+            pattern_summary     TEXT NOT NULL DEFAULT '',
+            labeled_at          TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS formed_skills (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_intent_id INTEGER NOT NULL REFERENCES workflow_intents(id) ON DELETE CASCADE,
+            task_graph      TEXT NOT NULL,
+            exemplars       TEXT NOT NULL DEFAULT '{}',
+            invocation_count INTEGER NOT NULL DEFAULT 0,
+            last_invoked_at TEXT,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workers (
+            id              TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            kind            TEXT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            capabilities    TEXT NOT NULL DEFAULT '',
+            supported_languages     TEXT NOT NULL DEFAULT '',
+            supported_task_types    TEXT NOT NULL DEFAULT '',
+            supported_plan_types    TEXT NOT NULL DEFAULT '',
+            limitations             TEXT NOT NULL DEFAULT '',
+            estimated_speed         TEXT NOT NULL DEFAULT '',
+            estimated_cost          TEXT NOT NULL DEFAULT '',
+            context_window          INTEGER NOT NULL DEFAULT 0,
+            parallelism             INTEGER NOT NULL DEFAULT 1,
+            requires_network        INTEGER NOT NULL DEFAULT 0,
+            requires_filesystem     INTEGER NOT NULL DEFAULT 0,
+            requires_git            INTEGER NOT NULL DEFAULT 0,
+            requires_python         INTEGER NOT NULL DEFAULT 0,
+            requires_shell          INTEGER NOT NULL DEFAULT 0,
+            confidence              TEXT NOT NULL DEFAULT 'medium',
+            version                 TEXT NOT NULL DEFAULT '1.0.0',
+            status                  TEXT NOT NULL DEFAULT 'active',
+            schema_version          TEXT NOT NULL DEFAULT '1.0',
+            created_at              TEXT NOT NULL,
+            updated_at              TEXT NOT NULL,
+            availability            TEXT NOT NULL DEFAULT 'available',
+            manifest_ref            TEXT,
+            worker_kind             TEXT NOT NULL DEFAULT 'function'
+        );
+        CREATE TABLE IF NOT EXISTS worker_capabilities (
+            worker_id               TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+            capability              TEXT NOT NULL,
+            PRIMARY KEY (worker_id, capability)
+        );
+        CREATE TABLE IF NOT EXISTS worker_history (
+            registered_at           TEXT NOT NULL,
+            worker_id               TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+            name                    TEXT NOT NULL,
+            kind                    TEXT NOT NULL,
+            version                 TEXT NOT NULL,
+            status                  TEXT NOT NULL,
+            capabilities            TEXT NOT NULL DEFAULT '',
+            limitations             TEXT NOT NULL DEFAULT '',
+            event_type              TEXT NOT NULL,
+            note                    TEXT,
+            PRIMARY KEY (registered_at, worker_id)
+        );
+        CREATE TABLE IF NOT EXISTS worker_versions (
+            worker_id               TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+            version                 TEXT NOT NULL,
+            registered_at           TEXT NOT NULL,
+            changelog               TEXT,
+            PRIMARY KEY (worker_id, version)
+        );
+    """)
+
+
+def test_form_skills_forms_high_confidence_intent():
+    """form_skills creates a formed_skills row + workers row for high-confidence intents."""
+    from src.friday.skill_formation import form_skills
+
+    conn = _fresh_db()
+    _full_schema(conn)
+
+    now = datetime.now(timezone.utc).isoformat()
+    seq = json.dumps([["workspace_switch", "<workspace>"], ["app_launch", "<app>"]])
+    exemplars = json.dumps({"0": {"3": 5, "1": 1}, "1": {"firefox": 6}})
+    cur = conn.execute(
+        "INSERT INTO mined_patterns (sequence_json, count, mined_at, exemplars) VALUES (?, ?, ?, ?)",
+        (seq, 3, now, exemplars)
+    )
+    pat_id = cur.lastrowid
+    steps = json.dumps(["Switch to workspace 3", "Open Firefox"])
+    cur = conn.execute(
+        "INSERT INTO workflow_intents (pattern_id, intent_label, intent_description, steps_text, confidence, pattern_summary, labeled_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (pat_id, "Start browsing", "Open browser and navigate", steps, "high", seq, now)
+    )
+
+    result = form_skills(conn)
+    assert result is not None
+    assert len(result) >= 1
+
+    skill_row = conn.execute("SELECT * FROM formed_skills").fetchone()
+    assert skill_row is not None
+    assert json.loads(skill_row["task_graph"]) == json.loads(seq)
+    assert skill_row["invocation_count"] == 0
+
+    worker_row = conn.execute("SELECT * FROM workers").fetchone()
+    assert worker_row is not None
+    assert worker_row["worker_kind"] == "formed_skill"
+    assert worker_row["status"] == "beta"
+    assert "formed_skill:" in (worker_row["manifest_ref"] or "")
+
+    cap_row = conn.execute("SELECT * FROM worker_capabilities").fetchone()
+    assert cap_row is not None
+    assert "Workflow Replay" in cap_row["capability"]
+
+
+def test_form_skills_skips_low_confidence():
+    """form_skills skips low/fallback confidence intents."""
+    from src.friday.skill_formation import form_skills
+
+    conn = _fresh_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mined_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sequence_json TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0, mined_at TEXT NOT NULL,
+            exemplars TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS workflow_intents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_id INTEGER NOT NULL,
+            intent_label TEXT NOT NULL, intent_description TEXT NOT NULL DEFAULT '',
+            steps_text TEXT NOT NULL DEFAULT '[]', confidence TEXT NOT NULL DEFAULT 'low',
+            pattern_summary TEXT NOT NULL DEFAULT '', labeled_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS formed_skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_intent_id INTEGER NOT NULL,
+            task_graph TEXT NOT NULL, exemplars TEXT NOT NULL DEFAULT '{}',
+            invocation_count INTEGER NOT NULL DEFAULT 0, last_invoked_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workers (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '', capabilities TEXT NOT NULL DEFAULT '',
+            limitations TEXT NOT NULL DEFAULT '', confidence TEXT NOT NULL DEFAULT 'medium',
+            version TEXT NOT NULL DEFAULT '1.0.0', status TEXT NOT NULL DEFAULT 'active',
+            schema_version TEXT NOT NULL DEFAULT '1.0', created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, availability TEXT NOT NULL DEFAULT 'available',
+            worker_kind TEXT NOT NULL DEFAULT 'function', manifest_ref TEXT,
+            supported_languages TEXT NOT NULL DEFAULT '',
+            supported_task_types TEXT NOT NULL DEFAULT '',
+            supported_plan_types TEXT NOT NULL DEFAULT '',
+            estimated_speed TEXT NOT NULL DEFAULT '', estimated_cost TEXT NOT NULL DEFAULT '',
+            context_window INTEGER NOT NULL DEFAULT 0, parallelism INTEGER NOT NULL DEFAULT 1,
+            requires_network INTEGER NOT NULL DEFAULT 0,
+            requires_filesystem INTEGER NOT NULL DEFAULT 0,
+            requires_git INTEGER NOT NULL DEFAULT 0, requires_python INTEGER NOT NULL DEFAULT 0,
+            requires_shell INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS worker_capabilities (
+            worker_id TEXT NOT NULL, capability TEXT NOT NULL,
+            PRIMARY KEY (worker_id, capability)
+        );
+        CREATE TABLE IF NOT EXISTS worker_history (
+            registered_at TEXT NOT NULL, worker_id TEXT NOT NULL,
+            name TEXT NOT NULL, kind TEXT NOT NULL, version TEXT NOT NULL,
+            status TEXT NOT NULL, capabilities TEXT NOT NULL DEFAULT '',
+            limitations TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL,
+            note TEXT, PRIMARY KEY (registered_at, worker_id)
+        );
+        CREATE TABLE IF NOT EXISTS worker_versions (
+            worker_id TEXT NOT NULL, version TEXT NOT NULL,
+            registered_at TEXT NOT NULL, changelog TEXT,
+            PRIMARY KEY (worker_id, version)
+        );
+    """)
+
+    now = datetime.now(timezone.utc).isoformat()
+    seq = json.dumps([["workspace_switch", "<workspace>"]])
+    cur = conn.execute(
+        "INSERT INTO mined_patterns (sequence_json, count, mined_at) VALUES (?, ?, ?)",
+        (seq, 2, now)
+    )
+    pat_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO workflow_intents (pattern_id, intent_label, confidence, pattern_summary, labeled_at) VALUES (?, ?, ?, ?, ?)",
+        (pat_id, "Low conf intent", "low", seq, now)
+    )
+
+    result = form_skills(conn)
+    assert result == []
+    count = conn.execute("SELECT COUNT(*) as c FROM formed_skills").fetchone()["c"]
+    assert count == 0
+
+
+def test_form_skills_distribution_cap():
+    """Low-consensus step caps overall confidence to proposed."""
+    from src.friday.skill_formation import form_skills
+
+    conn = _fresh_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mined_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sequence_json TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0, mined_at TEXT NOT NULL,
+            exemplars TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS workflow_intents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_id INTEGER NOT NULL,
+            intent_label TEXT NOT NULL, intent_description TEXT NOT NULL DEFAULT '',
+            steps_text TEXT NOT NULL DEFAULT '[]', confidence TEXT NOT NULL DEFAULT 'low',
+            pattern_summary TEXT NOT NULL DEFAULT '', labeled_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS formed_skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_intent_id INTEGER NOT NULL,
+            task_graph TEXT NOT NULL, exemplars TEXT NOT NULL DEFAULT '{}',
+            invocation_count INTEGER NOT NULL DEFAULT 0, last_invoked_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workers (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '', capabilities TEXT NOT NULL DEFAULT '',
+            limitations TEXT NOT NULL DEFAULT '', confidence TEXT NOT NULL DEFAULT 'medium',
+            version TEXT NOT NULL DEFAULT '1.0.0', status TEXT NOT NULL DEFAULT 'active',
+            schema_version TEXT NOT NULL DEFAULT '1.0', created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, availability TEXT NOT NULL DEFAULT 'available',
+            worker_kind TEXT NOT NULL DEFAULT 'function', manifest_ref TEXT,
+            supported_languages TEXT NOT NULL DEFAULT '',
+            supported_task_types TEXT NOT NULL DEFAULT '',
+            supported_plan_types TEXT NOT NULL DEFAULT '',
+            estimated_speed TEXT NOT NULL DEFAULT '', estimated_cost TEXT NOT NULL DEFAULT '',
+            context_window INTEGER NOT NULL DEFAULT 0, parallelism INTEGER NOT NULL DEFAULT 1,
+            requires_network INTEGER NOT NULL DEFAULT 0,
+            requires_filesystem INTEGER NOT NULL DEFAULT 0,
+            requires_git INTEGER NOT NULL DEFAULT 0, requires_python INTEGER NOT NULL DEFAULT 0,
+            requires_shell INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS worker_capabilities (
+            worker_id TEXT NOT NULL, capability TEXT NOT NULL,
+            PRIMARY KEY (worker_id, capability)
+        );
+        CREATE TABLE IF NOT EXISTS worker_history (
+            registered_at TEXT NOT NULL, worker_id TEXT NOT NULL,
+            name TEXT NOT NULL, kind TEXT NOT NULL, version TEXT NOT NULL,
+            status TEXT NOT NULL, capabilities TEXT NOT NULL DEFAULT '',
+            limitations TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL,
+            note TEXT, PRIMARY KEY (registered_at, worker_id)
+        );
+        CREATE TABLE IF NOT EXISTS worker_versions (
+            worker_id TEXT NOT NULL, version TEXT NOT NULL,
+            registered_at TEXT NOT NULL, changelog TEXT,
+            PRIMARY KEY (worker_id, version)
+        );
+    """)
+
+    now = datetime.now(timezone.utc).isoformat()
+    seq = json.dumps([["workspace_switch", "<workspace>"], ["app_launch", "<app>"]])
+    exemplars_low = json.dumps({"0": {"3": 2, "5": 2, "1": 2, "7": 2}, "1": {"firefox": 8}})
+    cur = conn.execute(
+        "INSERT INTO mined_patterns (sequence_json, count, mined_at, exemplars) VALUES (?, ?, ?, ?)",
+        (seq, 4, now, exemplars_low)
+    )
+    pat_id = cur.lastrowid
+    steps = json.dumps(["Switch workspace", "Open Firefox"])
+    conn.execute(
+        "INSERT INTO workflow_intents (pattern_id, intent_label, intent_description, steps_text, confidence, pattern_summary, labeled_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (pat_id, "Low consensus", "A pattern with low-consensus step", steps, "high", seq, now)
+    )
+
+    result = form_skills(conn)
+    assert result is not None
+    assert len(result) >= 1
+    worker_row = conn.execute("SELECT * FROM workers").fetchone()
+    assert worker_row is not None
+    assert worker_row["status"] == "proposed", f"Expected proposed, got {worker_row['status']}"
+
+
+def test_form_skills_skips_already_formed():
+    """Already-formed intents are skipped."""
+    from src.friday.skill_formation import form_skills
+
+    conn = _fresh_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mined_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sequence_json TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0, mined_at TEXT NOT NULL,
+            exemplars TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS workflow_intents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_id INTEGER NOT NULL,
+            intent_label TEXT NOT NULL, intent_description TEXT NOT NULL DEFAULT '',
+            steps_text TEXT NOT NULL DEFAULT '[]', confidence TEXT NOT NULL DEFAULT 'low',
+            pattern_summary TEXT NOT NULL DEFAULT '', labeled_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS formed_skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_intent_id INTEGER NOT NULL,
+            task_graph TEXT NOT NULL, exemplars TEXT NOT NULL DEFAULT '{}',
+            invocation_count INTEGER NOT NULL DEFAULT 0, last_invoked_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workers (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '', capabilities TEXT NOT NULL DEFAULT '',
+            limitations TEXT NOT NULL DEFAULT '', confidence TEXT NOT NULL DEFAULT 'medium',
+            version TEXT NOT NULL DEFAULT '1.0.0', status TEXT NOT NULL DEFAULT 'active',
+            schema_version TEXT NOT NULL DEFAULT '1.0', created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, availability TEXT NOT NULL DEFAULT 'available',
+            worker_kind TEXT NOT NULL DEFAULT 'function', manifest_ref TEXT,
+            supported_languages TEXT NOT NULL DEFAULT '',
+            supported_task_types TEXT NOT NULL DEFAULT '',
+            supported_plan_types TEXT NOT NULL DEFAULT '',
+            estimated_speed TEXT NOT NULL DEFAULT '', estimated_cost TEXT NOT NULL DEFAULT '',
+            context_window INTEGER NOT NULL DEFAULT 0, parallelism INTEGER NOT NULL DEFAULT 1,
+            requires_network INTEGER NOT NULL DEFAULT 0,
+            requires_filesystem INTEGER NOT NULL DEFAULT 0,
+            requires_git INTEGER NOT NULL DEFAULT 0, requires_python INTEGER NOT NULL DEFAULT 0,
+            requires_shell INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS worker_capabilities (
+            worker_id TEXT NOT NULL, capability TEXT NOT NULL,
+            PRIMARY KEY (worker_id, capability)
+        );
+        CREATE TABLE IF NOT EXISTS worker_history (
+            registered_at TEXT NOT NULL, worker_id TEXT NOT NULL,
+            name TEXT NOT NULL, kind TEXT NOT NULL, version TEXT NOT NULL,
+            status TEXT NOT NULL, capabilities TEXT NOT NULL DEFAULT '',
+            limitations TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL,
+            note TEXT, PRIMARY KEY (registered_at, worker_id)
+        );
+        CREATE TABLE IF NOT EXISTS worker_versions (
+            worker_id TEXT NOT NULL, version TEXT NOT NULL,
+            registered_at TEXT NOT NULL, changelog TEXT,
+            PRIMARY KEY (worker_id, version)
+        );
+    """)
+
+    now = datetime.now(timezone.utc).isoformat()
+    seq = json.dumps([["workspace_switch", "<workspace>"]])
+    cur = conn.execute(
+        "INSERT INTO mined_patterns (sequence_json, count, mined_at) VALUES (?, ?, ?)",
+        (seq, 3, now)
+    )
+    pat_id = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO workflow_intents (pattern_id, intent_label, confidence, pattern_summary, labeled_at) VALUES (?, ?, ?, ?, ?)",
+        (pat_id, "Already formed", "high", seq, now)
+    )
+    intent_row = conn.execute("SELECT id FROM workflow_intents").fetchone()
+    intent_id = intent_row["id"]
+    conn.execute(
+        "INSERT INTO formed_skills (workflow_intent_id, task_graph, exemplars, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (intent_id, seq, "{}", now, now)
+    )
+
+    result = form_skills(conn)
+    assert result == []
+
+
 def test_mine_sequences_stores_exemplars():
     """mine_sequences stores concrete value distributions per step position."""
     from src.friday.sequence_miner import mine_sequences

@@ -4041,6 +4041,7 @@ class WorkerRow:
     updated_at: str = ""
     availability: str = "available"
     manifest_ref: Optional[str] = None
+    worker_kind: str = "function"
 
 
 @dataclass
@@ -4079,8 +4080,9 @@ def insert_worker(conn: sqlite3.Connection, w: WorkerRow) -> None:
              estimated_speed, estimated_cost, context_window, parallelism,
              requires_network, requires_filesystem, requires_git,
              requires_python, requires_shell, confidence, version, status,
-             schema_version, created_at, updated_at, availability, manifest_ref)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             schema_version, created_at, updated_at, availability, manifest_ref,
+             worker_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name, kind=excluded.kind, description=excluded.description,
             capabilities=excluded.capabilities,
@@ -4096,7 +4098,8 @@ def insert_worker(conn: sqlite3.Connection, w: WorkerRow) -> None:
             requires_shell=excluded.requires_shell, confidence=excluded.confidence,
             version=excluded.version, status=excluded.status,
             schema_version=excluded.schema_version, updated_at=excluded.updated_at,
-            availability=excluded.availability, manifest_ref=excluded.manifest_ref
+            availability=excluded.availability, manifest_ref=excluded.manifest_ref,
+            worker_kind=excluded.worker_kind
         """,
         (
             w.id, w.name, w.kind, w.description, w.capabilities,
@@ -4106,6 +4109,7 @@ def insert_worker(conn: sqlite3.Connection, w: WorkerRow) -> None:
             int(w.requires_git), int(w.requires_python), int(w.requires_shell),
             w.confidence, w.version, w.status, w.schema_version,
             w.created_at, w.updated_at, w.availability, w.manifest_ref,
+            w.worker_kind,
         ),
     )
     # Re-sync normalized capability rows.
