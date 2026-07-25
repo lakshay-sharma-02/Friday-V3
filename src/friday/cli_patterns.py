@@ -34,6 +34,8 @@ def cmd_patterns(args: argparse.Namespace) -> int:
         return _clear()
     elif action == "label":
         return _label()
+    elif action == "form":
+        return _form(args)
     else:
         return _show(args)
 
@@ -147,6 +149,28 @@ def _label() -> int:
     finally:
         conn.close()
     return 0
+
+
+def _form(args: argparse.Namespace) -> int:
+    """Run skill formation on current workflow intents."""
+    from .skill_formation import form_skills, format_formed_skills
+
+    conn = connect()
+    try:
+        skills = form_skills(conn)
+        if skills:
+            print(format_formed_skills(skills))
+            print(f"Formed {len(skills)} skill(s).")
+            print()
+            print("To review and promote a skill to active:")
+            print("  friday meta promote --worker <worker_name>")
+        else:
+            print("No new skills formed.")
+            print("Run `friday patterns mine` and `friday patterns label` first,")
+            print("or use --force to re-form existing intents (overwrites).")
+        return 0
+    finally:
+        conn.close()
 
 
 def _clear() -> int:

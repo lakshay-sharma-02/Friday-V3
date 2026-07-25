@@ -841,9 +841,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Mine and show repeated action patterns from the actions log (Pillar B Stage 2).")
     p_patterns.add_argument(
         "action", nargs="?", default=None,
-        choices=["mine", "clear", "label"],
+        choices=["mine", "clear", "label", "form"],
         help="'mine' to run sequence mining, 'label' to run LLM intent labeling, "
+             "'form' to create skills from intents, "
              "'clear' to delete all patterns, omit to show.")
+    p_patterns.add_argument(
+        "--force", action="store_true",
+        help="Force re-formation even if skill already exists (form action).")
     p_patterns.add_argument(
         "--min-count", type=int, default=0,
         help="Minimum pattern count to show (default: 0 = all).")

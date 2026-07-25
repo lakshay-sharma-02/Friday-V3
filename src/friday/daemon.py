@@ -46,7 +46,8 @@ WATCH_HISTORY_KEYS = (
 _PHASE_A_FIELDS = ("new_suggestions", "high_severity_suggestions",
                     "new_gaps", "open_gaps",
                     "new_patterns", "top_patterns",
-                    "new_intents", "high_conf_intents")
+                    "new_intents", "high_conf_intents",
+                    "new_skills")
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +343,18 @@ def _run_cycle() -> dict:
         except Exception as exc:
             _log(f"Intent labeling failed: {exc}")
 
+        # Pillar B Stage 4: Run skill formation on labeled intents.
+        new_skills = 0
+        try:
+            if new_intents > 0:
+                from .skill_formation import form_skills
+                formed = form_skills(conn)
+                new_skills = len(formed)
+                if new_skills:
+                    _log(f"Skill formation: {new_skills} skill(s) formed from intents.")
+        except Exception as exc:
+            _log(f"Skill formation failed: {exc}")
+
         conn.execute(
             "UPDATE watch_history SET finished_at=?, outcome=?, "
             "repos_scanned=?, repos_changed=?, "
@@ -369,6 +382,7 @@ def _run_cycle() -> dict:
             "top_patterns": top_patterns,
             "new_intents": new_intents,
             "high_conf_intents": high_conf_intents,
+            "new_skills": new_skills,
         })
 
     except Exception as exc:
@@ -643,6 +657,9 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
             notify_parts.append(f"{top_patterns} frequent action pattern(s)")
         elif new_patterns:
             notify_parts.append(f"{new_patterns} action pattern(s) mined")
+        new_skills = cycle.get("new_skills", 0)
+        if new_skills:
+            notify_parts.append(f"{new_skills} new skill(s) formed")
 
         if notify_parts and not effective_no_notify:
             _notify(
@@ -663,6 +680,9 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
         if new_intents:
             _log(f"  {new_intents} workflow intent(s) labeled "
                  f"(run `friday patterns label` to view)")
+        if new_skills:
+            _log(f"  {new_skills} skill(s) formed from workflow intents "
+                 f"(run `friday patterns form` to review)")
 
 
 # ---------------------------------------------------------------------------
