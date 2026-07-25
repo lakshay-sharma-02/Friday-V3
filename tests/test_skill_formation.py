@@ -572,3 +572,49 @@ def test_mine_sequences_stores_exemplars():
     # Step 1 (app_launch): "firefox" should appear twice
     step1 = p.exemplars.get("1", {})
     assert step1.get("firefox", 0) >= 2, f"Expected firefox>=2 for step 1, got {step1}"
+
+
+def test_replay_executor_builds_steps():
+    """ReplayExecutor resolves exemplars and builds step list."""
+    from src.friday.skill_formation import ReplayExecutor
+
+    task_graph = [["workspace_switch", "<workspace>"], ["app_launch", "<app>"]]
+    exemplars = {
+        "0": {"default": "3", "distribution": {"3": 5, "1": 1}, "consensus": 0.833, "stable": True},
+        "1": {"default": "firefox", "distribution": {"firefox": 6}, "consensus": 1.0, "stable": True},
+    }
+    executor = ReplayExecutor(
+        worker_id="worker:test:abc123",
+        task_graph=task_graph,
+        exemplars=exemplars,
+    )
+    steps = executor.build_steps()
+    assert len(steps) == 2
+    assert steps[0] == ("workspace_switch", "3")
+    assert steps[1] == ("app_launch", "firefox")
+
+
+def test_replay_executor_skips_unknown_actions():
+    """ReplayExecutor skips unknown action types gracefully."""
+    from src.friday.skill_formation import ReplayExecutor
+    from src.friday.runtime.models import RuntimeTask
+
+    task_graph = [["unknown_action", "some_target"]]
+    executor = ReplayExecutor(
+        worker_id="worker:test:abc",
+        task_graph=task_graph,
+        exemplars={"0": {"default": "x", "distribution": {"x": 1}, "consensus": 1.0, "stable": True}},
+    )
+    task = RuntimeTask(
+        execution_id="test", session_id="s", schedule_id="s",
+        task_id="t", worker_id="w", wave=1,
+        runtime_payload="",
+    )
+    result = executor.execute(task)
+    # Should not fail — just skip unknown steps
+    assert result.success, "Should not fail on unknown action"
+    import json
+    results = json.loads(result.stdout)["results"]
+    assert len(results) == 1
+    assert results[0]["skipped"] is True
+    assert "Unknown action type" in results[0]["reason"]

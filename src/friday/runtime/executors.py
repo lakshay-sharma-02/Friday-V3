@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .models import ExecutionResult, Executor, VerificationResult
-from ..worker.models import normalize_worker_input
+from ..db import connect as _resolve_connect
 
 
 # Honour a global timeout (seconds) for any external process.
@@ -1219,6 +1219,42 @@ def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]
     if name == "worker:browser":
         from .browser_executor import BrowserExecutor
         return BrowserExecutor()
+
+    # Formed skill dispatch (Pillar B Stage 4).
+    # If the worker_id corresponds to a worker_kind='formed_skill' row,
+    # build a ReplayExecutor from the formed_skills payload.
+    if name.startswith("worker:"):
+        try:
+            _rconn = _resolve_connect()
+            _row = _rconn.execute(
+                "SELECT worker_kind, manifest_ref FROM workers WHERE id = ?",
+                (worker_id,)
+            ).fetchone()
+            if _row is not None and _row["worker_kind"] == "formed_skill":
+                ref = _row["manifest_ref"] or ""
+                if ref.startswith("formed_skill:"):
+                    skill_id = int(ref.split(":")[1])
+                    fs_row = _rconn.execute(
+                        "SELECT * FROM formed_skills WHERE id = ?", (skill_id,)
+                    ).fetchone()
+                    if fs_row:
+                        import json
+                        task_graph = json.loads(fs_row["task_graph"]) if fs_row["task_graph"] else []
+                        exemplars = json.loads(fs_row["exemplars"]) if fs_row["exemplars"] else {}
+                        _rconn.close()
+                        from ..skill_formation import ReplayExecutor
+                        return ReplayExecutor(
+                            worker_id=worker_id,
+                            task_graph=task_graph,
+                            exemplars=exemplars,
+                            workspace=workspace,
+                        )
+            _rconn.close()
+        except Exception:
+            try:
+                _rconn.close()
+            except Exception:
+                pass
 
     # Dynamic fallback: try to find and load a self-generated worker module.
     module = _find_auto_worker_module(worker_id)

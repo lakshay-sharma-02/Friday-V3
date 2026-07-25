@@ -225,3 +225,157 @@ def format_formed_skills(skills: list[dict]) -> str:
             lines.append(f"   [{', '.join(context_parts)}]")
         lines.append("")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# ReplayExecutor — dispatches formed skills through existing action executors
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+from .runtime.models import ExecutionResult, Executor, VerificationResult
+from .action_log import ActionEvent, log_action, now_iso as _now
+from .db import connect as _db_connect
+
+
+class ReplayExecutor(Executor):
+    """Execute a formed skill by replaying each step through the appropriate
+    action executor (HyprlandExecutor, BrowserExecutor).
+
+    Each step is gated by the confirm gate and verified by the executor's own
+    verify-by-diff logic. No new execution path.
+    """
+
+    def __init__(
+        self,
+        worker_id: str = "worker:replay",
+        task_graph: list[list[str]] | None = None,
+        exemplars: dict[str, dict] | None = None,
+        workspace: str = ".",
+    ) -> None:
+        self.worker_id = worker_id
+        self._task_graph = task_graph or []
+        self._exemplars = exemplars or {}
+        self._ws = workspace
+
+    def execute(self, task) -> ExecutionResult:
+        from .runtime.executors import resolve_executor
+
+        t0 = _time.monotonic()
+        steps = self.build_steps()
+        if not steps:
+            return ExecutionResult(
+                success=False, stdout="", stderr="",
+                exit_code=None, duration_ms=0,
+                error="replay executor: no steps in task graph",
+            )
+
+        results: list[dict] = []
+        all_succeeded = True
+
+        for i, (action_type, target) in enumerate(steps):
+            # Determine which executor to use.
+            if action_type in ("workspace_switch", "window_focus", "app_launch",
+                               "app_close"):
+                worker_id = "worker:hyprctl"
+                # Map abstract action types to hyprctl dispatcher action names.
+                dispatch_action = {
+                    "workspace_switch": "workspace",
+                    "window_focus": "focuswindow",
+                    "app_launch": "exec",
+                    "app_close": "closewindow",
+                }.get(action_type, action_type)
+                payload = json.dumps({"action": dispatch_action, "target": target})
+            elif action_type in ("navigate", "click", "type", "read",
+                                 "screenshot", "title", "url", "wait"):
+                worker_id = "worker:browser"
+                payload = json.dumps({"action": action_type, "target": target})
+            else:
+                results.append({
+                    "step": i, "action": action_type, "target": target,
+                    "skipped": True,
+                    "reason": f"Unknown action type: {action_type}",
+                })
+                continue
+
+            sub_exec = resolve_executor(worker_id, workspace=self._ws)
+            if sub_exec is None:
+                results.append({
+                    "step": i, "action": action_type, "target": target,
+                    "skipped": True,
+                    "reason": f"Executor not available: {worker_id}",
+                })
+                continue
+
+            sub_task = _MiniTask(payload=payload)
+            step_result = sub_exec.execute(sub_task)
+            results.append({
+                "step": i, "action": action_type, "target": target,
+                "success": step_result.success,
+                "error": step_result.error,
+            })
+            if not step_result.success:
+                all_succeeded = False
+
+        dur = int((_time.monotonic() - t0) * 1000)
+
+        # Increment invocation count.
+        try:
+            conn = _db_connect()
+            ref = getattr(task, "manifest_ref", None) or getattr(task, "runtime_hint", "")
+            if ref and "formed_skill:" in ref:
+                skill_id = int(ref.split("formed_skill:")[1].split(":")[0])
+                from .db import increment_formed_skill_invocation
+                increment_formed_skill_invocation(conn, skill_id)
+        except Exception:
+            pass
+
+        # Log the replay action.
+        try:
+            conn = _db_connect()
+            log_action(conn, ActionEvent(
+                source="friday",
+                action_type="skill_replay",
+                target=json.dumps({"step_count": len(steps), "succeeded": all_succeeded}),
+                detail=json.dumps({"results": results}),
+                confidence="observed",
+                observed_at=_now(),
+            ))
+        except Exception:
+            pass
+
+        return ExecutionResult(
+            success=all_succeeded,
+            stdout=json.dumps({"steps": len(steps), "results": results}),
+            stderr="",
+            exit_code=0 if all_succeeded else 1,
+            duration_ms=dur,
+            error="" if all_succeeded else "One or more steps failed",
+        )
+
+    def build_steps(self) -> list[tuple[str, str]]:
+        """Resolve exemplar values for each step in the task graph."""
+        steps: list[tuple[str, str]] = []
+        for i, (action_type, norm_target) in enumerate(self._task_graph):
+            pos_key = str(i)
+            pos_data = self._exemplars.get(pos_key, {})
+            default_val = pos_data.get("default", "") if isinstance(pos_data, dict) else ""
+            target = default_val if default_val else ""
+            steps.append((action_type, target))
+        return steps
+
+    def verify(self, task, result: ExecutionResult) -> VerificationResult:
+        return VerificationResult(
+            passed=result.success,
+            reason="replay executor completed" if result.success
+            else result.error or "replay executor failed",
+        )
+
+
+class _MiniTask:
+    """Minimal task-like object for sub-executor dispatch."""
+
+    def __init__(self, payload: str = "", hint: str = "", ref: str = ""):
+        self.runtime_payload = payload
+        self.runtime_hint = hint
+        self.manifest_ref = ref
