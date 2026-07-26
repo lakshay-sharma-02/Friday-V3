@@ -302,6 +302,19 @@ class CapabilityResolver:
                 task_strategy = strategy or _strategy_for_task(task, g)
                 judgment_types = {"implementation", "refactor", "design", "review", "analysis", "research", "planning"}
                 has_mechanical_op = bool(getattr(task, "symbolic", {}).get("op"))
+                # Planner labels every task with a symbolic op (verify_fix,
+                # review_changes, etc.) but only truly mechanical ops that
+                # describe a concrete file-level transformation should disable
+                # judgment routing. Descriptive ops leave the task as judgment.
+                _NON_JUDGMENT_OPS = {
+                    "rename_declaration", "rename_imports", "update_references",
+                    "move_code", "update_imports", "remove_safely",
+                    "modify_implementation", "create_module",
+                    "run_formatter", "run_tests", "run_regression_tests",
+                    "verify_fix",
+                }
+                if has_mechanical_op and getattr(task, "symbolic", {}).get("op") not in _NON_JUDGMENT_OPS:
+                    has_mechanical_op = False
                 is_judgment = (task.task_type.lower() in judgment_types) and not has_mechanical_op
 
                 chosen, candidates, conf, matched, missing, reason, alts = \

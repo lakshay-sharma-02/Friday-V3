@@ -46,6 +46,29 @@ from ..db import connect as _resolve_connect
 # Honour a global timeout (seconds) for any external process.
 _DEFAULT_TIMEOUT = int(os.environ.get("FRIDAY_WORKER_TIMEOUT", "60"))
 
+# Per-task-type timeout overrides (seconds). Testing/verification tasks need
+# longer than simple coordination echoes. The executor picks its timeout by
+# looking up the task's task_type in this map; falls back to _DEFAULT_TIMEOUT.
+_TASK_TYPE_TIMEOUTS = {
+    "testing": 300,
+    "verification": 300,
+    "review": 180,
+    "deployment": 300,
+    "infrastructure": 180,
+}
+
+
+def _timeout_for(task, fallback: int) -> int:
+    """Resolve timeout for a task: explicit task-level override > task-type default > fallback."""
+    explicit = getattr(task, "timeout", None) or getattr(task, "estimated_effort", None)
+    if explicit:
+        try:
+            return int(explicit)
+        except (ValueError, TypeError):
+            pass
+    tt = getattr(task, "task_type", "") or ""
+    return _TASK_TYPE_TIMEOUTS.get(tt.lower(), fallback)
+
 
 def _payload(task) -> str:
     return getattr(task, "runtime_payload", "") or ""
@@ -132,11 +155,12 @@ class BuiltinShellExecutor(Executor):
             else:
                 cmd = f"ls -la {shlex.quote(ws)}"
         ws = _ws(task, self._ws)
+        timeout = _timeout_for(task, self._timeout)
         t0 = time.monotonic()
         try:
             proc = subprocess.run(
                 cmd, shell=True, cwd=ws, capture_output=True, text=True,
-                timeout=self._timeout)
+                timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
@@ -150,7 +174,7 @@ class BuiltinShellExecutor(Executor):
         except subprocess.TimeoutExpired as e:
             dur = int((time.monotonic() - t0) * 1000)
             return _fail(getattr(e, "stdout", "") or "", "timeout", None, dur,
-                         f"shell command timed out after {self._timeout}s")
+                         f"shell command timed out after {timeout}s")
         except Exception as e:  # defensive; dispatcher also guards
             dur = int((time.monotonic() - t0) * 1000)
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
@@ -212,11 +236,12 @@ class GitExecutor(Executor):
         args = shlex.split(raw)
         sub = args[0].lower() if args else ""
         before = self._porcelain(ws) if sub in self._MUTATING else ""
+        timeout = _timeout_for(task, self._timeout)
         t0 = time.monotonic()
         try:
             proc = subprocess.run(
                 ["git", *args], cwd=ws, capture_output=True, text=True,
-                timeout=self._timeout)
+                timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
@@ -230,7 +255,7 @@ class GitExecutor(Executor):
         except subprocess.TimeoutExpired as e:
             dur = int((time.monotonic() - t0) * 1000)
             return _fail("", "timeout", None, dur,
-                         f"git command timed out after {self._timeout}s")
+                         f"git command timed out after {timeout}s")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
@@ -489,9 +514,10 @@ class BuiltinPythonExecutor(Executor):
                     f.write(payload)
                     path = f.name
                 cmd = [sys_exe(), path]
+            timeout = _timeout_for(task, self._timeout)
             proc = subprocess.run(
                 cmd, cwd=ws, capture_output=True, text=True,
-                timeout=self._timeout)
+                timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
@@ -501,7 +527,7 @@ class BuiltinPythonExecutor(Executor):
         except subprocess.TimeoutExpired as e:
             dur = int((time.monotonic() - t0) * 1000)
             return _fail("", "timeout", None, dur,
-                         f"python run timed out after {self._timeout}s")
+                         f"python run timed out after {timeout}s")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
@@ -599,10 +625,11 @@ class TestingExecutor(Executor):
             return _fail("", "no test target", None, 0,
                          "testing worker: no cmd/path in payload")
         cmd = [sys_exe(), "-m", "pytest", *args]
+        timeout = _timeout_for(task, self._timeout)
         try:
             proc = subprocess.run(
                 cmd, cwd=ws, capture_output=True, text=True,
-                timeout=self._timeout)
+                timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
@@ -612,7 +639,7 @@ class TestingExecutor(Executor):
         except subprocess.TimeoutExpired:
             dur = int((time.monotonic() - t0) * 1000)
             return _fail("", "timeout", None, dur,
-                         f"test run timed out after {self._timeout}s")
+                         f"test run timed out after {timeout}s")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")

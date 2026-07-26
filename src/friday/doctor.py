@@ -103,6 +103,35 @@ def _check_env() -> List[Tuple[str, str, str]]:
     return issues
 
 
+_AI_BINARY_MAP = {
+    "worker:claude": "claude",
+    "worker:codex": "codex",
+    "worker:gemini": "gemini",
+    "worker:opencode": "opencode",
+    "worker:aider": "aider",
+    "worker:deepseek": "deepseek",
+}
+
+
+def _check_ai_binaries() -> List[Tuple[str, str, str]]:
+    """Check that AI executor binaries are on PATH, per the resolver's filter."""
+    import shutil
+    issues: List[Tuple[str, str, str]] = []
+    found_any = False
+    for wid, binary in sorted(_AI_BINARY_MAP.items()):
+        if shutil.which(binary):
+            found_any = True
+        else:
+            issues.append(("ai workers", "info",
+                           f"{wid} ({binary}) not found on PATH — "
+                           f"resolver will skip this executor"))
+    if not found_any:
+        issues.append(("ai workers", "info",
+                       "no AI executor binaries found on PATH — "
+                       "all judgment tasks will route to deterministic workers only"))
+    return issues
+
+
 def _systemctl_available() -> bool:
     import shutil
     return shutil.which("systemctl") is not None
@@ -205,6 +234,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # Env check
     issues = _check_env()
+    all_issues.extend(issues)
+
+    # AI worker binary check
+    issues = _check_ai_binaries()
     all_issues.extend(issues)
 
     # Watch check (needs conn). Skip silently if systemctl unavailable.
