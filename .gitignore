@@ -16,6 +16,9 @@ __pycache__/
 # local tool cache
 .zcode/
 
+# session artifacts (local scratch)
+Sess/
+
 # mission journal run artifacts
 mission_journal_sess:*.json
 
