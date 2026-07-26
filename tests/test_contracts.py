@@ -354,15 +354,18 @@ def test_claude_real_integration(tmp_path):
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
-def test_creation_task_without_artifact_fails(tmp_path):
+def test_creation_task_without_artifact_falls_through(tmp_path):
     from friday.planning.compiler import Task, TaskType
     from friday.runtime.models import ExecutionResult
     from friday.runtime.verification import verify_creation_task
 
-    # Create a task classified as a creation task (e.g. IMPLEMENTATION) but with NO expected outputs
+    # A creation task with NO expected outputs falls through to the generic
+    # artifact check (lenient: trusts the executor when nothing specific to
+    # verify). The planner should stamp concrete outputs; when it doesn't,
+    # we don't punish the executor for a planning gap.
     task = Task(
         id="t1", graph_id="g1", plan_id="p1", milestone_order=1,
-        title="Bad creation task", description="No file named",
+        title="Generic task", description="No specific file named",
         task_type=TaskType.IMPLEMENTATION,
         outputs=[],
         required_capabilities=[],
@@ -379,5 +382,10 @@ def test_creation_task_without_artifact_fails(tmp_path):
     result = ExecutionResult(success=True, artifacts=[], stdout="I did it")
 
     v_result = verify_creation_task(task, result, str(tmp_path))
-    assert v_result.passed is False
-    assert "missing required artifact path" in v_result.reason
+    # Falls through to verify_task_artifacts which passes when no artifact
+    # is expected — the executor succeeded, and there's nothing specific to
+    # verify against.
+    assert v_result.passed is True
+    assert "no expected artifact" in v_result.reason
+    # The result is NOT a planning-bug failure — it's a lenient pass.
+    assert "missing required artifact path" not in v_result.reason

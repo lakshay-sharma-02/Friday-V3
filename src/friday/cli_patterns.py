@@ -157,7 +157,8 @@ def _form(args: argparse.Namespace) -> int:
 
     conn = connect()
     try:
-        skills = form_skills(conn)
+        force = getattr(args, "force", False)
+        skills = form_skills(conn, force=force)
         if skills:
             print(format_formed_skills(skills))
             print(f"Formed {len(skills)} skill(s).")
@@ -167,7 +168,8 @@ def _form(args: argparse.Namespace) -> int:
         else:
             print("No new skills formed.")
             print("Run `friday patterns mine` and `friday patterns label` first,")
-            print("or use --force to re-form existing intents (overwrites).")
+            if not force:
+                print("or use --force to re-form existing intents (overwrites).")
         return 0
     finally:
         conn.close()

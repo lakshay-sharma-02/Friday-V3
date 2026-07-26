@@ -218,7 +218,7 @@ def _run_cycle() -> dict:
                 # and window focus changes that happened between observation cycles.
                 try:
                     from .action_log import (
-                        diff_observations_to_actions, log_action, now_iso)
+                        diff_observations_to_actions, log_action)
                     current_obs = [
                         {"source": o.source, "subject": o.subject,
                          "aspect": o.aspect, "value": o.value}
@@ -368,6 +368,20 @@ def _run_cycle() -> dict:
         except Exception as exc:
             _log(f"Skill formation failed: {exc}")
 
+        # Auto-dispatch: check if any formed skill's task_graph matches a
+        # just-mined pattern and dispatch the skill automatically.
+        auto_dispatched = 0
+        try:
+            from .skill_formation import auto_dispatch_skills
+            results = auto_dispatch_skills(conn)
+            auto_dispatched = len(results)
+            if auto_dispatched:
+                ok = sum(1 for r in results if r.get("succeeded"))
+                _log(f"Auto-dispatch: {auto_dispatched} skill(s) triggered "
+                     f"({ok} succeeded).")
+        except Exception as exc:
+            _log(f"Auto-dispatch failed: {exc}")
+
         conn.execute(
             "UPDATE watch_history SET finished_at=?, outcome=?, "
             "repos_scanned=?, repos_changed=?, "
@@ -397,6 +411,7 @@ def _run_cycle() -> dict:
             "high_conf_intents": high_conf_intents,
             "new_skills": new_skills,
             "new_correlations": new_correlations,
+            "auto_dispatched": auto_dispatched,
         })
 
     except Exception as exc:

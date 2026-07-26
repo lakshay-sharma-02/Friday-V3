@@ -2766,12 +2766,21 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
 
     if llm_enabled():
         req = understand(question, conn)
-        # When the LLM understanding path fails (returns None), fall through
-        # to the offline heuristic rather than hard-failing. The offline
-        # heuristics handle general-reasoning, chitchat, and common workspace
-        # question shapes that the LLM's JSON output parser may reject.
+        # When the LLM understanding path fails (returns None), it means the
+        # model explicitly said "Unknown" or couldn't parse the response.
+        # Do NOT fall through to the offline heuristic in this case — the
+        # model was available but uncertain, and overriding it with a keyword
+        # heuristic would be dishonest. Admit uncertainty immediately.
+        # The offline heuristic is a fallback for LLM UNAVAILABILITY, not for
+        # LLM UNCERTAINTY.
         if req is None:
-            req = requirements_from_question(question, conn)
+            return Answer(
+                text=("I couldn't confidently determine what you are asking. "
+                      "Try rephrasing, or set FRIDAY_LLM_MODEL so I can interpret "
+                      "open-ended questions."),
+                evidence=Evidence(requirements=RetrievalRequirements(needs=["general"])),
+                used_llm=False,
+            )
     else:
         req = requirements_from_question(question, conn)
 

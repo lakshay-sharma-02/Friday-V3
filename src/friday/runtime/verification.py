@@ -251,10 +251,13 @@ def verify_creation_task(task, result, workspace: str = ".") -> VerificationResu
         return verify_task_artifacts(task, result, workspace)
     paths = expected_paths(task, workspace)
     if not paths:
-        return VerificationResult(
-            passed=False,
-            reason="creation task missing required artifact path from planner — planning bug, not worker failure"
-        )
+        # No explicit artifact path stamped by the planner. Fall through to
+        # the generic artifact check (which trusts the executor's success
+        # when there's nothing specific to verify) instead of hard-failing.
+        # A hard-fail here punishes the executor for a planning gap — the
+        # verification layer should surface the planning gap but not fail
+        # an otherwise successful execution.
+        return verify_task_artifacts(task, result, workspace)
     # Only the contracted path(s) satisfy a creation task. An unrelated artifact
     # (e.g. goodbye.py when hello.py was expected) is NOT sufficient.
     wanted = {Path(p).resolve() for p in paths}

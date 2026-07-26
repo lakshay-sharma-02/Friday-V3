@@ -4528,7 +4528,8 @@ def _row_to_worker(r) -> WorkerRow:
         created_at=r["created_at"] or "",
         updated_at=r["updated_at"] or "",
         availability=r["availability"] or "available",
-        manifest_ref=r["manifest_ref"],
+        manifest_ref=r["manifest_ref"] if "manifest_ref" in r.keys() else None,
+        worker_kind=(r["worker_kind"] if "worker_kind" in r.keys() else "function") or "function",
     )
 
 

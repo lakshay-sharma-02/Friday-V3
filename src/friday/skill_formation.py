@@ -11,6 +11,7 @@ from typing import Optional
 from uuid import uuid4
 
 from .db import (
+    delete_formed_skill,
     get_mined_patterns,
     get_workflow_intents,
     get_formed_skill_by_intent,
@@ -26,13 +27,19 @@ from .db import WorkerRow, WorkerHistoryRow, WorkerVersionRow
 _CONSENSUS_THRESHOLD = 0.8
 
 
-def form_skills(conn) -> list[dict]:
+def form_skills(conn, force: bool = False) -> list[dict]:
     """Run the skill formation pipeline.
 
     For each high/medium confidence workflow intent that doesn't already
     have a formed skill, creates the skill record and registers a worker.
+    When ``force=True``, existing formed skills are deleted and re-created.
 
-    Returns list of formed skill dicts that were created (empty if none).
+    Args:
+        conn: Open SQLite connection.
+        force: If True, delete and re-form intents that already have skills.
+
+    Returns:
+        List of formed skill dicts that were created (empty if none).
     """
     intents = get_workflow_intents(conn)
     if not intents:
@@ -47,10 +54,20 @@ def form_skills(conn) -> list[dict]:
 
         intent_id = intent["id"]
 
-        # Skip if already formed.
+        # Check if already formed.
         existing = get_formed_skill_by_intent(conn, intent_id)
         if existing:
-            continue
+            if force:
+                # Delete existing worker + formed_skill before re-forming.
+                ref = f"formed_skill:{existing['id']}"
+                w = conn.execute(
+                    "SELECT id FROM workers WHERE manifest_ref = ?", (ref,)
+                ).fetchone()
+                if w is not None:
+                    conn.execute("DELETE FROM workers WHERE id = ?", (w["id"],))
+                delete_formed_skill(conn, existing["id"])
+            else:
+                continue
 
         skill = _form_one(conn, intent)
         if skill:
@@ -252,11 +269,17 @@ class ReplayExecutor(Executor):
         task_graph: list[list[str]] | None = None,
         exemplars: dict[str, dict] | None = None,
         workspace: str = ".",
+        on_failure: str = "abort",
     ) -> None:
         self.worker_id = worker_id
         self._task_graph = task_graph or []
         self._exemplars = exemplars or {}
         self._ws = workspace
+        self._on_failure = on_failure
+        # Auto-downgrade is True by default (when executor is created by
+        # resolve_executor without explicit CLI flags). Set to False when
+        # the user explicitly passes --on-failure.
+        self._auto_downgrade = True
 
     def execute(self, task) -> ExecutionResult:
         from .runtime.executors import resolve_executor
@@ -270,15 +293,32 @@ class ReplayExecutor(Executor):
                 error="replay executor: no steps in task graph",
             )
 
+        # Extract skill_id from the task for log queries.
+        ref = getattr(task, "manifest_ref", None) or getattr(task, "runtime_hint", "")
+        skill_id = None
+        if ref and "formed_skill:" in ref:
+            try:
+                skill_id = int(ref.split("formed_skill:")[1].split(":")[0])
+            except (ValueError, IndexError):
+                pass
+
+        # Resolve per-step strategies: auto-downgrade only when the user
+        # hasn't explicitly passed --on-failure.
+        step_strategies = {}
+        if self._auto_downgrade and skill_id is not None:
+            step_strategies = self._resolve_strategies(skill_id)
+
         results: list[dict] = []
         all_succeeded = True
 
         for i, (action_type, target) in enumerate(steps):
+            strategy = step_strategies.get(str(i), self._on_failure)
+
             # Determine which executor to use.
+            dispatch_action = None
             if action_type in ("workspace_switch", "window_focus", "app_launch",
                                "app_close"):
                 worker_id = "worker:hyprctl"
-                # Map abstract action types to hyprctl dispatcher action names.
                 dispatch_action = {
                     "workspace_switch": "workspace",
                     "window_focus": "focuswindow",
@@ -307,51 +347,241 @@ class ReplayExecutor(Executor):
                 })
                 continue
 
+            # Build step detail: track which concrete value was used per step
+            # for drift-detection seed data.
+            pos_key = str(i)
+            pos_data = self._exemplars.get(pos_key, {})
+            default_val = pos_data.get("default", "") if isinstance(pos_data, dict) else ""
+            exemplar_source = "default"
+
             sub_task = _MiniTask(payload=payload)
             step_result = sub_exec.execute(sub_task)
-            results.append({
-                "step": i, "action": action_type, "target": target,
-                "success": step_result.success,
-                "error": step_result.error,
-            })
+
             if not step_result.success:
-                all_succeeded = False
+                if strategy == "abort":
+                    results.append({
+                        "step": i, "action": action_type, "target": target,
+                        "target_used": target,
+                        "exemplar_source": exemplar_source,
+                        "success": False,
+                        "error": step_result.error or "execution failed",
+                        "aborted_remaining": len(steps) - i - 1,
+                    })
+                    all_succeeded = False
+                    break
+
+                elif strategy == "skip":
+                    results.append({
+                        "step": i, "action": action_type, "target": target,
+                        "target_used": target,
+                        "exemplar_source": exemplar_source,
+                        "success": False,
+                        "skipped": True,
+                        "error": step_result.error or "execution failed, skipped",
+                    })
+                    # Move to next step — the failure IS recorded so the
+                    # action log has it for drift detection.
+                    continue
+
+                elif strategy == "retry_alt":
+                    # Try the next most common exemplar value from the distribution.
+                    alt_target = self._next_alt(i, target)
+                    if alt_target and alt_target != target:
+                        alt_payload = self._build_retry_payload(
+                            action_type, dispatch_action, alt_target)
+                        # dispatch_action is the dispatcher action string
+                        # (workspace/focuswindow/exec/closewindow) for
+                        # Hyprland actions; None for browser actions.
+                        sub_task2 = _MiniTask(payload=alt_payload)
+                        retry_result = sub_exec.execute(sub_task2)
+                        if retry_result.success:
+                            results.append({
+                                "step": i, "action": action_type,
+                                "target": alt_target,
+                                "target_used": target,
+                                "exemplar_source": "retry_alt",
+                                "success": True,
+                            })
+                            continue
+
+                    # Both primary and alt failed — abort.
+                    results.append({
+                        "step": i, "action": action_type, "target": target,
+                        "target_used": target,
+                        "exemplar_source": exemplar_source,
+                        "success": False,
+                        "error": (retry_result.error if alt_target else
+                                   step_result.error or "execution failed"),
+                        "aborted_remaining": len(steps) - i - 1,
+                    })
+                    all_succeeded = False
+                    break
+
+            else:
+                results.append({
+                    "step": i, "action": action_type, "target": target,
+                    "target_used": target,
+                    "exemplar_source": exemplar_source,
+                    "success": True,
+                })
 
         dur = int((_time.monotonic() - t0) * 1000)
 
         # Increment invocation count.
         try:
             conn = _db_connect()
-            ref = getattr(task, "manifest_ref", None) or getattr(task, "runtime_hint", "")
-            if ref and "formed_skill:" in ref:
-                skill_id = int(ref.split("formed_skill:")[1].split(":")[0])
+            if skill_id is not None:
                 from .db import increment_formed_skill_invocation
                 increment_formed_skill_invocation(conn, skill_id)
         except Exception:
             pass
 
-        # Log the replay action.
+        # Log the replay action with per-step concrete values.
         try:
             conn = _db_connect()
             log_action(conn, ActionEvent(
                 source="friday",
                 action_type="skill_replay",
-                target=json.dumps({"step_count": len(steps), "succeeded": all_succeeded}),
-                detail=json.dumps({"results": results}),
+                target=json.dumps({
+                    "step_count": len(steps),
+                    "succeeded": all_succeeded,
+                    "on_failure": self._on_failure,
+                    "skill_id": skill_id,
+                    "worker_id": self.worker_id,
+                }),
+                detail=json.dumps({
+                    "results": results,
+                    "strategy": self._on_failure,
+                }),
                 confidence="observed",
                 observed_at=_now(),
             ))
         except Exception:
             pass
 
+        # Summarize which steps failed/succeeded for the ExecutionResult.
+        failed_steps = [r for r in results if not r.get("success")]
+        final_success = all_succeeded
+        final_error = ""
+        if not final_success:
+            failed_summaries = []
+            for fs in failed_steps[:3]:
+                step_i = fs.get("step", "?")
+                err = fs.get("error", "unknown")
+                failed_summaries.append(f"step {step_i}: {err}")
+            remaining = len(failed_steps) - 3
+            if remaining > 0:
+                failed_summaries.append(f"... and {remaining} more")
+            final_error = "; ".join(failed_summaries)
+
         return ExecutionResult(
-            success=all_succeeded,
+            success=final_success,
             stdout=json.dumps({"steps": len(steps), "results": results}),
             stderr="",
-            exit_code=0 if all_succeeded else 1,
+            exit_code=0 if final_success else 1,
             duration_ms=dur,
-            error="" if all_succeeded else "One or more steps failed",
+            error=final_error,
         )
+
+    def _resolve_strategies(self, skill_id: int) -> dict[str, str]:
+        """Compute per-step failure strategies from the action log.
+
+        Reads the last 10 ``skill_replay`` entries for this skill. If a step
+        has failed in 3+ of those invocations, auto-downgrade that step's
+        strategy from ``abort`` to ``skip`` for this invocation.
+
+        Only applies when ``self._on_failure == "abort"`` (the default).
+        When the user explicitly passes ``--on-failure``, no downgrade occurs.
+
+        .. note::
+
+           The LIKE query on ``target`` assumes ``skill_id`` appears as a
+           JSON key in the target blob. Suffix collisions are unlikely with
+           a single-user SQLite database.
+        """
+        if self._on_failure != "abort":
+            return {}
+
+        try:
+            conn = _db_connect()
+            try:
+                # LIKE on target column; skill_id is stored in target JSON
+                # by ReplayExecutor.execute().
+                rows = conn.execute(
+                    """SELECT target, detail FROM actions
+                       WHERE action_type = 'skill_replay'
+                       AND target LIKE '%skill_id%'
+                       ORDER BY observed_at DESC LIMIT 10""",
+                ).fetchall()
+            finally:
+                conn.close()
+
+            # Filter to rows whose target actually references this skill_id.
+            # Note: json.dumps produces '"skill_id": 1' (space after colon).
+            target_marker = f'"skill_id": {skill_id}'
+            matching = []
+            for r in rows:
+                t = r["target"] if isinstance(r["target"], str) else json.dumps(r["target"])
+                if target_marker in t:
+                    matching.append(r)
+
+            if len(matching) < 3:
+                return {}
+
+            # Count failures per step across the recent invocations.
+            from collections import Counter
+            step_failures: Counter = Counter()
+            # Use string keys (same type as step_failures keys) throughout.
+            step_seen: set[str] = set()
+
+            for r in matching:
+                try:
+                    detail = json.loads(r["detail"]) if isinstance(r["detail"], str) else dict(r["detail"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                step_results = detail.get("results", []) if isinstance(detail, dict) else []
+                for sr in step_results:
+                    step_i = sr.get("step")
+                    if not sr.get("success") and step_i is not None:
+                        sk = str(step_i)
+                        step_failures[sk] += 1
+                        step_seen.add(sk)
+
+            strategies: dict[str, str] = {}
+            for step_key in step_seen:
+                if step_failures.get(step_key, 0) >= 3:
+                    strategies[step_key] = "skip"
+            return strategies
+        except Exception:
+            return {}
+
+    def _next_alt(self, step_idx: int, current_target: str) -> str | None:
+        """Return the next most common exemplar value for a step,
+        excluding the value that just failed."""
+        pos_key = str(step_idx)
+        pos_data = self._exemplars.get(pos_key, {})
+        if not isinstance(pos_data, dict):
+            return None
+        dist = pos_data.get("distribution", {})
+        if not isinstance(dist, dict) or len(dist) < 2:
+            return None
+        # Sort by count descending, pick the first that isn't the failed one.
+        sorted_vals = sorted(dist.items(), key=lambda x: -x[1])
+        for val, _count in sorted_vals:
+            if val != current_target:
+                return val
+        return None
+
+    def _build_retry_payload(self, action_type, action_name, target) -> str:
+        """Build a new payload for retry with an alternative target.
+
+        ``action_name`` is the dispatcher action string (e.g. "workspace")
+        for Hyprland actions, or None for browser actions (which use action_type).
+        """
+        if action_name:
+            return json.dumps({"action": action_name, "target": target})
+        # Browser actions use action_type directly.
+        return json.dumps({"action": action_type, "target": target})
 
     def build_steps(self) -> list[tuple[str, str]]:
         """Resolve exemplar values for each step in the task graph."""
@@ -370,6 +600,197 @@ class ReplayExecutor(Executor):
             reason="replay executor completed" if result.success
             else result.error or "replay executor failed",
         )
+
+
+# ---------------------------------------------------------------------------
+# Auto-dispatch — trigger formed skills when their pattern is observed
+# ---------------------------------------------------------------------------
+
+
+_AUTO_DISPATCH_INTERVAL = 3600  # seconds between auto-dispatches per skill
+
+
+def auto_dispatch_skills(conn) -> list[dict]:
+    """Check freshly mined patterns against formed skills and auto-dispatch
+    any skill whose task_graph matches an observed pattern.
+
+    Runs in the daemon cycle after Pillar B Stage 4 (skill formation).
+    Dispatches are rate-limited per skill (``_AUTO_DISPATCH_INTERVAL``).
+    A failure in dispatch never crashes the caller.
+
+    Returns a list of dispatch result dicts (empty if none triggered).
+    """
+    dispatched: list[dict] = []
+
+    try:
+        # 1. Read formed skills with their task graphs.
+        skills = conn.execute(
+            """SELECT fs.id, fs.task_graph, fs.exemplars,
+                      fs.invocation_count, fs.last_invoked_at,
+                      w.id AS worker_id, w.name AS worker_name,
+                      w.status, w.manifest_ref
+               FROM formed_skills fs
+               JOIN workers w
+                 ON w.manifest_ref = 'formed_skill:' || CAST(fs.id AS TEXT)
+               WHERE w.kind = 'formed_skill'
+                 AND w.status IN ('beta', 'proposed')"""
+        ).fetchall()
+
+        if not skills:
+            return dispatched
+
+        # 2. Read mined patterns from this cycle.
+        patterns = conn.execute(
+            """SELECT id, sequence_json, exemplars
+               FROM mined_patterns ORDER BY count DESC"""
+        ).fetchall()
+
+        if not patterns:
+            return dispatched
+
+        # 3. For each skill, check if its task_graph matches a pattern.
+        from datetime import datetime, timezone
+        now_utc = datetime.now(timezone.utc)
+
+        for skill in skills:
+            try:
+                skill_id = skill["id"]
+                worker_id = skill["worker_id"]
+                status = skill["status"]
+                last_invoked = skill["last_invoked_at"]
+
+                # Rate-limit: skip if dispatched within the interval.
+                if last_invoked:
+                    try:
+                        last_dt = datetime.fromisoformat(last_invoked)
+                        elapsed = (now_utc - last_dt).total_seconds()
+                        if elapsed < _AUTO_DISPATCH_INTERVAL:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+
+                task_graph_str = skill["task_graph"] or "[]"
+                skill_graph = json.loads(task_graph_str) if isinstance(task_graph_str, str) else task_graph_str
+                if not skill_graph:
+                    continue
+
+                # Normalize skill task_graph to action-type sequence for matching.
+                skill_actions = [step[0] for step in skill_graph if len(step) >= 1]
+
+                # Check each pattern for a match.
+                matched_pattern = None
+                for p in patterns:
+                    seq_str = p["sequence_json"] or "[]"
+                    seq = json.loads(seq_str) if isinstance(seq_str, str) else seq_str
+                    pattern_actions = [step[0] for step in seq if len(step) >= 1]
+                    if pattern_actions == skill_actions:
+                        matched_pattern = p
+                        break
+
+                if matched_pattern is None:
+                    continue
+
+                # 4. Dispatch the skill.
+                result = _dispatch_one(conn, skill, worker_id, now_utc)
+                if result:
+                    dispatched.append(result)
+
+            except Exception as exc:
+                _log_dispatch(skill.get("id", "?") if isinstance(skill, dict) else "?",
+                              f"dispatch check failed: {exc}")
+                continue
+
+    except Exception as exc:
+        _log_dispatch("all", f"auto_dispatch_skills failed: {exc}")
+
+    return dispatched
+
+
+def _dispatch_one(conn, skill_row, worker_id: str, now_utc) -> Optional[dict]:
+    """Dispatch one formed skill via resolve_executor + ReplayExecutor.
+
+    Returns a dict with dispatch metadata, or None if dispatch was skipped.
+    """
+    try:
+        skill_id = skill_row["id"]
+        task_graph_str = skill_row["task_graph"] or "[]"
+        skill_graph = json.loads(task_graph_str) if isinstance(task_graph_str, str) else task_graph_str
+        exemplars_str = skill_row["exemplars"] or "{}"
+        exemplars = json.loads(exemplars_str) if isinstance(exemplars_str, str) else exemplars_str
+
+        # Resolve the executor for this formed skill.
+        from .runtime.executors import resolve_executor
+        executor = resolve_executor(worker_id)
+        if executor is None:
+            _log_dispatch(skill_id, f"no executor for {worker_id}")
+            return None
+
+        # Build a minimal task for the ReplayExecutor.
+        task = _MiniTask(
+            payload="",
+            hint="",
+            ref=f"formed_skill:{skill_id}:auto",
+        )
+
+        result = executor.execute(task)
+
+        # sqlite3.Row does not support .get(), so access via bracket with
+        # key-existence guard.
+        worker_name = skill_row["worker_name"] if "worker_name" in skill_row.keys() else ""
+
+        # Record the auto-dispatch in the action log.
+        from .action_log import (
+            ActionEvent, log_action, now_iso as _n)
+
+        log_action(conn, ActionEvent(
+            source="friday",
+            action_type="skill_auto_dispatch",
+            target=json.dumps({
+                "skill_id": skill_id,
+                "worker_id": worker_id,
+                "succeeded": result.success,
+                "worker_name": worker_name,
+            }),
+            detail=json.dumps({
+                "error": result.error or "",
+                "steps": skill_graph,
+            }),
+            confidence="observed",
+            observed_at=_n(),
+        ))
+
+        dispatch_info = {
+            "skill_id": skill_id,
+            "worker_id": worker_id,
+            "worker_name": worker_name,
+            "succeeded": result.success,
+            "error": result.error or "",
+        }
+
+        _log_dispatch(skill_id,
+                      f"{'succeeded' if result.success else 'failed'}"
+                      f" for {worker_name}")
+        return dispatch_info
+
+    except Exception as exc:
+        _log_dispatch(
+            skill_id if "skill_id" in dir() else "?",
+            f"dispatch execution failed: {exc}")
+        return None
+
+
+def _log_dispatch(skill_id, message: str) -> None:
+    """Log an auto-dispatch message. Best-effort; failures are silent.
+
+    Uses print() so the message reaches the daemon's logfile (stderr is
+    captured in daemon mode). The caller (daemon.py) also logs summary
+    counts via its own _log() — no risk of circular imports.
+    """
+    try:
+        import sys
+        print(f"[auto-dispatch skill #{skill_id}] {message}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 class _MiniTask:

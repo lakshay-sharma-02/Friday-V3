@@ -111,12 +111,13 @@ def test_is_valid_plan_type():
 
 def test_builtins_register(reg):
     res = reg.register_builtins()
-    assert res.created == 13
+    assert res.created == 16
     # Documentation declares "Markdown", which the closed language vocabulary
     # rejects (Markdown is not a tracked programming language); the capability
     # "Documentation" is what drives resolution, so dropping it is correct.
-    assert res.rejected == ["language: Markdown"]
-    assert reg.count() == 13
+    # Synthesis also declares "Markdown" (same reason — rejected, not stored).
+    assert res.rejected == ["language: Markdown", "language: Markdown"]
+    assert reg.count() == 16
 
 
 def test_builtin_names_present(reg):
@@ -421,7 +422,7 @@ def test_brain_compatibility_no_crosstalk(reg, db):
              for t in lower_tables}
     assert before == after
     # And workers table is the only thing that changed.
-    assert reg.count() == 13
+    assert reg.count() == 16
 
 
 def test_registry_is_write_only_catalog(reg):

@@ -57,6 +57,7 @@ from .cli_integration import cmd_integrate
 from .cli_daemon import cmd_daemon
 from .cli_patterns import cmd_patterns
 from .cli_actions import cmd_actions
+from .cli_skills import cmd_skills
 from .context import ContextEngine
 from .db import connect
 from .doctor import cmd_doctor
@@ -918,6 +919,24 @@ def main(argv: list[str] | None = None) -> int:
         "--source", type=str, default=None,
         help="Filter by source (friday, hyprland, browser, etc.).")
     p_actions.set_defaults(func=cmd_actions)
+
+    p_skills = sub.add_parser(
+        "skills",
+        help="List or invoke formed skills (Pillar B Stage 4).")
+    p_skills.add_argument(
+        "action", nargs="?", default="list",
+        choices=["list", "run"],
+        help="'list' (default) to show formed skills; 'run <name>' to invoke a skill.")
+    p_skills.add_argument(
+        "name", nargs="?", default=None,
+        help="Worker name for the 'run' action.")
+    p_skills.add_argument(
+        "--on-failure", type=str, default=None,
+        choices=["abort", "skip", "retry_alt"],
+        help="Step failure strategy: abort (stop on first failure), "
+             "skip (log and continue), retry_alt (try next exemplar). "
+             "Default: abort (auto-downgrades to skip after 3+ failures).")
+    p_skills.set_defaults(func=cmd_skills)
 
     p_doctor = sub.add_parser(
         "doctor", help="Check system health (DB, deps, workers, README, watch).")

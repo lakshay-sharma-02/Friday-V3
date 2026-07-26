@@ -55,12 +55,19 @@ from src.friday.understanding.confidence import Contributor
 
 
 @pytest.fixture
-def db():
+def db(monkeypatch):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    # Clear LLM env vars to prevent environment pollution from other tests
+    # (e.g. FRIDAY_LLM_MODEL/FRIDAY_LLM_API_KEY set by intent_extraction tests)
+    # affecting deterministic understanding engine behavior. Tests that need
+    # the LLM explicitly enable it via the mock_llm fixture.
+    for var in ("FRIDAY_LLM_MODEL", "FRIDAY_LLM_API_KEY",
+                "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"):
+        monkeypatch.delenv(var, raising=False)
     yield conn
     conn.close()
 
@@ -156,7 +163,7 @@ def test_single_knowledge_creates_understanding(db, mock_llm):
     assert "go" in subjects
 
 
-def test_multiple_knowledge_converges_types(db):
+def test_multiple_knowledge_converges_types(db, mock_llm):
     insert_knowledge(db, knowledge_set())
     eng = UnderstandingEngine(db)
     eng.build()
@@ -255,7 +262,7 @@ def test_repeated_builds_idempotent(db, mock_llm):
 # --- append only / history ---------------------------------------------------
 
 
-def test_history_append_only(db):
+def test_history_append_only(db, mock_llm):
     insert_knowledge(db, knowledge_set())
     eng = UnderstandingEngine(db)
     eng.build()
@@ -270,7 +277,7 @@ def test_history_append_only(db):
     assert hist1[0].build_at == hist2[0].build_at
 
 
-def test_append_only_history_preserved(db):
+def test_append_only_history_preserved(db, mock_llm):
     insert_knowledge(db, knowledge_set())
     eng = UnderstandingEngine(db)
     eng.build()
@@ -381,7 +388,7 @@ def test_no_understanding_without_knowledge(db):
 # --- retirement --------------------------------------------------------------
 
 
-def test_retired_understanding_preserved(db):
+def test_retired_understanding_preserved(db, mock_llm):
     insert_knowledge(db, knowledge_set())
     eng = UnderstandingEngine(db)
     eng.build()
@@ -397,7 +404,7 @@ def test_retired_understanding_preserved(db):
     assert hist  # history preserved forever
 
 
-def test_rebuild_does_not_resurrect_retired(db):
+def test_rebuild_does_not_resurrect_retired(db, mock_llm):
     insert_knowledge(db, knowledge_set())
     eng = UnderstandingEngine(db)
     eng.build()
@@ -465,7 +472,7 @@ def test_multi_project_workspace(db, mock_llm):
 # --- brain compatibility -----------------------------------------------------
 
 
-def test_brain_provider_reads_understanding(db):
+def test_brain_provider_reads_understanding(db, mock_llm):
     from src.friday.ask import Evidence, RetrievalRequirements, _p_understanding
     insert_knowledge(db, knowledge_set())
     UnderstandingEngine(db).build()
