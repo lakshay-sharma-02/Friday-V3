@@ -211,6 +211,8 @@ def test_shell_worker_empty_payload_gathers_evidence(tmp_path):
     repo = tmp_path / "r"
     repo.mkdir()
     os.system(f"git -C {repo} init -q")
+    os.system(f"git -C {repo} config user.email t@t.co")
+    os.system(f"git -C {repo} config user.name t")
     os.system(f"git -C {repo} commit -q --allow-empty -m init")
     w = BuiltinShellWorker(workspace=str(repo))
     res = w.execute(_task(""))

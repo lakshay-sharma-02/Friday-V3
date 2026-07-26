@@ -1225,30 +1225,32 @@ def test_mechanical_routing_prefers_deterministic(tmp_path):
     assert chosen is not None
     assert chosen.id == w_det.id
 
-def test_engine_resolves_judgment_task(tmp_path):
+def test_engine_resolves_judgment_task(tmp_path, monkeypatch):
     """CapabilityResolver identifies judgment tasks correctly."""
+    monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/" + x if x in (
+        "claude", "codex", "gemini", "opencode", "aider", "deepseek"
+    ) else None)
     from friday.planning.compiler import TaskType
     conn = _db(tmp_path)
     reg = _register_builtins(conn)
     reg.register_external()
-    
+
     _seed_graph(conn, "g1", [{
         "id": "t1", "title": "Refactor codebase",
         "task_type": "refactor", "required_capabilities": "python",
         "plan_type": "feature", "sequence": 1, "complexity": "medium",
         "priority": "medium", "estimated_effort": "medium",
     }])
-    
+
     resolver = CapabilityResolver(conn)
     r = resolver.resolve_graph("g1")
-    
-    import json
+
     for res in r.results:
         print(f"Chosen: {res.worker_id} (Score: {res.score.to_dict()})")
         print("Alternatives:")
         for alt in res.alternatives:
             print(f"  {alt['worker_id']}: {alt['score']}")
-            
+
     assert r.results[0].worker_id == "worker:claude"
 
     
@@ -1340,9 +1342,12 @@ def test_ai_fallback_no_active_deterministic_workers():
     assert "Research" in matched
 
 
-def test_ai_fallback_via_engine_resolve(tmp_path):
+def test_ai_fallback_via_engine_resolve(tmp_path, monkeypatch):
     """CapabilityResolver routes to worker:claude when the graph's task
     requires capabilities no builtin declares."""
+    monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/" + x if x in (
+        "claude", "codex", "gemini", "opencode", "aider", "deepseek"
+    ) else None)
     conn = _db(tmp_path)
     reg = _register_builtins(conn)
     reg.register_external()

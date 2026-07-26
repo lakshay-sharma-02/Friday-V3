@@ -24,3 +24,7 @@ mission_journal_sess:*.json
 
 # historical dogfood test output
 dogfood_run/
+
+# accidental nested package / editor detritus
+New Folder/
+src/src/
