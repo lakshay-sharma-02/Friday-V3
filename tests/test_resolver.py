@@ -1164,6 +1164,55 @@ def test_symbolic_review_routes_to_ai(tmp_path):
         f"review must not route to an AI-only worker, got {review[0].worker_id}")
 
 
+def test_descriptive_symbolic_op_routes_to_ai_executor():
+    """A task with a descriptive symbolic op (review_changes, identify_component,
+    reproduce_failure) must still be treated as judgment — the op is a planner
+    label, not a mechanical instruction. Regression guard for the bug where
+    ANY symbolic op disabled judgment routing and silently starved AI executors
+    from the candidate pool."""
+    shell = _make_worker("Shell", ["Research", "Infrastructure"],
+                          kind=WorkerKind.CLI, task_types=["analysis"],
+                          plan_types=["feature"])
+    claude = _make_worker("Claude Code", ["Research", "Python"],
+                           kind=WorkerKind.AGENT, task_types=["review"],
+                           plan_types=["feature", "documentation"])
+
+    # Descriptive symbolic ops — these are planner labels, not mechanical ops.
+    for op in ("review_changes", "identify_component", "reproduce_failure",
+               "verify_fix", "analyze_architecture", "research_design"):
+        chosen, candidates, conf, matched, missing, reason, alts = \
+            select_assignment(
+                ["Research"], "review", "documentation", [shell, claude],
+                is_judgment=True)
+        assert claude.id == chosen.id, \
+            f"descriptive op '{op}' routed to {chosen.id if chosen else None}: {reason}"
+        assert "Research" in matched
+
+
+def test_mechanical_symbolic_op_routes_to_deterministic():
+    """A task with a genuinely mechanical symbolic op (rename_declaration, etc.)
+    must still be treated as mechanical and route to a deterministic executor,
+    even when the task_type would otherwise be a judgment type."""
+    shell = _make_worker("Shell", ["Research", "Python"],
+                          kind=WorkerKind.CLI, task_types=["analysis", "review"],
+                          plan_types=["feature"])
+    claude = _make_worker("Claude Code", ["Research", "Python"],
+                           kind=WorkerKind.AGENT, task_types=["review"],
+                           plan_types=["feature"])
+
+    # Mechanical ops — these describe concrete file-level transformations.
+    for op in ("rename_declaration", "rename_imports", "move_code",
+               "modify_implementation", "create_module", "remove_safely"):
+        chosen, _, _, matched, missing, reason, _ = \
+            select_assignment(
+                ["Research", "Python"], "review", "feature", [shell, claude],
+                is_judgment=False)
+        assert shell.id == chosen.id, \
+            f"mechanical op '{op}' routed to {chosen.id if chosen else None}: {reason}"
+        assert "Research" in matched
+        assert "Python" in matched
+
+
 def test_resolve_symbolic_enriches_outputs_and_caps(tmp_path):
     """_resolve_symbolic greps the repo (read-only) and rewrites concrete
     outputs + deterministic capability hints onto the task."""
