@@ -32,7 +32,9 @@ from typing import Any, Callable, Optional
 _INTENT_MAP: dict[str, str] = {
     "ask": "Answer questions, get information, chitchat, greeting, or general help",
     "execute": "Run a goal, deploy something, execute a task, start/stop a server",
-    "create": "Create a file, write code, generate a script",
+    "create": "Create a file, write code, generate a script, scaffold a project",
+    "edit": "Modify an existing file, update code, add a feature to a project, change something",
+    "project": "Start, continue, or manage a persistent project session",
     "plan": "Create an execution plan for a goal",
     "graph": "Compile a task graph for a goal",
     "observe": "Refresh workspace knowledge, scan for changes, observe repos",
@@ -74,108 +76,6 @@ Respond with ONLY this JSON (no other text, no markdown):
 If unsure, or if the user is just greeting or making chitchat, use "ask"."""
 
 
-def _llm_classify(text: str) -> Optional[str]:
-    """Use the configured LLM to classify the user's intent.
-
-    Returns the intent name (e.g. ``'execute'``) or ``None`` if the LLM
-    is unavailable or returns something unrecognised.
-
-    Tries multiple models sequentially to handle quota limits on free tier:
-    1. ``FRIDAY_LLM_MODEL`` env var (primary, from 9router)
-    2. ``openrouter/google/gemma-4-26b-a4b-it:free``
-    3. ``openrouter/google/gemma-4-31b-it:free``
-    4. ``openrouter/nvidia/nemotron-3-super-120b-a12b:free``
-    """
-    import json as _json
-    import os as _os
-    import urllib.request as _urllib
-
-    base = _os.environ.get(
-        "FRIDAY_LLM_BASE_URL", "http://localhost:20128/v1"
-    ).rstrip("/")
-
-    # Model fallback list: primary from env, then known free models.
-    primary_model = _os.environ.get("FRIDAY_LLM_MODEL", "")
-    fallback_models = [
-        "openrouter/google/gemma-4-26b-a4b-it:free",
-        "openrouter/google/gemma-4-31b-it:free",
-        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-        "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
-    ]
-    models = [primary_model] + [m for m in fallback_models if m != primary_model]
-    models = [m for m in models if m]  # remove empties
-
-    intent_lines = "\n".join(
-        f"  {name}: {desc}" for name, desc in _INTENT_MAP.items()
-    )
-    prompt = _LLM_SYSTEM_PROMPT.format(intent_list=intent_lines)
-    headers_base = {"Content-Type": "application/json"}
-    key = _os.environ.get("FRIDAY_LLM_API_KEY", "")
-    if key:
-        headers_base["Authorization"] = f"Bearer {key}"
-
-    for model in models:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"User request: {text}"},
-            ],
-            "temperature": 0.0,
-        }
-        req = _urllib.Request(
-            f"{base}/chat/completions",
-            data=_json.dumps(payload).encode("utf-8"),
-            headers=dict(headers_base),  # copy so we can mutate per-model
-            method="POST",
-        )
-        try:
-            with _urllib.urlopen(req, timeout=30) as resp:
-                raw = resp.read().decode("utf-8")
-        except Exception:
-            continue
-
-        # Strip trailing SSE trailer (e.g. `data: [DONE]`).
-        raw = raw.strip()
-        if "[DONE]" in raw and "data:" in raw:
-            idx = raw.rfind("data:")
-            if idx != -1:
-                raw = raw[:idx].rstrip()
-        if not raw:
-            continue
-
-        try:
-            obj = _json.loads(raw)
-            result = obj.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if not result:
-                continue
-            result = result.strip()
-        except (_json.JSONDecodeError, KeyError, IndexError, TypeError):
-            continue
-
-        # Handle markdown code fences in the result.
-        if "```" in result:
-            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", result, re.DOTALL)
-            if m:
-                result = m.group(1).strip()
-
-        try:
-            obj = _json.loads(result)
-            intent = obj.get("intent", "").strip().lower()
-        except (_json.JSONDecodeError, TypeError):
-            lower = result.lower()
-            for name in _INTENT_MAP:
-                if name in lower:
-                    return name
-            continue
-
-        if intent in _INTENT_MAP:
-            return intent
-        for name in _INTENT_MAP:
-            if name in intent or intent in name:
-                return name
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -191,35 +91,190 @@ def _build_ask(text: str):
 
 
 def _build_create(text: str):
-    """Direct file creation — no execute pipeline, no mission control.
+    """Enhanced file/project creation — multi-file, path-aware, session-integrated.
 
-    Extracts filename from "name it X" or "named X", then generates
-    content via a single fast LLM call and writes the file.
+    Extracts filename from "name it X" or "named X" (supports paths like
+    "src/utils.py"), then generates content via LLM. Also extracts an output
+    directory from "in <path>" or "at <path>" at the end of the text.
     """
-    # Extract filename: "name it xyz.py" or "named xyz.py" or last word.
-    m = re.search(r"(?:name it|named)\s+['\"]?(.+?)(?:$|\s)", text, re.IGNORECASE)
-    if m:
-        filename = m.group(1).strip().strip("'\".,;!")
-    else:
-        # Fallback: last word that looks like a filename.
-        words = text.split()
-        filename = words[-1].strip("'\".,;!")
-        # If no extension, add .py as default.
-        if "." not in filename:
-            filename = filename + ".py"
+    from .utils import extract_output_path, extract_filename as _extract_filename
 
-    # Safety: use just the basename (strip directory components).
-    import os as _os
-    filename = _os.path.basename(filename)
+    output_path = extract_output_path(text)
+    filename = _extract_filename(text)
     if not filename:
         filename = "output.py"
+
+    # Auto-detect if this is a multi-file project request.
+    is_project = any(kw in text.lower() for kw in
+                     ["app", "project", "website", "scaffold", "full",
+                      "complete", "microservice", "service"])
+
+    # If the user asked for a full project (no specific filename), use a default.
+    if is_project and (filename == "output.py" or "." not in filename):
+        filename = "project"
 
     ns = argparse.Namespace(
         filename=filename,
         description=text,
+        path=output_path,
+        multi=is_project,
     )
     from .cli import cmd_create_file
     return cmd_create_file, ns
+
+
+def _build_edit(text: str):
+    """Route to project edit if a session exists, else fall through to create.
+
+    Extracts the target file and edit description from natural language.
+    """
+    from .project_session import ProjectSession
+
+    session = ProjectSession.active()
+    if not session:
+        # No session — user probably wants to create, not edit.
+        return _build_create(text)
+
+    target = None
+    m = re.search(
+        r"(?:edit|modify|update|change)\s+['\"]?(.+?[\.\w]+)['\"]?(?:\s+to|\s+so|$|\s)",
+        text, re.IGNORECASE
+    )
+    if m:
+        target = m.group(1).strip().strip("'\".,;!")
+    if not target:
+        words = text.split()
+        for w in reversed(words):
+            w = w.strip("'\".,;!")
+            if "." in w:
+                target = w
+                break
+    if not target or target == "file":
+        target = "main.py"
+
+    ns = argparse.Namespace(
+        action="edit", target=target, description=text,
+    )
+    from .cli import cmd_project
+    return cmd_project, ns
+
+
+def _build_project(text: str):
+    """Route natural language to the project session system.
+
+Recognises: start, status, continue, end, edit, add, and suggest actions.
+Falls through to _build_create for plain creation requests.
+"""
+    from pathlib import Path as _Path
+    from .project_session import ProjectSession as _PS
+
+    lower = text.lower()
+
+    # Check if there's an active session to work with.
+    session = _PS.active()
+
+    # "start a <type> project called <name>" or "scaffold a <type> app"
+    start_m = re.search(
+        r"(?:start|scaffold|new|create|make)\s+(?:a\s+|an\s+)?(\w+)?\s*(?:project|app|website|api|server|cli|tool|service|microservice)?\s*(?:called|named)?\s*['\"]?(.+?)['\"]?(?:\s+in|\s+at|$)",
+        text, re.IGNORECASE
+    )
+    if start_m:
+        ptype = start_m.group(1) or ""
+        pname = start_m.group(2) or ""
+        if not ptype or ptype in ("project", "app", "website", "api", "server", "cli", "tool", "service", "microservice"):
+            ptype = ""
+        # Extract path from "in <path>" or "at <path>"
+        path_m = re.search(r"(?:in|at)\s+(~?/?[\w/._-]+)", text)
+        path_str = path_m.group(1) if path_m else pname or "myapp"
+        root = _Path(path_str).expanduser().resolve()
+        ns = argparse.Namespace(
+            action="start",
+            path=str(root),
+            project_type=ptype or None,
+            target=None,
+            description=None,
+        )
+        from .cli import cmd_project
+        return cmd_project, ns
+
+    # "end project", "save project", "stop project"
+    if any(kw in lower for kw in ("end", "save", "stop", "finish", "close", "exit", "done with")):
+        ns = argparse.Namespace(
+            action="end",
+            path=None,
+            project_type=None,
+            target=None,
+            description=None,
+        )
+        from .cli import cmd_project
+        return cmd_project, ns
+
+    # "continue project", "resume project"
+    if "continue" in lower or "resume" in lower:
+        ns = argparse.Namespace(
+            action="continue",
+            path=None,
+            project_type=None,
+            target=None,
+            description=None,
+        )
+        from .cli import cmd_project
+        return cmd_project, ns
+
+    # "add <file> to project" or "create <file> in project"
+    add_m = re.search(r"(?:add|create|make|generate)\s+(?:a\s+|an\s+)?(.+?\.\w+)(?:\s+to|\s+in|$)", text, re.IGNORECASE)
+    if add_m and session:
+        target_file = add_m.group(1).strip()
+        ns = argparse.Namespace(
+            action="add",
+            target=target_file,
+            description=text,
+            path=str(session.root_path),
+            project_type=None,
+        )
+        from .cli import cmd_project
+        return cmd_project, ns
+
+    # "edit <file>" or "modify <file>"
+    edit_m = re.search(r"(?:edit|modify|update|change)\s+(.+?\.\w+)", text, re.IGNORECASE)
+    if edit_m and session:
+        target_file = edit_m.group(1).strip()
+        ns = argparse.Namespace(
+            action="edit",
+            target=target_file,
+            description=text,
+            path=str(session.root_path),
+            project_type=None,
+        )
+        from .cli import cmd_project
+        return cmd_project, ns
+
+    # "suggest", "what else", "improvements", "next steps"
+    if any(kw in lower for kw in ("suggest", "what else", "improvements", "enhancements", "next steps", "next", "idea", "brainstorm")):
+        ns = argparse.Namespace(
+            action="suggest",
+            target=None,
+            description=None,
+            path=str(session.root_path) if session else None,
+            project_type=None,
+        )
+        from .cli import cmd_project
+        return cmd_project, ns
+
+    # Default: show project status if session exists, else fall through.
+    if session:
+        ns = argparse.Namespace(
+            action="status",
+            target=None,
+            description=None,
+            path=None,
+            project_type=None,
+        )
+        from .cli import cmd_project
+        return cmd_project, ns
+
+    # Fall through to create (which also handles multi-file).
+    return _build_create(text)
 
 
 def _build_execute(text: str):
@@ -614,6 +669,8 @@ def _build_strategy(text: str):
 _INTENT_HANDLERS: dict[str, Callable[[str], Any]] = {
     "ask": _build_ask,
     "create": _build_create,
+    "edit": _build_edit,
+    "project": _build_project,
     "execute": _build_execute,
     "plan": _build_plan,
     "graph": _build_graph,
@@ -667,8 +724,20 @@ _INTENTS: list[_IntentDef] = [
     (30, ("knowledge", "what do you know", "build knowledge"), _build_knowledge),
     (30, ("initiative", "build initiative", "initiative timeline"), _build_initiatives),
     (30, ("insight", "build insight", "insight evolution"), _build_insights),
-    # File creation (high priority — must come before execute)
-    (35, ("create ", "make ", "write ", "generate "), _build_create),
+    # Project session management — specific phrases only, NOT bare "project".
+    # The bare word "project" is too broad (matches "create a Flask project" which
+    # should go to _build_create for multi-file handling).
+    (32, ("project session", "start project", "new project", "scaffold project",
+           "project status", "show project", "continue project", "resume project",
+           "end project", "save project", "stop project", "finish project",
+           "close project", "add to project", "edit project",
+           "active project", "my project", "current project",
+           "suggest", "what else"), _build_project),
+    # File/project creation (high priority — multi-file aware)
+    (35, ("create ", "make ", "write ", "generate ", "scaffold", "build "), _build_create),
+    # File editing
+    (36, ("edit ", "modify ", "update ", "change ", "refactor "
+          ), _build_edit),
     # Workspace operations
     (40, ("plan", "how to", "steps to", "make a plan"), _build_plan),
     (40, ("graph", "task graph", "compile a graph"), _build_graph),
@@ -715,7 +784,7 @@ _SORTED_INTENTS: list[_IntentDef] = sorted(_INTENTS, key=lambda x: x[0])
 import threading as _threading
 from collections import OrderedDict as _OrderedDict
 
-_LLM_CACHE: _OrderedDict[int, tuple[str, str, str]] = _OrderedDict()
+_LLM_CACHE: _OrderedDict[int, tuple[str, float]] = _OrderedDict()
 _LLM_CACHE_LOCK = _threading.Lock()
 _LLM_CACHE_MAX = 128
 _LLM_CACHE_TTL = 300  # seconds
@@ -731,7 +800,7 @@ def _cache_get(key: int) -> str | None:
     with _LLM_CACHE_LOCK:
         if key not in _LLM_CACHE:
             return None
-        result, ts, prev = _LLM_CACHE[key]
+        result, ts = _LLM_CACHE[key]
         if now - ts > _LLM_CACHE_TTL:
             del _LLM_CACHE[key]
             return None
@@ -744,7 +813,7 @@ def _cache_set(key: int, value: str) -> None:
     import time as _time
     now = _time.time()
     with _LLM_CACHE_LOCK:
-        _LLM_CACHE[key] = (value, now, "")
+        _LLM_CACHE[key] = (value, now)
         while len(_LLM_CACHE) > _LLM_CACHE_MAX:
             _LLM_CACHE.popitem(last=False)
 
@@ -765,7 +834,9 @@ def _parallel_llm_call(system: str, user: str) -> str | None:
     import os as _os
     import urllib.request as _urllib
     from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
-    import time as _time
+
+    from .services.llm import _extract_content as _extract
+    from .utils import build_model_list
 
     base = _os.environ.get(
         "FRIDAY_LLM_BASE_URL", "http://localhost:20128/v1"
@@ -773,20 +844,7 @@ def _parallel_llm_call(system: str, user: str) -> str | None:
     key = _os.environ.get("FRIDAY_LLM_API_KEY", "")
     primary_model = _os.environ.get("FRIDAY_LLM_MODEL", "")
 
-    # Build the list of models to try.
-    fallback_models = [
-        "openrouter/google/gemma-4-26b-a4b-it:free",
-        "openrouter/google/gemma-4-31b-it:free",
-        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-        "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
-    ]
-    models = []
-    if primary_model:
-        models.append(primary_model)
-    for m in fallback_models:
-        if m not in models:
-            models.append(m)
-
+    models = build_model_list(primary_model)
     if not models:
         return None
 
@@ -815,10 +873,8 @@ def _parallel_llm_call(system: str, user: str) -> str | None:
         except Exception:
             return None
 
-        # Use existing extractor from llm.py
         try:
-            from .services.llm import _extract_content
-            result = _extract_content(raw)
+            result = _extract(raw)
             if result:
                 return result
         except Exception:

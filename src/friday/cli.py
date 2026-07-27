@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -64,6 +65,14 @@ from .cli_slack import cmd_slack
 from .cli_discord import cmd_discord
 from .cli_telegram import cmd_telegram
 from .cli_nl import cmd_do
+from .project_session import (
+    ProjectSession,
+    format_suggestions,
+    list_templates,
+    get_template,
+    scaffold_from_template,
+)
+from .utils import _strip_code_fences
 from .context import ContextEngine
 
 
@@ -173,24 +182,118 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
 
 def cmd_create_file(args: argparse.Namespace) -> int:
-    """Create a file directly — no execute pipeline, no mission control.
+    """Create files directly — now with multi-file, path support, and proactive suggestions.
 
-    Generates file content via a single LLM call and writes it.
-    Used by ``friday do create a calculator named xyz.py``.
+    Enhanced features over the original:
+    - Path-aware: keeps directory components in filename
+    - Multi-file: generates complete project structures from one prompt
+    - Session-aware: attaches to active project session if one exists
+    - Existing project: reads existing context when working in a non-empty dir
+    - Proactive suggestions: suggests enhancements after creation
+
+    Used by ``friday do create a Flask app named ~/projects/myapp``.
     """
-    from .presentation.cli_format import header, green, gray, error as perror
+    from .presentation.cli_format import header, green, gray, yellow, error as perror
 
     filename = getattr(args, "filename", "output.py")
     description = getattr(args, "description", "")
-    cwd = Path.cwd()
-    path = cwd / filename
+    output_path = getattr(args, "path", None)
+    multi = getattr(args, "multi", False)
 
-    print(header("create", filename))
-    print()
-    print(gray(f"  Generating {filename}..."))
+    # Determine the target directory and filename.
+    cwd = Path(output_path).expanduser().resolve() if output_path else Path.cwd()
+    target = Path(filename)
+    if target.is_absolute():
+        cwd = target.parent
+        filename = target.name
+    elif len(target.parts) > 1:
+        # Relative path like "src/utils.py" -> cwd/src/utils.py
+        cwd = (cwd / target.parent).resolve()
+        filename = target.name
 
-    # Generate content via LLM (single fast call, no mission pipeline).
+    # Check for existing project context.
+    session = ProjectSession.active()
+    existing_context = ""
+    if session and str(session.root_path) == str(cwd):
+        existing_context = session.get_file_tree()
+        existing_context += "\n" + session.get_conversation_context(max_turns=5)
+    elif cwd.exists() and list(cwd.iterdir()):
+        # Non-empty directory without a session — scan existing files.
+        existing_files = list(cwd.glob("*"))[:20]
+        if existing_files:
+            existing_context = "Existing files in this directory:\n"
+            for f in existing_files:
+                existing_context += f"  {'📁' if f.is_dir() else '📄'} {f.name}\n"
+
+    # Check if we should do multi-file generation (project-like request).
+    is_project = multi or any(kw in description.lower() for kw in
+                              ["app", "project", "website", "server", "api", "cli",
+                               "tool", "microservice", "service", "script"])
+
+    if is_project or len(target.parts) > 1:
+        print(header("scaffold", filename if not is_project else description[:60]))
+        print()
+        return _generate_multi_file(cwd, filename, description, existing_context, session)
+
+    return _generate_single_file(cwd, filename, description, existing_context, session)
+
+
+
+def _parse_multi_file_output(raw: str) -> list[tuple[str, str]]:
+    """Parse multi-file LLM output into (relative_path, content) pairs.
+
+    Expected format:
+        ## path/to/file.py
+        content...
+        ## path/to/file2.py
+        content...
+
+    Or markdown code fences:
+        ```python path/to/file.py
+        content...
+        ```
+        ```python path/to/file2.py
+        content...
+        ```
+    """
+    files: list[tuple[str, str]] = []
+
+    # Try ## header format first.
+    blocks = re.split(r"^##\s+(.+)$", raw, flags=re.MULTILINE)
+    if len(blocks) >= 3:
+        for i in range(1, len(blocks), 2):
+            if i + 1 < len(blocks):
+                path = blocks[i].strip()
+                content = blocks[i + 1].strip()
+                # Strip ``` fences from content.
+                content = _strip_code_fences(content)
+                if path and content:
+                    files.append((path, content))
+
+    # Try markdown fence format if ## didn't work.
+    if not files:
+        fence_pattern = re.compile(
+            r"```(?:\w+)?\s*(.+?)\n(.*?)```", re.DOTALL
+        )
+        for m in fence_pattern.finditer(raw):
+            path = m.group(1).strip()
+            content = m.group(2).strip()
+            if path and content and not path.startswith("{"):
+                files.append((path, content))
+
+    return files
+
+
+def _generate_single_file(
+    cwd: Path, filename: str, description: str,
+    existing_context: str, session: ProjectSession | None,
+) -> int:
+    """Generate a single file via LLM and write it."""
+    from .presentation.cli_format import green, gray, error as perror
     from .services.llm import _call as _llm_call
+
+    path = cwd / filename
+    print(gray(f"  Generating {filename}..."))
 
     system = (
         "You generate code. Output ONLY the file content. "
@@ -198,39 +301,14 @@ def cmd_create_file(args: argparse.Namespace) -> int:
         "Just the raw code."
     )
     user = f"Write {filename} that does: {description}"
+    if existing_context:
+        user += f"\n\nProject context:\n{existing_context}"
 
     content = _llm_call(system, user)
     if content:
-        # Strip markdown code fences and trailing non-code lines.
-        # LLMs often wrap code in ```python / ``` despite the system prompt.
-        lines = content.splitlines()
-        start = 0
-        end = len(lines)
-        # Find opening fence (```python, ```py, ```)
-        for i, line in enumerate(lines):
-            if line.strip().startswith("```"):
-                start = i + 1
-                break
-        # Find closing fence and truncate everything after it
-        for i in range(end - 1, start - 1, -1):
-            stripped = lines[i].strip()
-            if stripped.startswith("```") or stripped.startswith("→"):
-                end = i
-            elif stripped == "":
-                continue  # skip trailing blank lines before fence
-            else:
-                break  # non-blank, non-fence line — keep going
-        # Also strip trailing lines that look like commentary (start with →, or are single emoji/arrow)
-        clean = []
-        for line in lines[start:end]:
-            s = line.strip()
-            if s.startswith("```"):
-                continue
-            clean.append(line)
-        content = "\n".join(clean).strip()
+        content = _strip_code_fences(content)
 
     if not content:
-        # Fallback: write a skeleton.
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if ext in ("py",):
             content = f'"""{description}"""\n\n\ndef main():\n    pass\n\n\nif __name__ == "__main__":\n    main()\n'
@@ -238,25 +316,467 @@ def cmd_create_file(args: argparse.Namespace) -> int:
             content = f"# {description}\n"
 
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     except OSError as exc:
         print(perror(f"Failed to write {filename}: {exc}"))
         return 1
 
     print(green(f"  Created {filename}"))
-    print()
 
-    # Show a preview.
-    lines = content.splitlines()
-    preview = lines[:5]
-    if lines:
-        print(gray("  Preview:"))
-        for line in preview:
-            print(f"    {line}")
-        if len(lines) > 5:
-            print(gray(f"    ... ({len(lines)} lines total)"))
+    # Track in active session if applicable.
+    if session and str(session.root_path) == str(cwd):
+        session.add_file(filename, content, created=True)
+        session.add_exchange(f"create {filename}", "created", f"wrote {filename} ({len(content.splitlines())} lines)")
+        session.save_active()
+
+    # Show preview.
+    lines_content = content.splitlines()
+    preview = lines_content[:5]
+    print()
+    print(gray("  Preview:"))
+    for line in preview:
+        print(f"    {line}")
+    if len(lines_content) > 5:
+        print(gray(f"    ... ({len(lines_content)} lines total)"))
+
+    # Proactive suggestions.
+    _show_enhancements(cwd, filename, content, session)
 
     return 0
+
+
+def _generate_multi_file(
+    cwd: Path, filename: str, description: str,
+    existing_context: str, session: ProjectSession | None,
+) -> int:
+    """Generate a multi-file project structure via LLM."""
+    from .presentation.cli_format import green, gray, yellow, error as perror
+    from .services.llm import _call as _llm_call
+
+    print(gray(f"  Designing project structure for: {description[:60]}..."))
+
+    # Determine project type from existing context or description.
+    project_type = None
+    desc_lower = description.lower()
+    for ptype in ("flask", "fastapi", "django", "react", "vue", "cli",
+                  "python", "node", "express", "next", "rust", "go"):
+        if ptype in desc_lower:
+            project_type = ptype
+            break
+
+    system = (
+        "You are a senior software architect scaffolding a project. "
+        "Output a COMPLETE, production-quality project with multiple files.\n\n"
+        "Use this format EXACTLY (separate each file with ## path):\n\n"
+        "## path/to/file1.py\n"
+        "content of file 1\n\n"
+        "## path/to/file2.py\n"
+        "content of file 2\n\n"
+        "IMPORTANT:\n"
+        "- Every file must have COMPLETE, working code — no TODOs or placeholders\n"
+        "- Include a README.md with setup/usage instructions\n"
+        "- Include requirements.txt or package.json with dependencies\n"
+        "- Make it impressive: error handling, type hints, docstrings, proper structure\n"
+        "- Output ONLY the files in ## format — no extra commentary"
+    )
+    user = f"Scaffold a complete project: {description}"
+    if existing_context:
+        user += f"\n\nWorking directory context:\n{existing_context}"
+
+    raw = _llm_call(system, user)
+    if not raw:
+        print(yellow("  LLM unavailable — falling back to single file."))
+        return _generate_single_file(cwd, filename, description, existing_context, session)
+
+    files = _parse_multi_file_output(raw)
+    if not files:
+        print(yellow("  Couldn't parse multi-file output — creating as single file."))
+        content = _strip_code_fences(raw)
+        if content:
+            files = [(filename, content)]
+        else:
+            files = [(filename, f"# {description}\n")]
+
+    # Start or reuse a project session.
+    if not session or str(session.root_path) != str(cwd):
+        session = ProjectSession.start(str(cwd), project_type=project_type)
+        print(gray(f"  Started project session at {cwd}"))
+    elif session.project_type is None and project_type:
+        session.project_type = project_type
+
+    written = []
+    for rel_path, content in files:
+        full_path = (cwd / rel_path).resolve()
+        try:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+            session.add_file(rel_path, content, created=True)
+            written.append(rel_path)
+            print(green(f"  ✓ {rel_path}"))
+        except OSError as exc:
+            print(perror(f"  ✗ {rel_path}: {exc}"))
+
+    session.add_exchange(
+        description, "scaffolded",
+        f"created {len(written)} files in {cwd.name}",
+    )
+    session.save_active()
+
+    print()
+    print(gray(f"  Created {len(written)} files in {cwd}"))
+    print()
+
+    # Proactive enhancement suggestions.
+    _show_enhancements(cwd, "", description, session)
+
+    return 0
+
+
+def _show_enhancements(
+    cwd: Path, filename: str, content: str,
+    session: ProjectSession | None,
+) -> None:
+    """Show proactive enhancement suggestions after file/project creation."""
+    from .presentation.cli_format import gray, yellow
+    from .services.llm import _call as _llm_call, _enabled
+
+    if not _enabled():
+        return
+
+    # Brief pause to indicate thinking.
+    print(gray("  Thinking about what else could make this better..."))
+
+    if session:
+        suggestions = session.suggest_enhancements(_llm_call)
+    else:
+        # No session — do one-shot suggestions for this single file.
+        temp_session = ProjectSession(str(cwd))
+        temp_session.add_file(filename, content, created=True)
+        suggestions = temp_session.suggest_enhancements(_llm_call)
+
+    if suggestions:
+        print()
+        print(yellow("  💡 Want me to add any of these?"))
+        for s in suggestions[:5]:
+            mark = {"high": "🔥", "medium": "💡", "low": "📝"}.get(s.priority, "💡")
+            print(f"    {mark} {s.title}")
+            if s.description:
+                print(f"       {s.description}")
+        print()
+        print(gray("  Just say: friday do 'add <suggestion>'"))
+
+
+def cmd_project(args: argparse.Namespace) -> int:
+    """Manage persistent project sessions — start, continue, show status, end.
+
+    ``friday project start <path> [--type <type>]``    Start a new session
+    ``friday project status``                            Show active session
+    ``friday project continue``                          Resume active session info
+    ``friday project end``                               End active session
+    ``friday project add <file> <description>``          Create file in active session
+    ``friday project suggest``                           Show enhancement suggestions
+    ``friday project edit <file> <description>``         Modify existing file
+    ``friday project template <name> [--output <path>]`` Scaffold from a template
+    ``friday project list-templates``                    Show available templates
+    ``friday project chat``                              Interactive REPL session
+    """
+    from .presentation.cli_format import header, green, gray, yellow, error as perror
+    from .services.llm import _call as _llm_call, _enabled as _llm_enabled
+
+    action = getattr(args, "action", "status")
+
+    if action == "start":
+        path = getattr(args, "path", None) or getattr(args, "target", ".")
+        project_type = getattr(args, "project_type", None)
+        root = Path(path).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        session = ProjectSession.start(str(root), project_type=project_type)
+        print(header("project", f"started at {root}"))
+        print(green(f"  Project session started"))
+        print(f"  Path:        {root}")
+        print(f"  Type:        {session.project_type or 'auto-detect'}")
+        print(f"  Session ID:  {session.session_id}")
+        print()
+        print(gray("  You can now use 'friday do' commands and they'll"))
+        print(gray("  automatically attach to this session:"))
+        print(gray("    friday do create a Flask app in this project"))
+        print(gray("    friday do add authentication to this project"))
+        print(gray("    friday do add a database model"))
+        return 0
+
+    if action == "status":
+        session = ProjectSession.active()
+        if not session:
+            print(header("project", "no active session"))
+            print()
+            print("  No active project session.")
+            print()
+            print("  Start one:")
+            print(gray("    friday project start ~/projects/myapp"))
+            print(gray("    friday do create a Flask app in ~/projects/myapp"))
+            return 0
+        print(header("project", session.root_path.name))
+        print(f"  Path:        {session.root_path}")
+        print(f"  Type:        {session.project_type or 'unknown'}")
+        print(f"  Files:       {session.file_count} ({len(session.created_files)} created)")
+        print(f"  Exchanges:   {len(session.conversation)}")
+        print()
+        print(session.get_file_tree())
+        if session.suggestions:
+            print()
+            print(gray("  Pending suggestions:"))
+            print(format_suggestions(session.suggestions))
+        if session.conversation:
+            print()
+            print(gray("  Recent activity:"))
+            for ex in session.conversation[-3:]:
+                print(f"    • {ex.action_taken}: {ex.result[:80]}")
+        return 0
+
+    if action == "continue":
+        session = ProjectSession.active()
+        if not session:
+            print("No active session to continue.")
+            print("Start one: friday project start <path>")
+            return 1
+        print(header("project", f"continuing {session.root_path.name}"))
+        print(green(f"  Resumed session at {session.root_path}"))
+        print(gray(f"  {session.file_count} files tracked, {len(session.conversation)} prior exchanges"))
+        return 0
+
+    if action == "end":
+        if ProjectSession.end_active():
+            print(green("  Project session ended."))
+        else:
+            print("  No active session to end.")
+        return 0
+
+    if action == "add":
+        session = ProjectSession.active()
+        if not session:
+            print("No active session. Start one: friday project start <path>")
+            return 1
+        target = getattr(args, "target", "")
+        desc = getattr(args, "description", "")
+        if not target:
+            print("Specify what to create, e.g.: friday project add main.py 'a CLI entry point'")
+            return 1
+        ns = argparse.Namespace(
+            filename=target,
+            description=desc or target,
+            path=str(session.root_path),
+            multi=False,
+        )
+        return cmd_create_file(ns)
+
+    if action == "edit":
+        session = ProjectSession.active()
+        if not session:
+            print("No active session. Start one: friday project start <path>")
+            return 1
+        target = getattr(args, "target", "")
+        desc = getattr(args, "description", "")
+        if not target:
+            print("Specify what to edit, e.g.: friday project edit main.py 'add error handling'")
+            return 1
+
+        existing = session.read_file(target)
+        if existing is None:
+            print(yellow(f"  File '{target}' doesn't exist yet — will create."))
+        else:
+            print(gray(f"  Reading existing {target} ({len(existing.splitlines())} lines)..."))
+
+        system = (
+            "You modify or create a file. Output ONLY the COMPLETE new file content. "
+            "No explanations, no markdown fences, no extra text. "
+            "Replace the entire file with the improved version."
+        )
+        existing_ctx = f"\n\nExisting content:\n{existing}" if existing else ""
+        user = f"{desc}\n\nFile: {target}{existing_ctx}"
+
+        content = _llm_call(system, user)
+        if content:
+            content = _strip_code_fences(content)
+
+        if not content:
+            print(perror(f"Failed to generate content for {target}"))
+            return 1
+
+        session.modify_file(target, content)
+        session.add_exchange(f"edit {target}: {desc}", "modified", f"updated {target}")
+        session.save_active()
+
+        print(green(f"  ✓ Updated {target}"))
+        print()
+        lines_c = content.splitlines()
+        for line in lines_c[:5]:
+            print(f"    {line}")
+        if len(lines_c) > 5:
+            print(gray(f"    ... ({len(lines_c)} lines total)"))
+
+        return 0
+
+    if action == "suggest":
+        session = ProjectSession.active()
+        if not session:
+            print("No active session.")
+            return 1
+        suggestions = session.suggest_enhancements(_llm_call)
+        if suggestions:
+            print(header("project", "enhancement suggestions"))
+            print(format_suggestions(suggestions))
+        else:
+            print("No suggestions available.")
+        return 0
+
+    # --- Project Templates ---
+    if action == "list-templates":
+        templates = list_templates()
+        if not templates:
+            print("No templates available.")
+            return 0
+        print(header("project", "available templates"))
+        print()
+        for t in templates:
+            print(t.describe())
+            print()
+        print(gray("  Use: friday project template <name> --output <path>"))
+        print(gray("  Or:  friday do scaffold a flask app in ~/projects/myapp"))
+        return 0
+
+    if action in ("template", "scaffold"):
+        template_name = getattr(args, "target", "")
+        if not template_name:
+            print("Specify a template name.")
+            print("Available: " + ", ".join(t.name for t in list_templates()))
+            return 1
+
+        tmpl = get_template(template_name)
+        if not tmpl:
+            print(f"Unknown template: {template_name}")
+            print("Available: " + ", ".join(t.name for t in list_templates()))
+            return 1
+
+        output_path = getattr(args, "path", None) or getattr(args, "description", tmpl.default_output)
+        root = Path(output_path).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+
+        session = ProjectSession.start(str(root), project_type=tmpl.project_type)
+        print(header("project", f"scaffolding {tmpl.name} at {root}"))
+        print()
+
+        if _llm_enabled():
+            print(gray(f"  Generating {tmpl.name} project..."))
+            created = scaffold_from_template(session, tmpl, _llm_call, root.name)
+        else:
+            print(yellow("  LLM unavailable — using static content only."))
+            created = scaffold_from_template(session, tmpl, lambda s, u: "", root.name)
+
+        session.add_exchange(
+            f"scaffold {tmpl.name}", "scaffolded",
+            f"created {created} files from {tmpl.name} template",
+        )
+        session.save_active()
+
+        print(green(f"  ✓ Created {created} files in {root}"))
+        print()
+        print(session.get_file_tree())
+        print()
+        print(gray("  Continue building: friday project chat"))
+
+        # Proactive suggestions for what else to add.
+        if _llm_enabled():
+            _show_enhancements(root, "", f"{tmpl.name} app via template", session)
+
+        return 0
+
+    # --- Interactive Chat Mode ---
+    if action == "chat":
+        session = ProjectSession.active()
+        if not session:
+            print("No active session. Start one first: friday project start <path>")
+            print("Or scaffold one: friday project template flask --output ~/projects/myapp")
+            return 1
+
+        print(header("project chat", session.root_path.name))
+        print(green(f"  Interactive project session at {session.root_path}"))
+        print(gray(f"  {session.file_count} files, {len(session.conversation)} prior exchanges"))
+        print(gray("  Type 'exit' or 'end' to quit. Type 'help' for commands."))
+        print()
+
+        while True:
+            try:
+                q = input("project> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            if not q:
+                continue
+            if q.lower() in ("exit", "quit", "end", "done"):
+                break
+            if q.lower() in ("help", "?"):
+                print()
+                print(gray("  Commands:"))
+                print(gray("    create <desc>     — Create a file or scaffold a project"))
+                print(gray("    edit <file> <desc> — Modify an existing file"))
+                print(gray("    status            — Show project status"))
+                print(gray("    suggest           — Get enhancement ideas"))
+                print(gray("    template <name>   — Scaffold from a template"))
+                print(gray("    list-templates    — Show available templates"))
+                print(gray("    add <file> <desc> — Add a new file"))
+                print(gray("    exit/end          — End session and quit"))
+                print()
+                continue
+            if q.lower() in ("status", "s"):
+                ns = argparse.Namespace(action="status", target=None, description=None,
+                                        path=None, project_type=None)
+                cmd_project(ns)
+                continue
+            if q.lower() in ("suggest", "ideas"):
+                ns = argparse.Namespace(action="suggest", target=None, description=None,
+                                        path=None, project_type=None)
+                cmd_project(ns)
+                continue
+            if q.lower() == "list-templates":
+                ns = argparse.Namespace(action="list-templates", target=None, description=None,
+                                        path=None, project_type=None)
+                cmd_project(ns)
+                continue
+            if q.lower().startswith("template "):
+                name = q[9:].strip()
+                ns = argparse.Namespace(action="template", target=name, description=None,
+                                        path=str(session.root_path), project_type=None)
+                cmd_project(ns)
+                continue
+
+            # Route through the NL dispatcher, but keep session context.
+            from .cli_nl import classify_intent
+            try:
+                handler, ns = classify_intent(q)
+            except Exception as exc:
+                print(yellow(f"  Couldn't process: {exc}"))
+                continue
+
+            # If it's a project command, run it directly (keeps session).
+            if hasattr(ns, "action"):
+                handler(ns)
+            elif handler.__name__ in ("cmd_create_file",):
+                # Ensure create/file commands use the session path.
+                if hasattr(ns, "path") and not ns.path:
+                    ns.path = str(session.root_path)
+                handler(ns)
+            else:
+                handler(ns)
+
+            session.save_active()
+
+        print(green(f"\n  Project session saved. {session.file_count} files total."))
+        return 0
+
+    print(f"Unknown project action: {action}")
+    return 1
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
@@ -1148,6 +1668,35 @@ def main(argv: list[str] | None = None) -> int:
         "sub", nargs="?", default=None,
         help="'start' or 'stop' for 'telegram' action.")
     p_identity.set_defaults(func=cmd_identity)
+
+    p_project = sub.add_parser(
+        "project",
+        help="Persistent project sessions: start, chat, template, edit, add, suggest."
+    )
+    p_project.add_argument(
+        "action", nargs="?", default="status",
+        choices=["start", "status", "continue", "end", "chat",
+                 "add", "edit", "suggest",
+                 "template", "scaffold", "list-templates"],
+        help="'start <path>' to begin, 'status' to view, 'chat' for interactive mode, "
+             "'template <name>' to scaffold from a preset, "
+             "'list-templates' to see available presets, "
+             "'end' to finish, 'add <file> <desc>' to create, "
+             "'edit <file> <desc>' to modify, or 'suggest' for enhancements.",
+    )
+    p_project.add_argument(
+        "target", nargs="?", default=None,
+        help="For 'start': project path. For 'template': template name. For 'add'/'edit': file name.",
+    )
+    p_project.add_argument(
+        "description", nargs="?", default=None,
+        help="For 'start'/'template': output path. For 'add'/'edit': description.",
+    )
+    p_project.add_argument(
+        "--type", dest="project_type", default=None,
+        help="Project type hint for 'start' (e.g. flask, react, python, cli).",
+    )
+    p_project.set_defaults(func=cmd_project)
 
     p_do = sub.add_parser(
         "do",
