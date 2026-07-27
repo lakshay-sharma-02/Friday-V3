@@ -124,7 +124,8 @@ def get_action_level(action: str) -> ActionLevel:
 
 
 def prompt_confirm(action: str, target: str, worker_id: str,
-                   skip_prompt: bool = False) -> bool:
+                   skip_prompt: bool = False,
+                   conn=None) -> bool:
     """Prompt the user to confirm an action. Returns True if confirmed.
 
     Args:
@@ -132,14 +133,37 @@ def prompt_confirm(action: str, target: str, worker_id: str,
         target: The target of the action (e.g. '3', 'firefox', 'class:kitty').
         worker_id: The worker that will execute the action (for display).
         skip_prompt: If True, auto-confirm (for scripted/--yes mode).
+        conn: Optional DB connection for autonomy checks (used by tests).
 
     Returns:
         True if the action should proceed, False to cancel.
     """
+    # Graduated autonomy: check kill switch FIRST.
+    # When autonomy is disabled, ALL action workers are blocked regardless
+    # of the action level or skip_prompt flag. This is the emergency override.
+    from ..autonomy import is_autonomy_enabled
+    if not is_autonomy_enabled(conn):
+        print(f"\n🔒 [AUTONOMY DISABLED] {worker_id} blocked: {action} {target}")
+        print("  Use 'friday autonomy enable' to re-enable autonomous actions.")
+        return False
+
+    # Graduated autonomy: check per-action-type override + auto-downgrade.
+    # The effective level is resolved by precedence:
+    #   user override > auto-downgrade > hardcoded default
+    from ..autonomy import get_action_permission
+    auto_perm = get_action_permission(action, conn)
+    effective_override = auto_perm.effective_level
+
     if skip_prompt:
+        # Even with --yes, respect the kill switch (checked above).
         return True
 
+    # Determine the confirmation level: use the effective permission level
+    # from graduated autonomy system (which accounts for overrides and
+    # auto-downgrades), falling back to the hardcoded action level.
     level = get_action_level(action)
+    if effective_override != level.value:
+        level = ActionLevel(effective_override)
 
     if level == ActionLevel.AUTO:
         return True

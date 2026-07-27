@@ -48,6 +48,7 @@ README:
 
 
 FALLBACK_PROVIDERS = [
+    # Primary (9router proxy) tried first — local, fastest.
     {
         "name": "Primary",
         "url_env": "FRIDAY_LLM_BASE_URL",
@@ -55,6 +56,7 @@ FALLBACK_PROVIDERS = [
         "model_env": "FRIDAY_LLM_MODEL",
         "default_url": DEFAULT_BASE_URL,
     },
+    # Groq — fast API, free tier.
     {
         "name": "Groq",
         "url_env": "GROQ_BASE_URL",
@@ -63,14 +65,7 @@ FALLBACK_PROVIDERS = [
         "default_url": "https://api.groq.com/openai/v1",
         "default_model": "llama3-70b-8192",
     },
-    {
-        "name": "Gemini",
-        "url_env": "GEMINI_BASE_URL",
-        "key_env": "GEMINI_API_KEY",
-        "model_env": "GEMINI_MODEL",
-        "default_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "default_model": "gemini-1.5-flash",
-    },
+    # OpenRouter — broad model selection, free models available.
     {
         "name": "OpenRouter",
         "url_env": "OPENROUTER_BASE_URL",
@@ -79,6 +74,16 @@ FALLBACK_PROVIDERS = [
         "default_url": "https://openrouter.ai/api/v1",
         "default_model": "google/gemini-flash-1.5",
     },
+    # Gemini — Google's free tier.
+    {
+        "name": "Gemini",
+        "url_env": "GEMINI_BASE_URL",
+        "key_env": "GEMINI_API_KEY",
+        "model_env": "GEMINI_MODEL",
+        "default_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "default_model": "gemini-1.5-flash",
+    },
+    # Ollama — fully local, last resort.
     {
         "name": "Ollama",
         "url_env": "OLLAMA_BASE_URL",
@@ -89,31 +94,86 @@ FALLBACK_PROVIDERS = [
     }
 ]
 
-def _enabled() -> bool:
-    for p in FALLBACK_PROVIDERS:
-        key = os.environ.get(p["key_env"], p.get("default_key"))
-        model = os.environ.get(p["model_env"], p.get("default_model"))
-        if key and model:
-            return True
-    return False
+# ---------------------------------------------------------------------------
+# LLM response cache (LRU, shared across all callers)
+# ---------------------------------------------------------------------------
+
+from collections import OrderedDict as _OrderedDict
+import threading as _threading
+import time as _time
+
+_LLM_CACHE: _OrderedDict[int, tuple[str, float]] = _OrderedDict()
+_LLM_CACHE_LOCK = _threading.Lock()
+_LLM_CACHE_MAX = 256
+_LLM_CACHE_TTL = 600  # 10 minutes
 
 
-def _call(system: str, user: str) -> Optional[str]:
-    """Single OpenAI-compatible chat call. Returns assistant text, or None on any
-    failure (disabled model, network/parse/proxy error) so callers fall back
-    deterministically. SSE and single-object responses are both handled.
-    Tries providers in sequence (fallback chain)."""
-    if not _enabled():
-        return None
-        
+def _cache_key(system: str, user: str) -> int:
+    return hash((system, user))
+
+
+def _cache_get(key: int) -> str | None:
+    now = _time.time()
+    with _LLM_CACHE_LOCK:
+        entry = _LLM_CACHE.get(key)
+        if entry is None:
+            return None
+        result, ts = entry
+        if now - ts > _LLM_CACHE_TTL:
+            del _LLM_CACHE[key]
+            return None
+        _LLM_CACHE.move_to_end(key)
+        return result
+
+
+def _cache_set(key: int, value: str) -> None:
+    now = _time.time()
+    with _LLM_CACHE_LOCK:
+        _LLM_CACHE[key] = (value, now)
+        while len(_LLM_CACHE) > _LLM_CACHE_MAX:
+            _LLM_CACHE.popitem(last=False)
+
+
+# ---------------------------------------------------------------------------
+# Parallel model caller — fire all models/providers at once.
+# ---------------------------------------------------------------------------
+
+
+def _parallel_call(
+    system: str,
+    user: str,
+    timeout_per_model: int = 30,
+    timeout_total: int = 45,
+) -> str | None:
+    """Call ALL configured model+provider combinations in parallel.
+
+    Returns the first successful response. This eliminates the sequential
+    fallback chain that made every call wait for N timeouts.
+
+    ``timeout_per_model``: how long to wait per individual request.
+    ``timeout_total``: overall deadline for the parallel batch.
+    """
+    from concurrent.futures import (
+        ThreadPoolExecutor as _TPE,
+        as_completed as _as_completed,
+    )
+
+    # Build all (provider, model, url, key) combos.
+    combos: list[tuple[str, str, str, str]] = []
     for p in FALLBACK_PROVIDERS:
         key = os.environ.get(p["key_env"], p.get("default_key"))
         model = os.environ.get(p["model_env"], p.get("default_model"))
         base = os.environ.get(p["url_env"], p.get("default_url", DEFAULT_BASE_URL)).rstrip("/")
-        
-        if not key or not model:
-            continue
-            
+        if model:
+            combos.append((p["name"], model, base, key or ""))
+
+    if not combos:
+        return None
+
+    headers_base = {"Content-Type": "application/json"}
+
+    def _try(combo: tuple[str, str, str, str]) -> str | None:
+        name, model, base, key = combo
         payload = {
             "model": model,
             "messages": [
@@ -122,25 +182,68 @@ def _call(system: str, user: str) -> Optional[str]:
             ],
             "temperature": 0.0,
         }
+        headers = dict(headers_base)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(
             f"{base}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {key}",
-            },
+            headers=headers,
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=timeout_per_model) as resp:
                 raw = resp.read().decode("utf-8")
-            result = _extract_content(raw)
-            if result:
-                return result
+            return _extract_content(raw)
         except Exception:
-            continue
-            
+            return None
+
+    with _TPE(max_workers=min(len(combos), 8)) as pool:
+        futures = {pool.submit(_try, c): c[0] for c in combos}
+        try:
+            for f in _as_completed(futures, timeout=timeout_total):
+                result = f.result()
+                if result:
+                    return result
+        except Exception:
+            pass
+
     return None
+
+
+def _enabled() -> bool:
+    for p in FALLBACK_PROVIDERS:
+        model = os.environ.get(p["model_env"], p.get("default_model"))
+        if model:
+            return True
+    return False
+
+
+def _call(system: str, user: str) -> Optional[str]:
+    """Single OpenAI-compatible chat call. Returns assistant text, or None on any
+    failure (disabled model, network/parse/proxy error) so callers fall back
+    deterministically. SSE and single-object responses are both handled.
+
+    Uses three speed optimizations:
+    1. Response cache — repeated (system, user) pairs return instantly
+    2. Parallel model probing — all providers/models fired concurrently
+    3. Tight timeouts — 30s per model, 45s total
+    """
+    if not _enabled():
+        return None
+
+    # Check cache.
+    ck = _cache_key(system, user)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached
+
+    # Parallel probe all providers.
+    result = _parallel_call(system, user, timeout_per_model=30, timeout_total=45)
+    if result:
+        _cache_set(ck, result)
+
+    return result
 
 
 def summarize(readme_text: str) -> Optional[str]:

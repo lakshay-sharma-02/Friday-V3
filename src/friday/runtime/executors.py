@@ -41,6 +41,9 @@ from typing import List, Optional
 
 from .models import ExecutionResult, Executor, VerificationResult
 from ..db import connect as _resolve_connect
+from ..action_log import ActionEvent, log_action, now_iso as _now
+from ..autonomy import is_kill_switch_active, record_action_outcome
+from ..worker.models import normalize_worker_input
 
 
 # Honour a global timeout (seconds) for any external process.
@@ -126,6 +129,33 @@ def _fail(stdout: str, stderr: str, exit_code: Optional[int], dur: int,
         duration_ms=dur, error=error, artifacts=artifacts or [])
 
 
+def _autonomy_record_outer(action_type: str, target: str, success: bool, detail: str = "") -> None:
+    """Shared helper: log action + record outcome for autonomy escalation.
+
+    Called by all built-in executors at each return point of execute().
+    This avoids duplicating the record closure in every executor class.
+    Uses its own DB connection so it's safe to call from any context.
+    """
+    try:
+        conn = _resolve_connect()
+        status = "success" if success else "failure"
+        log_action(conn, ActionEvent(
+            source="friday",
+            action_type=action_type,
+            target=(target or "")[:200],
+            detail=json.dumps({"status": status, "error": detail}),
+            confidence="observed",
+            observed_at=_now(),
+        ))
+        record_action_outcome(action_type, success, conn=conn)
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Shell
 # ---------------------------------------------------------------------------
@@ -163,20 +193,25 @@ class BuiltinShellExecutor(Executor):
                 timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
+                _autonomy_record_outer("shell_exec", cmd, False, f"exit {proc.returncode}")
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
                              f"shell command exited {proc.returncode}")
             if not (proc.stdout or proc.stderr).strip():
+                _autonomy_record_outer("shell_exec", cmd, False, "no output")
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
                              "shell command produced no output")
+            _autonomy_record_outer("shell_exec", cmd, True)
             return ExecutionResult(
                 success=True, stdout=proc.stdout, stderr=proc.stderr,
                 exit_code=proc.returncode, duration_ms=dur)
         except subprocess.TimeoutExpired as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("shell_exec", cmd, False, f"timed out after {timeout}s")
             return _fail(getattr(e, "stdout", "") or "", "timeout", None, dur,
                          f"shell command timed out after {timeout}s")
         except Exception as e:  # defensive; dispatcher also guards
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("shell_exec", cmd, False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
@@ -227,9 +262,9 @@ class GitExecutor(Executor):
     def execute(self, task) -> ExecutionResult:
         raw = _payload(task).strip()
         if not raw:
-            # Coordination fallback: report working-tree status (real, verifiable).
             raw = "status --short"
         if raw.split()[0].lower() in self._NEVER:
+            _autonomy_record_outer("git_ops", raw, False, "refused push")
             return _fail("", f"refused git {raw.split()[0]} (never push)",
                          None, 0, "git push is not permitted by the worker")
         ws = _ws(task, self._ws)
@@ -244,20 +279,25 @@ class GitExecutor(Executor):
                 timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
+                _autonomy_record_outer("git_ops", raw, False, f"git {sub} exited {proc.returncode}")
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
                              f"git {sub} exited {proc.returncode}")
             if sub in self._MUTATING:
                 after = self._porcelain(ws)
                 if after == before:
+                    _autonomy_record_outer("git_ops", raw, False, f"git {sub} no change")
                     return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
                                  f"git {sub} produced no working-tree change")
+            _autonomy_record_outer("git_ops", raw, True)
             return _ok(proc.stdout, proc.stderr, proc.returncode, dur)
         except subprocess.TimeoutExpired as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("git_ops", raw, False, f"timed out after {timeout}s")
             return _fail("", "timeout", None, dur,
                          f"git command timed out after {timeout}s")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("git_ops", raw, False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
@@ -303,6 +343,7 @@ class FileExecutor(Executor):
         try:
             obj = json.loads(raw)
         except (ValueError, TypeError):
+            _autonomy_record_outer("filesystem", raw[:100], False, "payload must be JSON")
             return _fail("", raw[:200], None, 0,
                          "file worker: payload must be JSON")
         op = (obj.get("op") or "").lower()
@@ -310,7 +351,9 @@ class FileExecutor(Executor):
             if op == "read":
                 p = self._path(task, obj["path"])
                 if not p.exists():
+                    _autonomy_record_outer("filesystem", str(p), False, "file not found")
                     return _fail("", "", None, 0, f"file not found: {p}")
+                _autonomy_record_outer("filesystem", str(p), True)
                 return _ok(p.read_text(encoding="utf-8", errors="replace"),
                            "", 0, 0, [str(p)])
             if op == "write":
@@ -318,28 +361,35 @@ class FileExecutor(Executor):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(obj.get("content", ""), encoding="utf-8")
                 if not p.exists() or p.stat().st_size == 0:
+                    _autonomy_record_outer("filesystem", str(p), False, "write produced empty")
                     return _fail("", "", None, 0, f"write produced empty/missing: {p}")
+                _autonomy_record_outer("filesystem", str(p), True)
                 return _ok("", "", 0, 0, [str(p)])
             if op == "append":
                 p = self._path(task, obj["path"])
                 p.parent.mkdir(parents=True, exist_ok=True)
                 with p.open("a", encoding="utf-8") as f:
                     f.write(obj.get("content", ""))
+                _autonomy_record_outer("filesystem", str(p), True)
                 return _ok("", "", 0, 0, [str(p)])
             if op == "replace":
                 p = self._path(task, obj["path"])
                 if not p.exists():
+                    _autonomy_record_outer("filesystem", str(p), False, "file not found for replace")
                     return _fail("", "", None, 0, f"file not found: {p}")
                 text = p.read_text(encoding="utf-8")
                 new = text.replace(obj.get("old", ""), obj.get("new", ""), 1)
                 if new == text:
+                    _autonomy_record_outer("filesystem", str(p), False, "replace: old not found")
                     return _fail("", "", None, 0,
                                  "replace: 'old' not found in file")
                 p.write_text(new, encoding="utf-8")
+                _autonomy_record_outer("filesystem", str(p), True)
                 return _ok("", "", 0, 0, [str(p)])
             if op == "mkdir":
                 p = self._path(task, obj["path"])
                 p.mkdir(parents=True, exist_ok=True)
+                _autonomy_record_outer("filesystem", str(p), True)
                 return _ok("", "", 0, 0, [str(p)])
             if op == "delete":
                 p = self._path(task, obj["path"])
@@ -349,14 +399,18 @@ class FileExecutor(Executor):
                 elif p.exists():
                     p.unlink()
                 else:
+                    _autonomy_record_outer("filesystem", str(p), False, "path not found")
                     return _fail("", "", None, 0, f"path not found: {p}")
                 if p.exists():
+                    _autonomy_record_outer("filesystem", str(p), False, "delete failed")
                     return _fail("", "", None, 0, f"delete failed: {p}")
+                _autonomy_record_outer("filesystem", str(p), True)
                 return _ok("", "", 0, 0, [str(p)])
             if op in ("copy", "move"):
                 src = self._path(task, obj["src"])
                 dst = self._path(task, obj["dst"])
                 if not src.exists():
+                    _autonomy_record_outer("filesystem", str(src), False, f"src not found for {op}")
                     return _fail("", "", None, 0, f"src not found: {src}")
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 import shutil
@@ -368,25 +422,22 @@ class FileExecutor(Executor):
                 else:
                     shutil.move(str(src), str(dst))
                 if not dst.exists():
+                    _autonomy_record_outer("filesystem", str(dst), False, f"{op} failed")
                     return _fail("", "", None, 0, f"{op} failed: {dst}")
+                _autonomy_record_outer("filesystem", str(dst), True)
                 return _ok("", "", 0, 0, [str(dst)])
             if op == "noop":
-                # Honest no-op: the symbolic op had nothing to do in this
-                # workspace (e.g. no matching symbol). Report success with no
-                # artifact so verification can fail on evidence if required.
+                _autonomy_record_outer("filesystem", "noop", True)
                 return _ok("", "", 0, 0, [])
             if op == "replace_all":
-                # Rename a symbol across one or more files (Phase 4 symbolic
-                # rename). Deterministic and verifiable. Any file with no match
-                # is left untouched; at least one replacement must occur.
                 symbol = obj.get("symbol", "")
                 replacement = obj.get("replacement", "")
                 files = obj.get("files") or []
                 if not symbol or not files:
+                    _autonomy_record_outer("filesystem", "replace_all", False, "missing symbol or files")
                     return _fail("", "", None, 0,
                                  "replace_all needs symbol + files")
                 done = 0
-                import shutil as _sh
                 for f in files:
                     p = Path(f)
                     if not p.exists() or not p.is_file():
@@ -398,17 +449,20 @@ class FileExecutor(Executor):
                     p.write_text(new, encoding="utf-8")
                     done += 1
                 if done == 0:
+                    _autonomy_record_outer("filesystem", "replace_all", False, f"no occurrences of {symbol}")
                     return _fail("", "", None, 0,
                                  f"replace_all: no occurrences of {symbol}")
+                _autonomy_record_outer("filesystem", "replace_all", True)
                 return _ok("", "", 0, 0, [str(f) for f in files])
             if op == "delete_symbol":
-                # Remove every occurrence of a dead-code symbol across files.
                 symbol = obj.get("symbol", "")
                 files = obj.get("files") or []
                 if not symbol or not symbol.strip():
+                    _autonomy_record_outer("filesystem", "delete_symbol", False, "empty symbol")
                     return _fail("", "", None, 0,
                                  "delete_symbol needs a non-empty symbol")
                 if not files:
+                    _autonomy_record_outer("filesystem", "delete_symbol", False, "no files")
                     return _fail("", "", None, 0,
                                  "delete_symbol needs symbol + files")
                 done = 0
@@ -419,18 +473,12 @@ class FileExecutor(Executor):
                     text = p.read_text(encoding="utf-8")
                     if symbol not in text:
                         continue
-                    # Drop the whole statement block: the line(s) containing the
-                    # symbol AND the immediately-following indented body, so a
-                    # dead `def DEAD_FN():` leaves no dangling `return` body
-                    # behind. A blank line or dedented line ends the block.
                     kept = []
                     lines = text.splitlines()
                     i = 0
                     while i < len(lines):
                         ln = lines[i]
                         if symbol in ln:
-                            # Remove this line; skip following more-indented
-                            # lines (the def/class body) until dedent/blank.
                             base_indent = len(ln) - len(ln.lstrip())
                             i += 1
                             while i < len(lines):
@@ -449,12 +497,16 @@ class FileExecutor(Executor):
                     p.write_text("\n".join(kept) + "\n", encoding="utf-8")
                     done += 1
                 if done == 0:
+                    _autonomy_record_outer("filesystem", "delete_symbol", False, f"no occurrences of {symbol}")
                     return _fail("", "", None, 0,
                                  f"delete_symbol: no occurrences of {symbol}")
+                _autonomy_record_outer("filesystem", "delete_symbol", True)
                 return _ok("", "", 0, 0, [str(f) for f in files])
+            _autonomy_record_outer("filesystem", f"op:{op}", False, "unknown op")
             return _fail("", "", None, 0, f"unknown file op: {op}")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("filesystem", f"op:{op}", False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
@@ -494,8 +546,6 @@ class BuiltinPythonExecutor(Executor):
     def execute(self, task) -> ExecutionResult:
         payload = _payload(task).strip()
         if not payload:
-            # Coordination fallback: confirm the Python runtime is real and
-            # report its version (verifiable, never fabricated).
             payload = 'import sys; print(sys.version)'
         ws = _ws(task, self._ws)
         t0 = time.monotonic()
@@ -520,16 +570,20 @@ class BuiltinPythonExecutor(Executor):
                 timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
+                _autonomy_record_outer("python_exec", payload[:100], False, f"exit {proc.returncode}")
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
                              f"exit {proc.returncode}: "
                              + _first_failures(proc.stdout, proc.stderr))
+            _autonomy_record_outer("python_exec", payload[:100], True)
             return _ok(proc.stdout, proc.stderr, proc.returncode, dur)
         except subprocess.TimeoutExpired as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("python_exec", payload[:100], False, f"timed out after {timeout}s")
             return _fail("", "timeout", None, dur,
                          f"python run timed out after {timeout}s")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("python_exec", payload[:100], False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
 
@@ -613,15 +667,16 @@ class TestingExecutor(Executor):
     def execute(self, task) -> ExecutionResult:
         payload = _payload(task).strip()
         if not payload:
-            # Coordination fallback: confirm the test runner is installed.
             payload = '{"pytest": ["--version"]}'
         ws = _ws(task, self._ws)
         t0 = time.monotonic()
         try:
             args = self._args(payload)
         except (ValueError, TypeError) as e:
+            _autonomy_record_outer("testing", payload[:100], False, f"bad payload: {e}")
             return _fail("", str(e), None, 0, "testing worker: bad payload")
         if not args:
+            _autonomy_record_outer("testing", payload[:100], False, "no test target")
             return _fail("", "no test target", None, 0,
                          "testing worker: no cmd/path in payload")
         cmd = [sys_exe(), "-m", "pytest", *args]
@@ -632,16 +687,20 @@ class TestingExecutor(Executor):
                 timeout=timeout)
             dur = int((time.monotonic() - t0) * 1000)
             if proc.returncode != 0:
+                _autonomy_record_outer("testing", payload[:100], False, f"tests failed")
                 return _fail(proc.stdout, proc.stderr, proc.returncode, dur,
                              f"tests failed: " + _first_failures(
                                  proc.stdout, proc.stderr))
+            _autonomy_record_outer("testing", payload[:100], True)
             return _ok(proc.stdout, proc.stderr, proc.returncode, dur)
         except subprocess.TimeoutExpired:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("testing", payload[:100], False, f"timed out after {timeout}s")
             return _fail("", "timeout", None, dur,
                          f"test run timed out after {timeout}s")
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("testing", payload[:100], False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
     @staticmethod
@@ -701,11 +760,14 @@ class DocumentationExecutor(Executor):
             p.write_text(content, encoding="utf-8")
             dur = int((time.monotonic() - t0) * 1000)
             if not p.exists() or p.stat().st_size == 0:
+                _autonomy_record_outer("documentation", str(path), False, f"empty/missing: {p}")
                 return _fail("", "", None, dur,
                              f"documentation write produced empty/missing: {p}")
+            _autonomy_record_outer("documentation", str(path), True)
             return _ok(f"wrote {p}", "", 0, dur, [str(p)])
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("documentation", raw[:100], False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
     def _resolve(self, raw: str, task):
@@ -789,11 +851,14 @@ class SynthesisExecutor(Executor):
             p.write_text(content, encoding="utf-8")
             dur = int((time.monotonic() - t0) * 1000)
             if not p.exists() or p.stat().st_size == 0:
+                _autonomy_record_outer("synthesis", path, False, f"empty/missing: {p}")
                 return _fail("", "", None, dur,
                              f"synthesis write produced empty/missing: {p}")
+            _autonomy_record_outer("synthesis", path, True)
             return _ok(f"wrote {p} ({len(content)} chars)", "", 0, dur, [str(p)])
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("synthesis", path, False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
     def _resolve_path_and_hint(self, raw: str, task) -> Tuple[str, str]:
@@ -1120,10 +1185,13 @@ class DynamicWorkerExecutor(Executor):
             result = self._module.execute(inp, ws)
             dur = int((time.monotonic() - t0) * 1000)
             if not isinstance(result, dict):
+                _autonomy_record_outer("dynamic_worker", self.worker_id, False,
+                                       f"non-dict result: {type(result).__name__}")
                 return _fail("", str(result), None, dur,
                              f"auto worker returned non-dict: {type(result).__name__}")
             success = bool(result.get("success", False))
             if success:
+                _autonomy_record_outer("dynamic_worker", self.worker_id, True)
                 return _ok(
                     result.get("output", ""),
                     "",
@@ -1131,15 +1199,18 @@ class DynamicWorkerExecutor(Executor):
                     dur,
                     artifacts=result.get("artifacts", []),
                 )
+            err = result.get("error", "auto worker returned success=False")
+            _autonomy_record_outer("dynamic_worker", self.worker_id, False, err)
             return _fail(
                 result.get("output", ""),
                 result.get("error", ""),
                 None,
                 dur,
-                error=result.get("error", "auto worker returned success=False"),
+                error=err,
             )
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("dynamic_worker", self.worker_id, False, f"{type(e).__name__}: {e}")
             return _fail("", str(e), None, dur, f"{type(e).__name__}: {e}")
 
     def verify(self, task, result: ExecutionResult) -> VerificationResult:
@@ -1240,6 +1311,22 @@ def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]
     if name == "worker:deepseek":
         return DeepSeekWorker(workspace=workspace)
 
+    if name == "worker:email":
+        from ..services.email import EmailExecutor
+        return EmailExecutor()
+
+    if name == "worker:slack":
+        from ..services.slack import SlackExecutor
+        return SlackExecutor()
+
+    if name == "worker:discord":
+        from ..services.discord import DiscordExecutor
+        return DiscordExecutor()
+
+    if name == "worker:telegram":
+        from ..services.telegram import TelegramExecutor
+        return TelegramExecutor()
+
     if name == "worker:hyprctl":
         from .hyprland_executor import HyprlandExecutor
         return HyprlandExecutor(workspace=workspace)
@@ -1296,6 +1383,7 @@ def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]
 BUILTIN_EXECUTION_IDS = (
     "worker:shell", "worker:git", "worker:filesystem", "worker:python",
     "worker:testing", "worker:documentation", "worker:synthesis",
+    "worker:email", "worker:slack", "worker:discord", "worker:telegram",
 )
 
 # External AI executor ids (non-deterministic; used only as a fallback when no
@@ -1350,7 +1438,24 @@ def execute_with_fallback(task, primary_id: str, workspace: str = ".",
     overrides the registry lookup (resolve_executor). The runtime always passes
     its own resolver here so injected test mocks are honored on the fallback
     path too — never reaching a live model behind the resolver's back.
+
+    Kill switch: checks the global emergency stop before any dispatch.
+    When the kill switch is active, returns an immediate abort result
+    without starting any executor — this prevents NEW work from beginning
+    while already-running processes complete or time out naturally.
     """
+    # Emergency kill switch: block ALL executor dispatch.
+    try:
+        if is_kill_switch_active():
+            return ExecutionResult(
+                success=False, stdout="", stderr="", exit_code=None,
+                duration_ms=0,
+                error="🛑 KILL SWITCH ACTIVE: all executor dispatch blocked. "
+                      "Run 'friday autonomy resume' to re-enable execution.",
+            )
+    except Exception:
+        pass  # Defensive: if DB read fails, let dispatch proceed.
+
     chain = fallback_chain(primary_id)
     last: Optional[ExecutionResult] = None
     last_error = f"no executor for {primary_id}"
@@ -1436,19 +1541,20 @@ class CLIExecutor(Executor):
                 env=inv.env or None, capture_output=True, text=True,
                 timeout=inv.timeout)
             dur = int((time.monotonic() - t0) * 1000)
-            # CLI workers emit content on stdout; persist it as a workspace
-            # artifact so file-producing tasks (implementation/documentation)
-            # actually land a file instead of stdout being discarded.
             artifacts = self._persist_stdout(task, proc.stdout)
+            success = proc.returncode == 0
+            _autonomy_record_outer("ai_worker", self.worker_id, success,
+                                   "" if success else proc.stderr[:200])
             return ExecutionResult(
-                success=proc.returncode == 0, stdout=proc.stdout,
+                success=success, stdout=proc.stdout,
                 stderr=proc.stderr, exit_code=proc.returncode,
                 duration_ms=dur, artifacts=artifacts,
-                error="" if proc.returncode == 0 else proc.stderr,
+                error="" if success else proc.stderr,
                 worker_id=self.worker_id, started_at=started,
                 ended_at=datetime.now(timezone.utc).isoformat())
         except Exception as e:
             dur = int((time.monotonic() - t0) * 1000)
+            _autonomy_record_outer("ai_worker", self.worker_id, False, f"{type(e).__name__}: {e}")
             return ExecutionResult(
                 success=False, stdout="", stderr=str(e), exit_code=None,
                 duration_ms=dur, error=f"{type(e).__name__}: {e}",

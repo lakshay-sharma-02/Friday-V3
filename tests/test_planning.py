@@ -516,7 +516,10 @@ def test_compiler_passes_symbolic_ac_from_milestone():
 
 
 def test_compiler_fallback_unknown_task_type():
-    """Compiler fallback to IMPLEMENTATION for unknown task_type from milestone."""
+    """Compiler fallback for unknown task_type: falls back to IMPLEMENTATION,
+    which is then downgraded to ANALYSIS when no real file path is named in
+    the goal (Gap #3 — creation tasks without specific file paths become
+    analysis tasks so verification doesn't reject them)."""
     from src.friday.planning.models import Plan, PlanType, PlanConfidence, PlanStatus
     from src.friday.planning.compiler import TaskGraphCompiler
     plan = Plan(
@@ -534,7 +537,9 @@ def test_compiler_fallback_unknown_task_type():
     )
     g = TaskGraphCompiler().compile(plan)
     assert len(g.tasks) == 1
-    assert g.tasks[0].task_type == "implementation"
+    # An unknown task type without a real file path in the goal is downgraded
+    # to ANALYSIS (creation tasks need concrete artifact paths).
+    assert g.tasks[0].task_type == "analysis"
 
 
 def test_no_direct_lower_layer_imports_forbidden_in_rules():

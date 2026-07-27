@@ -1321,6 +1321,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """)
     conn.commit()
 
+    # Graduated Autonomy: autonomy_permissions table (Gap #7).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS autonomy_permissions (
+            action_type          TEXT NOT NULL PRIMARY KEY,
+            default_level        TEXT NOT NULL,
+            override_level       TEXT,
+            auto_downgraded      TEXT,
+            consecutive_failures    INTEGER NOT NULL DEFAULT 0,
+            consecutive_successes   INTEGER NOT NULL DEFAULT 0,
+            updated_at              TEXT NOT NULL
+        );
+    """)
+    conn.commit()
+
 
 def _ensure_snapshots_signature_cols(conn: sqlite3.Connection) -> None:
     """Add head_sha / manifest_hash to snapshots if absent (idempotent)."""

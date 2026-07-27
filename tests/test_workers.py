@@ -444,8 +444,12 @@ def test_runtime_uses_real_worker_resolver(conn, tmp_path):
 
     reg = WorkerRegistry(conn)
     reg.register_builtins()
-    PlanEngine(conn).generate("Add README documentation")
-    g = TaskGraphEngine(conn).generate("Add README documentation")
+    # Use a goal that names a file with extension so the compiler keeps the
+    # task as "documentation" (not downgrading to ANALYSIS). "Add README.md"
+    # without "documentation" produces a "document" milestone that maps to
+    # DOCUMENTATION task type with README.md in its outputs.
+    PlanEngine(conn).generate("Add README.md to the project")
+    g = TaskGraphEngine(conn).generate("Add README.md to the project")
     CapabilityResolver(conn).resolve_graph(g.id)
     sched = TaskScheduler(conn).schedule_graph(g.id)
 
@@ -460,7 +464,7 @@ def test_runtime_uses_real_worker_resolver(conn, tmp_path):
     eng = RuntimeEngine(conn, worker_resolver=_resolve_any)
     report = eng.run(sched.schedule)
     # The documentation task must have executed and written the README.
-    assert (repo / "README.md").exists()
+    assert (repo / "README.md").exists(), "README.md not created by documentation worker"
     assert report.failed == 0
 
 

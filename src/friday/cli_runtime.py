@@ -23,7 +23,7 @@ from .planning import TaskGraphEngine
 from .resolver import CapabilityResolver
 from .scheduler import TaskScheduler, CycleDetectedError, \
     MissingAssignmentError, InvalidGraphError
-from .runtime import RuntimeEngine, resolve_executor, MockWorker
+from .runtime import RuntimeEngine, resolve_executor
 from .runtime.executors import BuiltinShellWorker
 from .runtime.models import SCHEMA_VERSION
 

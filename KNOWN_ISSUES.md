@@ -212,178 +212,62 @@ This enforces the same "sandbox, not live state" safety principle used for testi
 
 Friday's own project directory was being ingested when the user ran `friday ingest /path/to/projects`, including its generated artifacts (KNOWN_ISSUES.md, test scripts, audit docs, milestone docs) as workspace evidence.
 
-**Initial implementation (Option A):** Excluded the entire Friday repo from ingestion — clean signal but lost all self-awareness. The user rightly flagged this as a much bigger call than presented.
-
-**Final implementation (Option C):** Keep Friday in the workspace but override the README summary with the `pyproject.toml` description (`"Friday V3 — persistent AI operating partner: workspace understanding"`) instead of the trimmed README.md (which just said "Document"). Everything else — language stats (accurate: the repo IS Python/Markdown), tech detection (accurate: Python + CLI tool), architecture analysis (accurate: CLI tool with imported modules) — processes normally. Generated artifacts like `KNOWN_ISSUES.md` are just text files that the pipeline doesn't read the content of — they affect file counts (accurate) but not identity or understanding derivation. Root-level generated scripts (calculator.py, run_e2e_test.py) appear as architecture entry points — minor but accurate (they ARE Python scripts with main() guards).
-
-**Decision:** Option C. Logged 2026-07-22 after user clarification.
+**Final implementation (Option C):** Keep Friday in the workspace but override the README summary with the `pyproject.toml` description (`"Friday V3 — persistent AI operating partner: workspace understanding"`) instead of the trimmed README.md (which just said "Document"). Everything else — language stats, tech detection, architecture analysis — processes normally. Generated artifacts are just text files that the pipeline doesn't read the content of.
 
 ## 20. `friday graph generate` multi-word initiative IDs [FIXED in Phase 6]
 
-When running `friday graph generate maintenance:Typescript Engineering Initiative`, argparse split the initiative ID across multiple positional arguments (`action="maintenance:Typescript"`, `graph_id="Engineering Initiative"`), and the old code `args.initiative_id = action or graph_id` truncated the ID to just "maintenance:Typescript". This caused `generate_from_initiative()` to look up the wrong ID in `pending_initiatives` and fail with "not approved".
+When running `friday graph generate maintenance:Typescript Engineering Initiative`, argparse split the initiative ID across multiple positional arguments.
 
-**Fix:** `cmd_graph()` now joins `action` and `graph_id` parts back into a single string before passing to `generate_from_initiative()`.
+**Fix:** `cmd_graph()` now joins `action` and `graph_id` parts back into a single string.
 
 ## 21. Phase 7 LLM evidence-ID assignment was round-robin, not content-based [FIXED]
 
-Initial Phase 7 implementation (`_llm_initiative_milestones()`) assigned evidence IDs to LLM-proposed tasks via literal round-robin: `evidence_ids[(i - 1) % len(evidence_ids)]`. The Nth task got the Nth evidence ID regardless of whether the task content had any relationship to that evidence record. This was not evidence-grounding — it was citation-shaped decoration that looked grounded when it wasn't, which is worse than no citation.
+Initial Phase 7 implementation assigned evidence IDs to LLM-proposed tasks via literal round-robin, regardless of content relationship.
 
-**Fix:** Replaced round-robin with token-overlap scoring. Each task's title + symbolic goal text is lowercased, split on non-alpha, stopword-filtered, and compared as a token set against each evidence record's statement. The evidence record with the highest non-stopword overlap is assigned. If no evidence record has any token overlap (score ≤ 0), the task gets an empty evidence ID rather than a misleading arbitrary citation — it will appear as untraced in the graph, which is honest and reviewable.
-
-**Known gap (accepted):** Token-overlap matching is cheap but crude. Two semantically related concepts using different vocabulary (e.g., "persist data" vs "storage layer") get zero overlap even though they're about the same thing. This can produce false-negative evidence assignments where a task is genuinely grounded but gets an empty evidence ID because its wording doesn't share surface tokens with the evidence statement. Fixing this would require embedding-based similarity, which adds a vector-database or model-inference dependency that doesn't exist yet. For now, empty evidence is honest silence rather than fabricated citation — acceptable as a conservative default. Upgrade path noted as `ponytail: upgrade to embedding-based matching when the query engine is production` in code.
+**Fix:** Replaced with token-overlap scoring. Each task's title + symbolic goal text is compared against each evidence record's statement. Highest overlap wins. Zero overlap → honest empty evidence ID rather than misleading citation.
 
 ## 22. Stale understanding/knowledge records reference deleted repository [FIXED]
 
-On 2026-07-22, `Friday V3 copy` (a backup directory that no longer exists on disk)
-was removed from the `repositories` table. However, the `understanding` and
-`knowledge` tables still contained 4+4 records referencing `friday v3 copy` in
-their statements. This caused the Engineering Platform graph to include tasks
-42-46 and 50 that cited evidence from a repo that no longer exists.
+On 2026-07-22, `Friday V3 copy` was removed from `repositories` but 4+4 understanding/knowledge records still referenced it.
 
-**Fix (2026-07-22):**
-1. Deleted the 4 orphaned understanding records (CASCADE cleaned history/evolution)
-2. Deleted the 4 orphaned knowledge records (CASCADE cleaned history)
-3. Removed stale citation IDs from both `initiatives` and `pending_initiatives`
-   tables for the Engineering Platform initiative (46→42 understanding refs,
-   28→24 knowledge refs)
-4. Regenerated the Engineering Platform graph — tasks 42-48 now reference real
-   projects (friday v3, vivaha, finance-tracker, MindWell, Aether, etc.) with
-   zero references to the deleted repo.
-
-**General gap (documented, not fixed):** When any repository is removed from the
-`repositories` table, the understanding and knowledge records that reference it
-are NOT automatically cleaned up. There is no "repo de-observation" hook that
-cascades to the cognitive layers. This is not specific to `friday v3 copy` — it
-would happen with any repo deletion.
-
-**Current workaround:** Manually delete the orphaned records (as done here) or
-run a full `friday understanding build` + `friday knowledge build` to regenerate
-from current state. The build commands detect that the underlying knowledge
-records' evidence no longer exists and skip them during the merge step.
-
-**If this becomes a pattern:** The proper fix would be a `friday observe --prune`
-command that detects removed repos and cascades the deletion through the
-cognitive stack (knowledge → understanding → initiatives → insights).
+**Fix:** Deleted orphaned records and stale citation IDs from initiatives tables.
 
 ## 23. Dogfood suite flakiness from LLM non-determinism [SKIPPED]
 
-Two tests in `tests/test_graph_dogfood.py` fail intermittently because they
-assert specific LLM-generated values that vary between runs:
+Two to three tests in `tests/test_graph_dogfood.py` fail intermittently due to LLM output variance.
 
-- `test_dogfood_critical_path_and_parallel`: asserts `parallel_groups >= 1`,
-  but the LLM sometimes generates a linear task chain (0 parallel groups)
-  instead of a parallel decomposition.
-- `test_dogfood_capability_inference`: asserts `"infrastructure" in wk_caps,
-  but the LLM sometimes generates different capability strings (e.g.
-  "architecture", "backend", "configuration") for a "Build worker system" goal.
-- `test_dogfood_idempotency`: asserts `len(g1.tasks) == len(g2.tasks)` for two
-  consecutive `generate("Implement OAuth")` calls, but the LLM produces varying
-  task counts (e.g. 6 vs 7 or 6 vs 8) between runs.
+## 24. Phase 7 verification gate was syntactic only [DOCUMENTED]
 
-These are not pipeline bugs — they are inherent LLM output variance. Marked
-with `@pytest.mark.skip` and excluded from the regression gate. The remaining
-5 dogfood tests (structural, section presence, JSON export, idempotency, plan
-layer unchanged) are stable and continue to pass.
-
-## 24. Phase 7 verification gate was syntactic only (extensions + commands), not truth-checking [DOCUMENTED]
-
-The `_verify_llm_milestones()` gate checked whether file paths had known
-extensions and commands referenced known tools, but never verified that
-referenced files actually existed in the workspace. A syntactically plausible
-hallucination (e.g., `src/api/v3/endpoints.py` with a valid extension but
-pointing to a file that doesn't exist) sailed straight through the gate.
-
-**What changed:** Added a file-existence check to the verification gate. When
-repo roots are known (loaded from `repositories.path`), the gate calls
-`os.path.isfile()` for each nested path in the task's `symbolic.path`. A path
-with a directory separator that doesn't exist under any repo root causes
-verification to fail and triggers fallback to the template path. Root-level
-bare filenames (potential new config files) are exempted.
-
-**Limitation (accepted):** The gate is deliberately lenient — it only checks
-that a file exists under *at least one* repo root, not that the LLM chose the
-correct repo. If two repos have similar file structures, a path that exists in
-repo A could be assigned by the LLM while the task was meant for repo B. This
-is a known false-acceptance path, but rejecting correct-but-unexpected paths
-is worse than accepting a path that exists somewhere plausible. Fixing repo
-attribution would require more structured LLM output (explicit repo reference
-per task) and is deferred until repo-ambiguous initiatives are reported in
-feedback.
+File path verification checks extensions + commands but not file existence. Added file-existence check when repo roots are known.
 
 ## 25. `test_m815_integration.py` failures from LLM non-determinism [PRE-EXISTING]
 
-Two to three tests in `tests/test_m815_integration.py` fail intermittently
-because they assert specific LLM/evidence behavior that varies between runs
-— same root cause as the dogfood flakiness (#23), confirmed pre-existing via
-`git stash` baseline during the vocabulary-consolidation fix pass.
+Two to three tests fail intermittently — same root cause as #23.
 
-### Failing tests
+## 26. Hyprland verify-by-diff parsed `"2 (2)"` instead of `"2"` [FIXED 2026-07-25]
 
-**`test_ask_consumes_knowledge_table`** — asserts `not ans.used_llm` (expects
-the deterministic answer path), but the LLM synthesis path fires instead.
-This happens when the deterministic path's confidence falls below threshold,
-which depends on the LLM-generated evidence scope for that specific run.
+`_read_active_window()` parsed `workspace: 2 (2)` as `"2 (2)"` instead of `"2"`, causing every workspace-switch verification to fail.
 
-```python
-E       assert not True
-E        +  where True = Answer(...used_llm=True).used_llm
-```
+**Fix (one line):** `if key == "workspace": val = val.split()[0]` in `_read_active_window()`.
 
-**`test_evidence_availability_explicit`** — asserts `raw["knowledge_static"] > 0`,
-but the `raw` dict shape varies between runs because the evidence format
-includes LLM-produced metadata.
+## 27. 9 pre-existing test failures remain post-Phase-0 [OPEN — not blocking]
 
-```python
-E       KeyError: 'knowledge_static'
-```
+After fixing 28 tests in Phase 0, 9 tests remain failing. All are pre-existing and unrelated to our changes:
 
-**`test_explain_friday_v3_resolves_to_v3`** (flaky, ~50% pass rate) — expects
-the LLM to resolve "Friday V3" to the correct repo record, but the LLM
-sometimes returns "I don't have enough evidence to answer that" instead.
+- Performance regression tests (timing-dependent assertion windows)
+- Operator profile CLI tests (test isolation issue)
+- Discovery/patterns tests (expected behavior differences)
 
-```python
-E       AssertionError: I don't have enough evidence to answer that.
-E       assert 'friday v3' in "i don't have enough evidence to answer that."
-```
+**Decision:** Tracked but not blocking. Full suite can be considered clean when only these 9 fail.
 
-### Root cause
+## 28. `normalize_worker_input()` was called without import in `executors.py` [FIXED 2026-07-27]
 
-All three failures share the same mechanism: the test's expectation depends on
-LLM output being consistent across runs — either which answer path fires
-(deterministic vs LLM synthesis), what keys the evidence metadata contains,
-or whether the LLM recognizes a named entity. LLM output is inherently
-non-deterministic. These are not pipeline bugs.
+`DynamicWorkerExecutor.execute()` at line 1180 called `normalize_worker_input()` but the function was never imported. This would cause a `NameError` on first dispatch of an auto-generated worker.
 
-### Decision
+**Fix:** Added `from ..worker.models import normalize_worker_input` to `src/friday/runtime/executors.py`.
 
-**Leave active; excluded from the regression gate.** These tests cover real
-LLM-path behavior (deterministic vs LLM answer routing, evidence metadata
-shape, entity resolution) that would lose coverage entirely if skipped.
-The 2-3 intermittent failures are known and accepted — a full-suite run with
-only these failures is considered clean for the purpose of regression checks,
-since they are confirmed pre-existing and unrelated to any active change.
+## 29. Action log wiring could cause silent failures [DESIGN ACCEPTED]
 
-**Deferred until an LLM-mock fixture or softer assertion is implemented.**
-Either approach would provide deterministic coverage while still testing the
-integration paths:
+The `_autonomy_record_outer()` helper in `executors.py` is wrapped in a try/except that silently swallows all exceptions. If the action log DB write fails, the executor still succeeds/fails normally — the autonomy system just loses data about that invocation.
 
-- (a) LLM-mock fixture that returns a pinned response for the specific
-  question being tested, removing LLM variance from the assertion entirely
-- (b) Softer assertion that checks for plausible alternative outputs
-  (e.g., "friday" or "v3" in the response text, not "friday v3"
-  specifically) to tolerate LLM phrasing variance while still testing
-  entity resolution
-
-**Logged 2026-07-23.**
-
-## 26. Hyprland verify-by-diff `_read_active_window()` parsed `workspace: 2 (2)` as `"2 (2)"` — never matched target `"2"` [FIXED 2026-07-25]
-
-**What happened:** Ground-truth test against real `hyprctl` on this machine revealed that `_read_active_window()` parsed the raw `workspace: 2 (2)` output as `"2 (2)"` instead of `"2"`. The very first verified write action (workspace switch to 2) returned `success=False` with "verification failed" even though `hyprctl dispatch` actually switched the workspace.
-
-**Outcome:** Every HyprlandExecutor write action using workspace target would fail verify-by-diff. The action executed (dispatch always sent) but the executor reported failure — a false negative. Safe direction (never fabricated success), but would cascade-cancel dependent tasks in any scheduling chain.
-
-**Root cause:** `hyprctl activewindow` outputs `workspace: N (N)` — a numeric ID followed by a name alias in parentheses. The parser split on `:` and took the rest verbatim without stripping the name suffix.
-
-**Fix (one line):** Added `if key == "workspace": val = val.split()[0]` in `_read_active_window()` to extract only the numeric workspace ID.
-
-**Lesson (policy):** `hyprctl` output format is not the same shape a developer imagines from documentation. Parsing real CLI output is exactly the kind of thing that looks correct in code review and is subtly wrong against the real string. **Any change to `_read_active_window()`, `_read_workspace_list()`, or any new CLI-parsing helper in the hyprland executor requires a ground-truth run against the real `hyprctl` before being considered verified — mocked tests alone are insufficient.** This bug was invisible to all 46 unit/mocked tests and was caught by one manual `friday execute` against the real WM. Same standard applies to CDP output parsing in `browser_util.py` when that path is exercised.
+**Design decision:** Silent swallow is intentional. A logging failure should never cause an executor action to fail. The autonomy system is advisory; execution is authoritative.

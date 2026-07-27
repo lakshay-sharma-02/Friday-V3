@@ -491,6 +491,151 @@ _ARTIFACT_EXT = {
 }
 
 
+# Stopwords for workspace-aware file inference — generic action/engineering
+# words that don't identify specific files. Used by ``_infer_paths_from_workspace``
+# to extract meaningful keywords from a vague goal like "fix the admin
+# verification UI".
+_WORKSPACE_INFERENCE_STOPWORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "in", "to", "for", "of", "with", "on", "at", "by",
+    "from", "and", "or", "but", "not", "is", "are", "was", "were", "be",
+    "been", "being", "have", "has", "had", "do", "does", "did", "will",
+    "would", "should", "could", "may", "might", "can", "shall",
+    "add", "fix", "change", "update", "remove", "delete", "create",
+    "implement", "new", "make", "support", "improve", "modify", "refactor",
+    "set", "get", "put", "use", "need", "want", "work", "done", "todo",
+    "implementing", "adding", "changing", "updating", "removing",
+    "feature", "task", "issue", "bug", "function", "method", "class",
+    "file", "system", "module", "component", "thing", "stuff", "way",
+    "this", "that", "these", "those", "it", "its",
+    "about", "above", "after", "again", "against", "all", "am",
+    "any", "are", "as", "at", "because", "been", "before", "being",
+    "below", "between", "both", "but", "by", "can", "did",
+    "each", "few", "for", "from", "further",
+    "here", "how", "just", "also", "if",
+    "into", "just", "like", "more", "most", "much", "my", "no", "nor",
+    "now", "old", "once", "only", "other", "our", "out", "over", "own",
+    "per", "really", "right", "same", "she", "should", "so", "some",
+    "than", "that", "their", "them", "then", "there", "these",
+    "they", "thing", "this", "those", "through", "too", "under", "up",
+    "very", "was", "way", "were", "what", "when", "where", "which",
+    "while", "who", "why", "with", "would", "you", "your",
+    "vivaha", "aether", "jarvis",  # repo names — not meaningful path signals
+})
+
+
+# Source code file extensions — get a scoring bonus during workspace inference.
+_SOURCE_EXTS: frozenset[str] = frozenset({
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".rb",
+    ".java", ".c", ".cpp", ".h", ".hpp", ".kt", ".swift",
+})
+
+
+def _infer_paths_from_workspace(
+    goal: str,
+    file_index: dict[str, set[str]],
+    max_suggestions: int = 3,
+) -> list[str]:
+    """Infer plausible file paths from workspace observations for a vague goal.
+
+    When a goal like "fix the admin verification UI" doesn't name a specific
+    file, this function extracts meaningful keywords from the goal and scores
+    each workspace file by how many keywords appear in its path. Returns the
+    top-N scoring files as suggestions.
+
+    Scoring:
+      +2 per keyword found in any path segment
+      +1 per keyword found in the basename (filename)
+      +1 for source code files (.py, .ts, .tsx, etc.)
+
+    Deterministic (no LLM, no embeddings, no randomness). Follows Law 21.
+    Returns empty list when no plausible paths are found (graceful fallback).
+
+    Args:
+        goal: The plan goal text.
+        file_index: Output of ``_workspace_file_index()`` — a dict mapping
+            repo names to sets of relative file paths.
+        max_suggestions: Maximum number of file paths to return.
+    """
+    # Extract meaningful keywords from the goal.
+    keywords: list[str] = []
+    for word in (goal or "").lower().split():
+        word = word.strip(".,;:'\"!?()[]{}")
+        if word and word not in _WORKSPACE_INFERENCE_STOPWORDS and len(word) >= 2:
+            keywords.append(word)
+
+    if not keywords or not file_index:
+        return []
+
+    # Score each file path by keyword overlap.
+    scored: list[tuple[int, str]] = []
+    for repo_name, paths in file_index.items():
+        for fp in paths:
+            # Build a token set from the file path: split on /, -, _, and .
+            tokens: set[str] = set()
+            for segment in fp.replace("-", "/").replace("_", "/").replace(".", "/").split("/"):
+                seg = segment.lower().strip()
+                if seg:
+                    tokens.add(seg)
+            # Basename (last segment before extension) for bonus scoring.
+            parts = fp.split("/")
+            basename = parts[-1].lower() if parts else ""
+
+            # Score: count keyword matches.
+            score = 0
+            for k in keywords:
+                if k in tokens:
+                    score += 2  # keyword in any path segment
+                if k in basename:
+                    score += 1  # bonus: keyword in the filename itself
+
+            # Only include files that have at least one keyword match.
+            # The source code bonus is a tiebreaker for files that already
+            # match keywords, NOT a way to include unrelated source files.
+            if score > 0:
+                # Bonus for source code files (tiebreaker only).
+                if "." in fp:
+                    ext = fp.rsplit(".", 1)[1].lower()
+                    if f".{ext}" in _SOURCE_EXTS:
+                        score += 1
+                scored.append((score, fp))
+
+    if not scored:
+        return []
+
+    # Sort by score descending, then alphabetically for determinism.
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    # Return top-N unique files.
+    seen: set[str] = set()
+    result: list[str] = []
+    for _score, fp in scored:
+        if fp not in seen:
+            seen.add(fp)
+            result.append(fp)
+        if len(result) >= max_suggestions:
+            break
+
+    return result
+
+
+def _is_file_path(path: str) -> Optional[str]:
+    """Check if a string looks like a real file path (has file extension).
+
+    Returns the extension if it's a file path, None otherwise.
+    Used by workspace enrichment to distinguish real file paths from generic
+    output descriptions like "Working code" or "Test report".
+    """
+    if not path:
+        return None
+    path = path.strip()
+    if "." not in path or path.startswith(".") or path.endswith("."):
+        return None
+    ext = path.rsplit(".", 1)[1].lower()
+    if ext in _ARTIFACT_EXT:
+        return ext
+    return None
+
+
 def _expected_artifacts(task_type: str, title: str, goal: str) -> List[str]:
     """Derive the explicit, machine-checkable artifact contract for a task.
 
@@ -517,10 +662,11 @@ def _expected_artifacts(task_type: str, title: str, goal: str) -> List[str]:
 
 # Task types whose purpose is to PRODUCE a file on disk. For these the planner
 # emits an explicit artifact path into the contract.
+# Must match the list in verification.py's _CREATION_TASK_TYPES.
 _CREATION_TASK_TYPES = frozenset({
-    TaskType.IMPLEMENTATION, TaskType.DOCUMENTATION, TaskType.TESTING,
-    TaskType.CONFIGURATION, TaskType.CLEANUP, TaskType.MIGRATION,
-    TaskType.INFRASTRUCTURE,
+    TaskType.IMPLEMENTATION, TaskType.DOCUMENTATION, TaskType.CONFIGURATION,
+    TaskType.CLEANUP, TaskType.MIGRATION, TaskType.INFRASTRUCTURE,
+    TaskType.DEPLOYMENT,
 })
 
 
@@ -782,6 +928,43 @@ def _parallel_groups(levels: Dict[str, int]) -> Tuple[int, List[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Helper: build a set of real file paths from workspace observations.
+# ---------------------------------------------------------------------------
+
+
+def _workspace_file_index(
+    workspace_observations: Optional[list] = None,
+) -> dict[str, set[str]]:
+    """Build a lookup from repo name to set of observed file paths.
+
+    ``workspace_observations`` is a list of observation dicts/rows with
+    ``source``, ``subject``, ``aspect``, ``value``, ``scope`` keys.
+
+    Matches aspects by prefix ``"file:"`` because the WorkspaceObserver uses
+    unique aspects per file (e.g. ``aspect="file:src/main.py"``) to avoid
+    observation ID collisions from ``INSERT OR REPLACE`` deduplication.
+
+    Returns ``{repo_name: {relative/file/path, ...}}``.
+    Returns empty dict when no observations are provided (graceful fallback).
+    """
+    index: dict[str, set[str]] = {}
+    if not workspace_observations:
+        return index
+    for obs in workspace_observations:
+        source = getattr(obs, "source", None) or obs.get("source", "")
+        if source != "workspace":
+            continue
+        subject = getattr(obs, "subject", None) or obs.get("subject", "")
+        aspect = getattr(obs, "aspect", None) or obs.get("aspect", "")
+        value = getattr(obs, "value", None) or obs.get("value", "")
+        # Match by prefix because workspace file observations use unique
+        # aspects (``file:path/to/file.py``) to avoid ID collisions.
+        if aspect.startswith("file:") and value:
+            index.setdefault(subject, set()).add(value)
+    return index
+
+
+# ---------------------------------------------------------------------------
 # Compiler entrypoint.
 # ---------------------------------------------------------------------------
 
@@ -789,14 +972,20 @@ class TaskGraphCompiler:
     """Compiles a Plan into a deterministic, acyclic TaskGraph.
 
     Read-only over the Plan; write-only over the new task-graph tables. The
-    Plan object is the ONLY input.
+    Plan object is the ONLY input (workspace_observations is additive — the
+    plan drives structure; observations enrich task descriptions with real
+    file paths).
     """
 
-    def compile(self, plan: Plan, generated_at: Optional[str] = None) -> TaskGraph:
+    def compile(self, plan: Plan, generated_at: Optional[str] = None,
+                workspace_observations: Optional[list] = None) -> TaskGraph:
         if generated_at is None:
             generated_at = now_iso()
         gid = _graph_id(plan)
         pid = plan.id or plan._generate_id()
+
+        # Build file index from workspace observations if provided.
+        file_index = _workspace_file_index(workspace_observations)
 
         # Phase 3: engineering-pattern pre-pass. Only applies when the plan
         # has NO LLM-derived or trivial-pattern milestones (i.e. milestones that
@@ -871,12 +1060,81 @@ class TaskGraphCompiler:
                 p = spec_sym["path"]
                 if p not in outputs:
                     outputs.append(p)
+            # Initialize planning_warning before both inference and workspace
+            # blocks. Single source of truth — may be overwritten by inference
+            # or workspace checks below, but always bound for all code paths.
+            planning_warning: Optional[str] = None
+            # Phase 4 requirement: creation tasks MUST name an artifact. If
+            # outputs contain only generic descriptions ("Working code",
+            # "Test report") with no real file paths, try workspace-aware
+            # inference before falling back to ANALYSIS.
+            # Gap: smarter file inference — uses workspace observations to
+            # suggest plausible files when the goal doesn't explicitly name one.
+            if tt in _CREATION_TASK_TYPES:
+                has_real_paths = any(
+                    _is_file_path(o) is not None for o in outputs)
+                if not has_real_paths and file_index is not None:
+                    # Try workspace-aware inference.
+                    inferred = _infer_paths_from_workspace(
+                        plan.goal, file_index)
+                    if inferred:
+                        outputs.extend(inferred)
+                        planning_warning = (
+                            f"planning: inferred file path(s) from workspace: "
+                            f"{', '.join(inferred)}"
+                        )
+                # Recompute has_real_paths after potential workspace inference.
+                has_real_paths = any(
+                    _is_file_path(o) is not None for o in outputs)
+                if not has_real_paths:
+                    tt = TaskType.ANALYSIS
 
-            # Phase 4 requirement: creation tasks MUST name an artifact. If they
-            # don't, reclassify them to a non-creation type (ANALYSIS) so they don't
-            # bypass creation contract verification.
-            if tt in _CREATION_TASK_TYPES and not outputs:
-                tt = TaskType.ANALYSIS
+            # --- Workspace context: compute enriched inputs and planning warnings ---
+            # When workspace observations are available and the task type involves
+            # touching code, compute enriched inputs from the workspace file index.
+            # This runs BEFORE Task creation because we need to pass the enriched
+            # values into the constructor rather than mutating after creation.
+            # NOTE: planning_warning is NOT re-initialized here — it may have been
+            # set by the workspace inference block above (inferred file paths).
+            enriched_inputs: Optional[list[str]] = None
+            if file_index is not None and tt in _CREATION_TASK_TYPES:
+                real_inputs: list[str] = []
+                for inferred_path in outputs:
+                    # Only check paths that look like real files (have an
+                    # extension matching _ARTIFACT_EXT). Generic descriptions
+                    # like "Working code" or "Test report" should not trigger
+                    # workspace checks.
+                    ext = _is_file_path(inferred_path)
+                    if ext is None:
+                        continue
+                    found = False
+                    for repo_name, files in file_index.items():
+                        if inferred_path in files:
+                            real_inputs.append(inferred_path)
+                            found = True
+                            break
+                    if not found:
+                        # File doesn't exist yet — it's an output to be created.
+                        real_inputs.append(inferred_path)
+                        if planning_warning is None:
+                            planning_warning = (
+                                f"planning: '{inferred_path}' not found in "
+                                f"workspace index — will be created."
+                            )
+                if real_inputs:
+                    enriched_inputs = real_inputs
+                elif planning_warning is None:
+                    # Creation task with no real paths at all — surface the gap.
+                    planning_warning = (
+                        "planning: no workspace files matched this task's "
+                        "goal; task may lack file context."
+                    )
+
+                # If a planning warning was generated, append it to the
+                # task's description so it's visible in the graph review.
+                if planning_warning:
+                    desc = (desc + "\n" + planning_warning).strip()
+
             t = Task(
                 id=f"{gid}#t{i}",
                 graph_id=gid,
@@ -890,7 +1148,7 @@ class TaskGraphCompiler:
                 priority="medium",            # filled below (needs level)
                 estimated_effort=plan.estimated_effort or "medium",
                 dependencies=[],
-                inputs=list(_INPUTS.get(tt, ["Plan goal"])),
+                inputs=enriched_inputs or list(_INPUTS.get(tt, ["Plan goal"])),
                 # Phase 1.5: emit the explicit artifact contract (file paths)
                 # alongside the human-readable description, so the runtime can
                 # verify WHAT must exist after execution. Deduplicated.
@@ -996,6 +1254,17 @@ class TaskGraphCompiler:
             _seen = set()
             caps = [c for c in caps if not (c in _seen or _seen.add(c))]
             desc = spec.symbolic.get("goal") or plan.goal
+            # Phase 4 requirement: creation tasks MUST name an artifact.
+            # If the pattern's outputs are only generic descriptions ("Working
+            # code", "Updated docs"), downgrade to ANALYSIS so verification
+            # doesn't reject them with a "planning gap" error.
+            outputs = list(_OUTPUTS.get(tt, []))
+            if tt in _CREATION_TASK_TYPES:
+                has_real_paths = any(
+                    _is_file_path(o) is not None for o in outputs)
+                if not has_real_paths:
+                    tt = TaskType.ANALYSIS
+
             t = Task(
                 id=f"{gid}#t{i}",
                 graph_id=gid, plan_id=pid, milestone_order=0,
@@ -1004,7 +1273,7 @@ class TaskGraphCompiler:
                 complexity="medium", priority="medium",
                 estimated_effort=plan.estimated_effort or "medium",
                 dependencies=[], inputs=["Plan goal"],
-                outputs=list(_OUTPUTS.get(tt, [])),
+                outputs=outputs,
                 acceptance_criteria=list(spec.acceptance_criteria),
                 verification=list(spec.verification),
                 rollback=_task_rollback(tt, plan),
@@ -1075,6 +1344,18 @@ class TaskGraphCompiler:
         return milestones[0] if milestones else {}
 
 
-def compile_plan(plan: Plan, generated_at: Optional[str] = None) -> TaskGraph:
-    """Convenience wrapper: compile one Plan into a TaskGraph."""
-    return TaskGraphCompiler().compile(plan, generated_at=generated_at)
+def compile_plan(plan: Plan, generated_at: Optional[str] = None,
+                workspace_observations: Optional[list] = None) -> TaskGraph:
+    """Convenience wrapper: compile one Plan into a TaskGraph.
+
+    Args:
+        plan: The Plan object to compile.
+        generated_at: ISO timestamp for the compilation.
+        workspace_observations: Optional list of workspace observation
+            rows/dicts. When provided, task inputs are enriched with real
+            file paths from the workspace index rather than generic strings.
+            Pass None (or omit) to use the legacy context-blind path.
+    """
+    return TaskGraphCompiler().compile(
+        plan, generated_at=generated_at,
+        workspace_observations=workspace_observations)

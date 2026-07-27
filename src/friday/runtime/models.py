@@ -192,11 +192,15 @@ MockWorker = MockExecutor
 
 
 class PythonExecutor(Executor):
-    """Executes a Python snippet/file described by the task, locally.
+    """DEPRECATED — superseded by ``BuiltinPythonExecutor`` in ``executors.py``.
+
+    Still exported for backward compatibility but the runtime dispatch path
+    (resolve_executor) uses ``BuiltinPythonExecutor`` for ``worker:python``.
+    This implementation is dead code and will be removed in a future version.
 
     Reads the snippet from `task.runtime_payload` (a string of Python source).
     Never imports or evaluates caller code paths — it runs in a subprocess with
-    the snippet written to a temp file. The Runtime does not know this detail.
+    the snippet written to a temp file.
     """
 
     def __init__(self, worker_id: str = "worker:python") -> None:
@@ -232,7 +236,12 @@ PythonWorker = PythonExecutor
 
 
 class ShellExecutor(Executor):
-    """Executes a shell command described by the task, locally."""
+    """DEPRECATED — superseded by ``BuiltinShellExecutor`` in ``executors.py``.
+
+    Still exported for backward compatibility but the runtime dispatch path
+    (resolve_executor) uses ``BuiltinShellExecutor`` for ``worker:shell``.
+    This implementation is dead code and will be removed in a future version.
+    """
 
     def __init__(self, worker_id: str = "worker:shell") -> None:
         self.worker_id = worker_id

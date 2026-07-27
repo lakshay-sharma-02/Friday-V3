@@ -37,6 +37,7 @@ from .research_observer import (
 )
 from .runtime_observer import RuntimeObserver
 from .terminal_observer import TerminalObserver, categorize
+from .workspace_observer import WorkspaceObserver
 
 __all__ = [
     "Observation",
@@ -57,6 +58,7 @@ __all__ = [
     "Category",
     "ArtifactObserver",
     "RuntimeObserver",
+    "WorkspaceObserver",
     "categorize",
     "classify_research",
     "topic_of",

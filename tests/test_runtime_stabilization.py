@@ -195,7 +195,9 @@ def test_mixed_mission_uses_deterministic_for_symbolic_research(tmp_path):
     that symbolic-only research tasks correctly route to deterministic workers.
     """
     import unittest.mock as mock
-    with mock.patch.dict("friday.resolver.engine._AI_BINARY_MAP", clear=True):
+    # Mock shutil.which to return None so no AI CLI binary is found, forcing
+    # the resolver to select deterministic workers for all tasks.
+    with mock.patch("shutil.which", return_value=None):
         conn = _fresh_db(tmp_path)
         from friday.worker.engine import WorkerRegistry
         WorkerRegistry(conn).register_external()

@@ -31,6 +31,21 @@ _CREATION_TASK_TYPES = frozenset({
     "cleanup", "migration", "infrastructure", "deployment",
 })
 
+# Task types where "no artifact to verify" is legitimate because the task's
+# purpose is checking/analysis/review rather than producing a named file on
+# disk. These pass leniently when the planner didn't stamp a path.
+# ALL OTHER TASK TYPES (especially creation types like implementation,
+# documentation, etc.) must produce an artifact or fail with a "planning gap"
+# reason — surfacing the planner's failure to stamp a concrete path.
+_NON_ARTIFACT_TASK_TYPES = frozenset({
+    # Empty string covers mock/test tasks that aren't created by the planner
+    # and have no task_type set. These should pass leniently since they
+    # deliberately produce no disk artifacts.
+    "",
+    "analysis", "research", "design", "review",
+    "planning", "verification", "testing",
+})
+
 # Extensions that unambiguously name a real file (vs a bare word).
 _FILE_EXT = re.compile(
     r"\.(py|md|txt|sh|ts|tsx|jsx|js|rs|go|rb|java|c|h|cpp|hpp|json|"
@@ -181,8 +196,12 @@ def verify_task_artifacts(
     """Evidence-based verification for one executed task.
 
     Rules:
-      - No file referenced by the task -> PASS (nothing to verify; trust the
-        executor). We never fail a task we cannot evidence-check.
+      - No file referenced by the task AND task type is in
+        ``_NON_ARTIFACT_TASK_TYPES`` (analysis, research, design, etc.) ->
+        PASS (nothing to verify; these types legitimately don't produce files).
+      - No file referenced but task type SHOULD produce artifacts -> FAIL with
+        ``planning gap`` reason (Gap #3 — surfaces the planner's failure to
+        stamp a concrete path instead of silently passing).
       - File referenced AND exists (or worker reported an artifact) -> PASS.
       - File referenced BUT missing and no artifact produced -> FAIL with a
         reason naming expected vs observed. This is the "no file exists" guard.
@@ -211,12 +230,40 @@ def verify_task_artifacts(
 
     paths = expected_paths(task, workspace)
     if not paths:
-        if evidence:
+        # Gap #3 — Vacuous Verification fix:
+        # Non-artifact task types (analysis, research, design, review, etc.)
+        # legitimately don't produce files — pass leniently.
+        # ALL OTHER task types (especially creation types like implementation,
+        # documentation, etc.) must produce an artifact or fail with a
+        # "planning gap" reason that surfaces the planner's failure to stamp
+        # a concrete path.
+        if ttype in _NON_ARTIFACT_TASK_TYPES:
+            if evidence:
+                return VerificationResult(
+                    passed=result.success,
+                    reason=result.error or "evidence captured",
+                    evidence=evidence)
+            return VerificationResult(passed=True, reason="no expected artifact")
+        # Task has outputs but none resolved to real file paths (e.g. generic
+        # descriptions like "Working code", "Updated docs"). The planner did
+        # produce outputs — it just couldn't name a specific file from the
+        # goal text alone. Pass leniently rather than flagging a planning gap.
+        task_outputs = getattr(task, "outputs", None) or []
+        if task_outputs:
+            if evidence:
+                return VerificationResult(
+                    passed=result.success,
+                    reason=result.error or "generic outputs (no specific file path)",
+                    evidence=evidence)
             return VerificationResult(
-                passed=result.success,
-                reason=result.error or "evidence captured",
-                evidence=evidence)
-        return VerificationResult(passed=True, reason="no expected artifact")
+                passed=True,
+                reason="generic outputs (no specific file path)")
+        # Outputs completely empty — genuine planning gap where the planner
+        # produced no output contract at all. Surface this loudly.
+        return VerificationResult(
+            passed=False,
+            reason=f"planning gap: no artifact contracted for '{ttype}' task",
+            evidence={"task_type": ttype, "planning_gap": True})
 
     produced = set(result.artifacts or [])
     existing = [p for p in paths if Path(p).exists()]
@@ -243,8 +290,9 @@ def verify_creation_task(task, result, workspace: str = ".") -> VerificationResu
     A creation task's whole purpose is to produce a named artifact on disk. If
     the planner stamped a concrete path (hello.py), only THAT file satisfies the
     contract — a worker that writes a different file (goodbye.py) must FAIL
-    truthfully. A creation task with no named file falls back to the lenient
-    artifact check, since the planner gave us nothing to verify against.
+    truthfully. A creation task with no named file falls through to
+    verify_task_artifacts, which now FAILS with a ``planning gap`` reason
+    (Gap #3 fix: surfacing the planner's failure to stamp a concrete path).
     """
     ttype = (getattr(task, "task_type", "") or "").lower()
     if ttype not in _CREATION_TASK_TYPES:
@@ -252,11 +300,11 @@ def verify_creation_task(task, result, workspace: str = ".") -> VerificationResu
     paths = expected_paths(task, workspace)
     if not paths:
         # No explicit artifact path stamped by the planner. Fall through to
-        # the generic artifact check (which trusts the executor's success
-        # when there's nothing specific to verify) instead of hard-failing.
-        # A hard-fail here punishes the executor for a planning gap — the
-        # verification layer should surface the planning gap but not fail
-        # an otherwise successful execution.
+        # verify_task_artifacts, which checks the task type against the
+        # _NON_ARTIFACT_TASK_TYPES allowlist. For creation task types not
+        # in that allowlist (implementation, documentation, etc.), the
+        # result is a ``planning gap`` failure — surfacing the planner's
+        # failure to stamp a concrete path rather than silently passing.
         return verify_task_artifacts(task, result, workspace)
     # Only the contracted path(s) satisfy a creation task. An unrelated artifact
     # (e.g. goodbye.py when hello.py was expected) is NOT sufficient.

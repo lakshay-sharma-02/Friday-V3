@@ -73,6 +73,7 @@ class WorkerKind(str, Enum):
     AGENT = "agent"
     TOOL = "tool"
     SERVICE = "service"
+    FORMED_SKILL = "formed_skill"
 
     @classmethod
     def from_str(cls, s: str) -> "WorkerKind":

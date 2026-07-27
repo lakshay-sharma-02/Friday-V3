@@ -7,9 +7,10 @@ pipeline, with the same approval gates (graph review) as every other path.
 
 from __future__ import annotations
 
-from .engine import IntegrationEngine, IntegrateResult
+from .engine import IntegrationEngine, IntegrateResult, _MAX_REPOS
 
 __all__ = [
     "IntegrationEngine",
     "IntegrateResult",
+    "_MAX_REPOS",
 ]

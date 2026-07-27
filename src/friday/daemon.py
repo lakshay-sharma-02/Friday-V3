@@ -20,6 +20,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -47,7 +48,9 @@ _PHASE_A_FIELDS = ("new_suggestions", "high_severity_suggestions",
                     "new_gaps", "open_gaps",
                     "new_patterns", "top_patterns",
                     "new_intents", "high_conf_intents",
-                    "new_skills", "new_correlations")
+                    "new_skills", "new_correlations",
+                    "kill_switch_active",
+                    "drifted_skills")
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +72,45 @@ def _notify(title: str, message: str) -> None:
                  f'display notification "{message}" with title "{title}"'],
                 timeout=5, capture_output=True,
             )
+    except Exception:
+        pass
+
+
+def _notify_telegram(message: str) -> None:
+    """Send a notification via Telegram bot. Best-effort; silent on failure.
+
+    Uses the FRIDAY_TELEGRAM_BOT_TOKEN from the environment to send a message
+    to the most recently active chat (discovered via getUpdates). If the bot
+    hasn't received any messages yet (no chat_id known), the notification is
+    silently dropped.
+
+    Follows the same best-effort contract as ``_notify()``.
+    """
+    try:
+        from .services.telegram import TelegramConfig, _get_updates, _send_message
+        from .cli import _load_dotenv
+        _load_dotenv()
+
+        config = TelegramConfig.from_env()
+        if not config.configured:
+            return
+
+        # Discover the most recent chat ID from getUpdates.
+        updates = _get_updates(config, limit=5, timeout=2)
+        if not updates:
+            return
+
+        # Collect unique chat IDs in order (most recent last).
+        seen: list[str] = []
+        for u in updates:
+            cid = u.get("chat_id")
+            if cid and cid not in seen:
+                seen.append(cid)
+        if not seen:
+            return
+
+        chat_id = str(seen[-1])
+        _send_message(config, chat_id, f"🤖 Friday Alert\n{message}")
     except Exception:
         pass
 
@@ -382,6 +424,30 @@ def _run_cycle() -> dict:
         except Exception as exc:
             _log(f"Auto-dispatch failed: {exc}")
 
+        # Drift detection: check for skill degradation after formation/dispatch.
+        drifted_skills = 0
+        try:
+            from .skill_formation import detect_skill_drift
+            drift_reports = detect_skill_drift(conn)
+            if drift_reports:
+                unhealthy = sum(1 for r in drift_reports if r.overall_health == "unhealthy")
+                degrading = sum(1 for r in drift_reports if r.overall_health == "degrading")
+                drifted_skills = unhealthy + degrading
+                if drifted_skills:
+                    _log(f"Drift detection: {unhealthy} unhealthy, {degrading} degrading "
+                         f"skill(s) found. Run `friday skills drift` for details.")
+        except Exception as exc:
+            _log(f"Drift detection failed: {exc}")
+
+        # Autonomy escalation: reconcile permission counters and log changes.
+        try:
+            from .autonomy import reconcile_escalation
+            escalations = reconcile_escalation(conn)
+            for msg in escalations:
+                _log(f"Autonomy escalation: {msg}")
+        except Exception as exc:
+            _log(f"Autonomy reconciliation failed: {exc}")
+
         conn.execute(
             "UPDATE watch_history SET finished_at=?, outcome=?, "
             "repos_scanned=?, repos_changed=?, "
@@ -412,6 +478,7 @@ def _run_cycle() -> dict:
             "new_skills": new_skills,
             "new_correlations": new_correlations,
             "auto_dispatched": auto_dispatched,
+            "drifted_skills": drifted_skills,
         })
 
     except Exception as exc:
@@ -496,6 +563,305 @@ def _last_cycle_duration() -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Telegram identity polling (sub-thread, fast-poll for interactive chat)
+# ---------------------------------------------------------------------------
+
+
+def _telegram_identity_poll(interval: float = 5.0) -> None:
+    """Sub-thread target: polls Telegram every N seconds and responds to
+    messages through the IdentityEngine.
+
+    Runs until ``_daemon_shutdown`` is set. Each poll cycle:
+      1. Calls getUpdates with an offset file to avoid re-processing
+      2. Routes each new message through IdentityEngine.process()
+      3. Sends the response back via Telegram
+
+    Best-effort: any failure is logged via ``_log()`` and the loop continues.
+    """
+    from .services.telegram import TelegramConfig, _get_me, _get_updates, _send_message
+    from .persona import IdentityEngine
+
+    config = TelegramConfig.from_env()
+    engine = IdentityEngine()
+    offset_file = Path("/tmp/friday_telegram_identity_offset.txt")
+
+    consecutive_errors = 0
+
+    # Get bot's own username at startup so we can skip our own messages.
+    bot_username: Optional[str] = None
+    try:
+        me = _get_me(config)
+        if me:
+            bot_username = me.get("username", "")
+    except Exception:
+        pass
+
+    while not _daemon_shutdown:
+        try:
+            if not config.configured:
+                time.sleep(interval)
+                continue
+
+            # Backoff if too many consecutive errors (prevents flood loops).
+            if consecutive_errors >= 5:
+                _log(f"Telegram identity: {consecutive_errors} consecutive errors, "
+                     f"backing off 60s.")
+                for _ in range(60):
+                    if _daemon_shutdown:
+                        break
+                    time.sleep(1)
+                consecutive_errors = 0
+                continue
+
+            # Read offset from file.
+            offset: Optional[int] = None
+            try:
+                raw = offset_file.read_text().strip()
+                if raw:
+                    offset = int(raw)
+            except (OSError, ValueError):
+                pass
+
+            updates = _get_updates(config, limit=10, timeout=10, offset=offset)
+            if updates:
+                # Track highest update_id before processing, so the offset
+                # is bumped even if we skip all updates (prevents re-processing
+                # messages that were already seen).
+                max_id = max(u["update_id"] for u in updates if u.get("update_id"))
+                try:
+                    offset_file.write_text(str(max_id + 1))
+                except OSError:
+                    pass
+
+                processed = 0
+                for u in updates:
+                    chat_id = u.get("chat_id")
+                    text = u.get("text", "")
+                    if not text or not chat_id:
+                        continue
+
+                    # CRITICAL: Skip our own messages to prevent echo loops.
+                    # When the bot sends a reply, Telegram sends it back as a
+                    # new update. Without this check, the bot responds to its
+                    # own messages -> infinite loop (1659+ messages).
+                    from_user = u.get("from_user", "")
+                    if bot_username and from_user == bot_username:
+                        continue
+
+                    channel_id = f"telegram:{chat_id}"
+                    reply = engine.process(text, channel_id=channel_id)
+                    if reply:
+                        _send_message(config, str(chat_id), reply)
+                        processed += 1
+
+                if processed:
+                    _log(f"Telegram identity: responded to {processed} message(s)")
+
+            # Successful poll — reset consecutive error counter.
+            consecutive_errors = 0
+
+        except Exception as exc:
+            consecutive_errors += 1
+            _log(f"Telegram identity poll error #{consecutive_errors}: {exc}")
+
+        # Sleep in small increments so shutdown signal is responsive.
+        for _ in range(int(interval)):
+            if _daemon_shutdown:
+                break
+            time.sleep(1)
+
+
+# ---------------------------------------------------------------------------
+# Slack identity polling (sub-thread, checks for @mentions and DMs)
+# ---------------------------------------------------------------------------
+
+
+def _slack_identity_poll(interval: float = 10.0) -> None:
+    """Sub-thread target: polls Slack channels for new messages mentioning
+    the bot or in DMs, and responds through the IdentityEngine.
+
+    Runs until ``_daemon_shutdown`` is set. Each poll cycle:
+      1. Lists accessible channels
+      2. Fetches recent messages (since last-seen ts per channel)
+      3. Routes through IdentityEngine for @mentions / DMs
+      4. Posts responses back
+
+    Best-effort: failure is logged and the loop continues.
+    """
+    from .services.slack import (
+        SlackConfig, _list_channels, _fetch_channel_messages, _post_message)
+    from .persona import IdentityEngine
+
+    config = SlackConfig.from_env()
+    engine = IdentityEngine()
+    # Track last-seen timestamp per channel (key = channel_id, value = ts)
+    seen: dict[str, str] = {}
+    consecutive_errors = 0
+
+    # Get bot's own user ID at startup so we can skip our own messages.
+    bot_user_id: Optional[str] = None
+    try:
+        from .services.slack import _get_client
+        client = _get_client(config)
+        if client is not None:
+            auth = client.auth_test()
+            bot_user_id = auth.get("user_id") if auth else None
+    except Exception:
+        pass
+
+    while not _daemon_shutdown:
+        try:
+            if not config.configured:
+                time.sleep(interval)
+                continue
+
+            if consecutive_errors >= 5:
+                for _ in range(60):
+                    if _daemon_shutdown:
+                        break
+                    time.sleep(1)
+                consecutive_errors = 0
+                continue
+
+            channels = _list_channels(config, limit=5)
+            for ch in channels:
+                ch_id = ch.get("id", "")
+                if not ch_id:
+                    continue
+                last_ts = seen.get(ch_id)
+                msgs = _fetch_channel_messages(config, ch_id, limit=5)
+                for msg in reversed(msgs):
+                    ts = msg.get("ts", "")
+                    if not ts:
+                        continue
+                    # Skip messages we've already seen.
+                    if last_ts and ts <= last_ts:
+                        continue
+                    # Skip our own messages (prevents echo loops).
+                    if bot_user_id and msg.get("user") == bot_user_id:
+                        continue
+                    text = msg.get("text", "").strip()
+                    if not text:
+                        continue
+                    ch_name = ch.get("name", "?")
+                    channel_id = f"slack:{ch_id}"
+                    reply = engine.process(text, channel_id=channel_id)
+                    if reply:
+                        _post_message(config, ch_id, reply)
+                        _log(f"Slack identity: responded in #{ch_name}")
+                # Update last-seen ts to the most recent message.
+                if msgs:
+                    seen[ch_id] = max(m["ts"] for m in msgs if m.get("ts"))
+
+            consecutive_errors = 0
+
+        except Exception as exc:
+            consecutive_errors += 1
+            _log(f"Slack identity poll error #{consecutive_errors}: {exc}")
+
+        for _ in range(int(interval)):
+            if _daemon_shutdown:
+                break
+            time.sleep(1)
+
+
+# ---------------------------------------------------------------------------
+# Discord identity polling (sub-thread, checks guild channels for messages)
+# ---------------------------------------------------------------------------
+
+
+def _discord_identity_poll(interval: float = 10.0) -> None:
+    """Sub-thread target: polls Discord guild channels for new messages and
+    responds through the IdentityEngine.
+
+    Runs until ``_daemon_shutdown`` is set. Each poll cycle:
+      1. Lists guilds and their text channels
+      2. Fetches recent messages (since last-seen id per channel)
+      3. Routes through IdentityEngine
+      4. Posts responses back
+
+    Best-effort: failure is logged and the loop continues.
+    """
+    from .services.discord import (
+        DiscordConfig, _list_guilds, _list_channels, _fetch_messages, _post_message)
+    from .persona import IdentityEngine
+
+    config = DiscordConfig.from_env()
+    engine = IdentityEngine()
+    # Track last-seen message ID per channel (key = channel_id, value = message_id)
+    seen: dict[str, str] = {}
+    consecutive_errors = 0
+
+    # Get bot's own username at startup so we can skip our own messages.
+    bot_username: Optional[str] = None
+    try:
+        from .services.discord import _api_get
+        me = _api_get(config, "/users/@me")
+        if me:
+            bot_username = me.get("username")
+    except Exception:
+        pass
+
+    while not _daemon_shutdown:
+        try:
+            if not config.configured:
+                time.sleep(interval)
+                continue
+
+            if consecutive_errors >= 5:
+                for _ in range(60):
+                    if _daemon_shutdown:
+                        break
+                    time.sleep(1)
+                consecutive_errors = 0
+                continue
+
+            guilds = _list_guilds(config, limit=1)
+            for guild in guilds:
+                gid = guild.get("id", "")
+                if not gid:
+                    continue
+                channels = _list_channels(config, gid)
+                for ch in channels[:5]:
+                    ch_id = ch.get("id", "")
+                    if not ch_id:
+                        continue
+                    ch_name = ch.get("name", "?")
+                    last_id = seen.get(ch_id)
+                    msgs = _fetch_messages(config, ch_id, limit=5)
+                    for msg in reversed(msgs):
+                        mid = msg.get("id", "")
+                        if not mid:
+                            continue
+                        if last_id and mid <= last_id:
+                            continue
+                        # Skip our own messages (prevents echo loops).
+                        if bot_username and msg.get("author") == bot_username:
+                            continue
+                        text = msg.get("content", "").strip()
+                        if not text:
+                            continue
+                        channel_id = f"discord:{ch_id}"
+                        reply = engine.process(text, channel_id=channel_id)
+                        if reply:
+                            _post_message(config, ch_id, reply)
+                            _log(f"Discord identity: responded in #{ch_name}")
+                    if msgs:
+                        seen[ch_id] = max(m["id"] for m in msgs if m.get("id"))
+
+            consecutive_errors = 0
+
+        except Exception as exc:
+            consecutive_errors += 1
+            _log(f"Discord identity poll error #{consecutive_errors}: {exc}")
+
+        for _ in range(int(interval)):
+            if _daemon_shutdown:
+                break
+            time.sleep(1)
+
+
+# ---------------------------------------------------------------------------
 # Daemon main loop
 # ---------------------------------------------------------------------------
 
@@ -546,6 +912,36 @@ def run_daemon(interval_seconds: int = 900, no_notify: bool = False) -> None:
     _do_cycle(cycle_count, _effective_no_notify)
     cycle_count += 1
 
+    # Start Telegram identity polling sub-thread (fast-poll for interactive chat).
+    _telegram_thread = threading.Thread(
+        target=_telegram_identity_poll,
+        args=(5.0,),
+        daemon=True,
+        name="telegram-identity",
+    )
+    _telegram_thread.start()
+    _log("Telegram identity polling started (5s interval).")
+
+    # Start Slack identity polling sub-thread.
+    _slack_thread = threading.Thread(
+        target=_slack_identity_poll,
+        args=(10.0,),
+        daemon=True,
+        name="slack-identity",
+    )
+    _slack_thread.start()
+    _log("Slack identity polling started (10s interval).")
+
+    # Start Discord identity polling sub-thread.
+    _discord_thread = threading.Thread(
+        target=_discord_identity_poll,
+        args=(10.0,),
+        daemon=True,
+        name="discord-identity",
+    )
+    _discord_thread.start()
+    _log("Discord identity polling started (10s interval).")
+
     while not _daemon_shutdown:
         now = time.monotonic()
 
@@ -593,7 +989,27 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
     profile's should_notify() preference. If the operator has set
     'no_notifications=true' via 'friday profile set', notifications are
     suppressed even when --no-notify is not passed.
+
+    Kill switch: if the emergency stop is active, the cycle is skipped
+    immediately without running any observers, analyzers, or dispatchers.
+    The daemon continues running so it can detect when the kill switch
+    is released — it just doesn't execute any work.
     """
+    # Check emergency kill switch before running any work.
+    try:
+        from .autonomy import is_kill_switch_active
+        if is_kill_switch_active():
+            _log(f"Cycle #{cycle_num + 1} SKIPPED (kill switch active).")
+            write_status(
+                last_cycle_at=now_iso(),
+                last_cycle_outcome="skipped",
+                cycle_count=cycle_num + 1,
+                kill_switch_active=True,
+            )
+            return
+    except Exception:
+        pass
+
     _log(f"Cycle #{cycle_num + 1} starting...")
 
     # Refresh notification gate from profile — operator may have changed
@@ -641,6 +1057,7 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
         _log(f"Cycle #{cycle_num + 1} FAILED: {error_detail}")
         if not effective_no_notify:
             _notify("Friday — Cycle Failed", f"Observation cycle #{cycle_num + 1} failed: {error_detail[:200]}")
+            _notify_telegram(f"💥 Observation cycle #{cycle_num + 1} failed: {error_detail[:200]}")
     elif outcome == "skipped":
         _log(f"Cycle #{cycle_num + 1} skipped (lock held).")
     else:
@@ -693,11 +1110,17 @@ def _do_cycle(cycle_num: int, no_notify: bool) -> None:
             notify_parts.append(f"{new_skills} new skill(s) formed")
         if new_correlations:
             notify_parts.append(f"{new_correlations} cross-project correlation(s)")
+        drifted_skills = cycle.get("drifted_skills", 0)
+        if drifted_skills:
+            notify_parts.append(f"{drifted_skills} skill(s) degrading")
 
         if notify_parts and not effective_no_notify:
             _notify(
                 "Friday — Workspace Update",
                 ". ".join(notify_parts) + ".",
+            )
+            _notify_telegram(
+                ". ".join(notify_parts) + "."
             )
 
         # Log high-severity suggestions in detail so they're searchable.

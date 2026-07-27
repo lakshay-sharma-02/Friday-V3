@@ -58,7 +58,15 @@ from .cli_daemon import cmd_daemon
 from .cli_patterns import cmd_patterns
 from .cli_actions import cmd_actions
 from .cli_skills import cmd_skills
+from .cli_autonomy import cmd_autonomy
+from .cli_email import cmd_email
+from .cli_slack import cmd_slack
+from .cli_discord import cmd_discord
+from .cli_telegram import cmd_telegram
+from .cli_nl import cmd_do
 from .context import ContextEngine
+
+
 from .db import connect
 from .doctor import cmd_doctor
 from .ingest import ingest_paths
@@ -136,10 +144,118 @@ def cmd_correlate(args: argparse.Namespace) -> int:
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
+    """Show the workspace knowledge summary."""
+    from .presentation.cli_format import header, gray
+
     conn = connect()
     text = generate_summary(conn)
     conn.close()
-    print(text)
+
+    if not text.strip():
+        print(header("Workspace", "no projects tracked"))
+        print(gray("\n  No projects discovered yet. Run `friday ingest` first."))
+        return 0
+
+    # Extract project count from first line.
+    lines = text.splitlines()
+    count = "0"
+    if lines and "Projects discovered:" in lines[0]:
+        count = lines[0].split(":")[-1].strip()
+
+    print(header("Workspace", f"{count} projects"))
+    print()
+    # Print the raw rendered summary after the header.
+    # The summary module handles formatting of individual project sections.
+    for line in lines[1:]:
+        print(line)
+
+    return 0
+
+
+def cmd_create_file(args: argparse.Namespace) -> int:
+    """Create a file directly — no execute pipeline, no mission control.
+
+    Generates file content via a single LLM call and writes it.
+    Used by ``friday do create a calculator named xyz.py``.
+    """
+    from .presentation.cli_format import header, green, gray, error as perror
+
+    filename = getattr(args, "filename", "output.py")
+    description = getattr(args, "description", "")
+    cwd = Path.cwd()
+    path = cwd / filename
+
+    print(header("create", filename))
+    print()
+    print(gray(f"  Generating {filename}..."))
+
+    # Generate content via LLM (single fast call, no mission pipeline).
+    from .services.llm import _call as _llm_call
+
+    system = (
+        "You generate code. Output ONLY the file content. "
+        "No explanations, no markdown fences, no extra text. "
+        "Just the raw code."
+    )
+    user = f"Write {filename} that does: {description}"
+
+    content = _llm_call(system, user)
+    if content:
+        # Strip markdown code fences and trailing non-code lines.
+        # LLMs often wrap code in ```python / ``` despite the system prompt.
+        lines = content.splitlines()
+        start = 0
+        end = len(lines)
+        # Find opening fence (```python, ```py, ```)
+        for i, line in enumerate(lines):
+            if line.strip().startswith("```"):
+                start = i + 1
+                break
+        # Find closing fence and truncate everything after it
+        for i in range(end - 1, start - 1, -1):
+            stripped = lines[i].strip()
+            if stripped.startswith("```") or stripped.startswith("→"):
+                end = i
+            elif stripped == "":
+                continue  # skip trailing blank lines before fence
+            else:
+                break  # non-blank, non-fence line — keep going
+        # Also strip trailing lines that look like commentary (start with →, or are single emoji/arrow)
+        clean = []
+        for line in lines[start:end]:
+            s = line.strip()
+            if s.startswith("```"):
+                continue
+            clean.append(line)
+        content = "\n".join(clean).strip()
+
+    if not content:
+        # Fallback: write a skeleton.
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext in ("py",):
+            content = f'"""{description}"""\n\n\ndef main():\n    pass\n\n\nif __name__ == "__main__":\n    main()\n'
+        else:
+            content = f"# {description}\n"
+
+    try:
+        path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        print(perror(f"Failed to write {filename}: {exc}"))
+        return 1
+
+    print(green(f"  Created {filename}"))
+    print()
+
+    # Show a preview.
+    lines = content.splitlines()
+    preview = lines[:5]
+    if lines:
+        print(gray("  Preview:"))
+        for line in preview:
+            print(f"    {line}")
+        if len(lines) > 5:
+            print(gray(f"    ... ({len(lines)} lines total)"))
+
     return 0
 
 
@@ -578,15 +694,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_insights.set_defaults(func=cmd_insights)
 
-    p_identity = sub.add_parser(
-        "identity", help="List or explain project identities (what each project is)."
-    )
-    p_identity.add_argument(
-        "project", nargs="?",
-        help="Project name/id to explain; omit to list all identities.",
-    )
-    p_identity.set_defaults(func=cmd_identity)
-
     p_profile = sub.add_parser(
         "profile", help="Operator identity: preferences, patterns, and derived traits."
     )
@@ -848,13 +955,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_integrate = sub.add_parser(
         "integrate",
-        help="Analyse two repositories for integration opportunities and generate a Task Graph.")
+        help="Analyse 2+ repositories for integration opportunities and generate a Task Graph.")
     p_integrate.add_argument(
-        "repo_a",
-        help="First repository name.")
-    p_integrate.add_argument(
-        "repo_b",
-        help="Second repository name.")
+        "repos", nargs="+",
+        help="Two or more repository names (e.g. vivaha aether).")
     p_integrate.set_defaults(func=cmd_integrate)
 
     p_repair = sub.add_parser(
@@ -925,8 +1029,8 @@ def main(argv: list[str] | None = None) -> int:
         help="List or invoke formed skills (Pillar B Stage 4).")
     p_skills.add_argument(
         "action", nargs="?", default="list",
-        choices=["list", "run"],
-        help="'list' (default) to show formed skills; 'run <name>' to invoke a skill.")
+        choices=["list", "run", "drift"],
+        help="'list' (default), 'run <name>' to invoke, 'drift' to analyze degradation.")
     p_skills.add_argument(
         "name", nargs="?", default=None,
         help="Worker name for the 'run' action.")
@@ -938,8 +1042,126 @@ def main(argv: list[str] | None = None) -> int:
              "Default: abort (auto-downgrades to skip after 3+ failures).")
     p_skills.set_defaults(func=cmd_skills)
 
+    p_autonomy = sub.add_parser(
+        "autonomy",
+        help="Graduated autonomy controls: kill switch, per-action permissions, confidence escalation (Gap #7).")
+    p_autonomy.add_argument(
+        "subcommand", nargs="?", default="status",
+        choices=["status", "enable", "disable", "kill", "resume", "set", "reset"],
+        help="'status' (default), 'enable', 'disable', 'kill' (emergency stop), "
+             "'resume' (release kill switch), 'set <action> <level>', "
+             "or 'reset <action>'.")
+    p_autonomy.add_argument(
+        "action_type", nargs="?", default=None,
+        help="Action type for 'set' or 'reset' (e.g. 'workspace', 'exec').")
+    p_autonomy.add_argument(
+        "level", nargs="?", default=None,
+        help="Permission level for 'set': auto, confirm, double.")
+    p_autonomy.set_defaults(func=cmd_autonomy)
+
+    # --- Email communication layer ---
+    p_email = sub.add_parser(
+        "email",
+        help="Email communication: config, inbox, send (requires IMAP/SMTP credentials).")
+    p_email.add_argument(
+        "action", nargs="?", default=None,
+        choices=["config", "inbox", "send", "setup"],
+        help="'config' to show configuration, 'inbox' to list recent emails, "
+             "'send <to> <subject>' to send an email, 'setup' for instructions.")
+    p_email.add_argument(
+        "to", nargs="?", default=None,
+        help="Recipient email address for 'send'.")
+    p_email.add_argument(
+        "subject", nargs="?", default=None,
+        help="Email subject for 'send'.")
+    p_email.add_argument(
+        "--limit", type=int, default=20,
+        help="Max emails to show for 'inbox' (default: 20).")
+    p_email.set_defaults(func=cmd_email)
+
+    # --- Slack communication layer ---
+    p_slack = sub.add_parser(
+        "slack",
+        help="Slack communication: config, channels, send (requires bot token).")
+    p_slack.add_argument(
+        "action", nargs="?", default=None,
+        choices=["config", "channels", "send", "setup"],
+        help="'config' to show configuration, 'channels' to list, "
+             "'send <channel> <text>' to post, 'setup' for instructions.")
+    p_slack.add_argument(
+        "channel", nargs="?", default=None,
+        help="Channel name/ID for 'send'.")
+    p_slack.add_argument(
+        "text", nargs="*", default=None,
+        help="Message text for 'send'.")
+    p_slack.add_argument(
+        "--limit", type=int, default=20,
+        help="Max channels to show (default: 20).")
+    p_slack.set_defaults(func=cmd_slack)
+
+    # --- Discord communication layer ---
+    p_discord = sub.add_parser(
+        "discord",
+        help="Discord communication: config, guilds, channels, send (requires bot token).")
+    p_discord.add_argument(
+        "action", nargs="?", default=None,
+        choices=["config", "guilds", "channels", "send", "setup"],
+        help="'config', 'guilds', 'channels <guild_id>', "
+             "'send <channel> <text>', or 'setup'.")
+    p_discord.add_argument(
+        "guild_id", nargs="?", default=None,
+        help="Guild ID for 'channels' action.")
+    p_discord.add_argument(
+        "channel", nargs="?", default=None,
+        help="Channel ID for 'send' action.")
+    p_discord.add_argument(
+        "content", nargs="*", default=None,
+        help="Message content for 'send' action.")
+    p_discord.set_defaults(func=cmd_discord)
+
+    # --- Telegram communication layer ---
+    p_telegram = sub.add_parser(
+        "telegram",
+        help="Telegram communication: config, me, send (requires bot token from @BotFather).")
+    p_telegram.add_argument(
+        "action", nargs="?", default=None,
+        choices=["config", "me", "send", "setup"],
+        help="'config', 'me' (bot info), 'send <chat_id> <text>', or 'setup'.")
+    p_telegram.add_argument(
+        "chat_id", nargs="?", default=None,
+        help="Chat ID for 'send' action.")
+    p_telegram.add_argument(
+        "text", nargs="*", default=None,
+        help="Message text for 'send' action.")
+    p_telegram.set_defaults(func=cmd_telegram)
+
+    # --- Friday Identity (persistent persona) ---
+    p_identity = sub.add_parser(
+        "identity",
+        help="Friday Identity: persistent persona you can chat with through any channel.")
+    p_identity.add_argument(
+        "action", nargs="?", default=None,
+        choices=["chat", "telegram"],
+        help="'chat' for interactive CLI session, 'telegram start|stop' to poll Telegram, "
+             "omit to show identity status.")
+    p_identity.add_argument(
+        "sub", nargs="?", default=None,
+        help="'start' or 'stop' for 'telegram' action.")
+    p_identity.set_defaults(func=cmd_identity)
+
+    p_do = sub.add_parser(
+        "do",
+        help="Natural language command — say what you want and Friday figures out the rest."
+    )
+    p_do.add_argument(
+        "text", nargs=argparse.REMAINDER,
+        help="What you want Friday to do — in plain English.",
+    )
+    p_do.set_defaults(func=cmd_do)
+
     p_doctor = sub.add_parser(
-        "doctor", help="Check system health (DB, deps, workers, README, watch).")
+        "doctor", help="Check system health (DB, deps, workers, README, watch)."
+    )
     p_doctor.set_defaults(func=cmd_doctor)
 
     from .cli_synthesize import add_subparser as add_synthesize
@@ -958,6 +1180,14 @@ def main(argv: list[str] | None = None) -> int:
         "--scan-docs", action="store_true",
         help="Scan repos for project docs (PRDs, design docs) without running correlation.")
     p_correlate.set_defaults(func=cmd_correlate)
+
+    # If the first argument isn't a known subcommand, route through
+    # the NL dispatcher so `friday <anything>` works naturally.
+    # ``argv`` may be None (called from the installed script or ``__main__``),
+    # so resolve it to ``sys.argv[1:]`` for the fallback check.
+    _argv = argv if argv is not None else sys.argv[1:] if len(sys.argv) > 1 else []
+    if _argv and _argv[0] not in sub.choices and not _argv[0].startswith("-"):
+        return cmd_do(argparse.Namespace(text=_argv))
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -51,57 +51,96 @@ def cmd_daemon(args: argparse.Namespace) -> int:
 
 
 def _show_status() -> int:
-    """Display the daemon status."""
+    """Display the daemon status in a clean dashboard format."""
+    from .presentation.cli_format import (
+        header, green, yellow, red, gray, bold, status_dot, card,
+    )
+
     status = get_status()
     running = is_running()
+    pid = status.get("pid", "?")
+    state_str = status.get("state", "unknown")
 
-    print("Friday Daemon\n")
-    if running:
-        print(f"  State:    running (PID {status.get('pid', '?')})")
-    else:
-        print(f"  State:    stopped (last: {status.get('state', 'unknown')})")
-    print(f"  PID file: {PID_FILE}")
-    print(f"  Log:      {LOG_FILE}")
-    print(f"  Status:   {STATUS_FILE}")
+    print(header("Daemon", f"PID {pid}" if running else "stopped"))
     print()
 
+    # Health indicator.
+    health_dot = status_dot(running)
+    state_label = bold(green(f"Running (PID {pid})")) if running else bold(red("Stopped"))
+    print(f"  {health_dot} {state_label}")
+    print()
+
+    # Timeline card.
+    timeline_lines = []
     if status.get("started_at"):
-        print(f"  Started:       {status['started_at']}")
+        ts = status["started_at"][:19]
+        timeline_lines.append(f"Started          {ts}")
     if status.get("last_cycle_at"):
-        print(f"  Last cycle:    {status['last_cycle_at']}")
+        ts = status["last_cycle_at"][:19]
+        timeline_lines.append(f"Last cycle       {ts}")
+    if status.get("cycle_count", 0) > 0:
+        timeline_lines.append(f"Total cycles     {status['cycle_count']}")
+    if status.get("interval_seconds"):
+        secs = status["interval_seconds"]
+        timeline_lines.append(f"Interval         {secs}s ({secs // 60}m)")
     if status.get("last_cycle_outcome"):
         outcome = status["last_cycle_outcome"]
-        mark = {"succeeded": "✓", "failed": "✗", "skipped": "~"}.get(outcome, "?")
-        print(f"  Last outcome:  {mark} {outcome}")
-    if status.get("cycle_count", 0) > 0:
-        print(f"  Total cycles:  {status['cycle_count']}")
-    if status.get("interval_seconds"):
-        print(f"  Interval:      {status['interval_seconds']}s ({status['interval_seconds'] // 60}m)")
-    if status.get("watched_repos", 0) > 0:
-        print(f"  Watched repos: {status['watched_repos']}")
-    if status.get("new_suggestions", 0) > 0 or status.get("new_gaps", 0) > 0:
-        sug = status.get("new_suggestions", 0)
-        high = status.get("high_severity_suggestions", 0)
-        gaps = status.get("new_gaps", 0)
-        open_gaps = status.get("open_gaps", 0)
-        parts = []
-        if sug:
-            parts.append(f"{sug} suggestion(s)")
-        if high:
-            parts.append(f"{high} high-severity")
-        if gaps:
-            parts.append(f"{gaps} new gap(s)")
-        if open_gaps:
-            parts.append(f"{open_gaps} open gap(s)")
-        print(f"  Ambient findings: {', '.join(parts)}")
+        outcome_icon = {"succeeded": green("✓"), "failed": red("✗"), "skipped": yellow("~")}.get(outcome, gray("?"))
+        timeline_lines.append(f"Last outcome     {outcome_icon} {outcome}")
+
+    if timeline_lines:
+        print(card("Timeline", timeline_lines, color="blue", indent=0))
+        print()
+
+    # Ambient findings card.
+    sug = status.get("new_suggestions", 0)
+    high = status.get("high_severity_suggestions", 0)
+    gaps = status.get("new_gaps", 0)
+    open_gaps = status.get("open_gaps", 0)
+    patterns = status.get("new_patterns", 0)
+    intents = status.get("new_intents", 0)
+    corrs = status.get("new_correlations", 0)
+    skills = status.get("new_skills", 0)
+    watched = status.get("watched_repos", 0)
+
+    finding_lines = []
+    if watched:
+        finding_lines.append(f"Watched repos    {watched}")
+    if patterns:
+        top = status.get("top_patterns", 0)
+        finding_lines.append(f"Patterns         {patterns} mined ({top} frequent)")
+    if intents:
+        high_conf = status.get("high_conf_intents", 0)
+        finding_lines.append(f"Workflows        {intents} labeled ({high_conf} high confidence)")
+    if skills:
+        finding_lines.append(f"Skills           {skills} formed")
+    if sug:
+        sev = f" ({high} high-severity)" if high else ""
+        finding_lines.append(f"Suggestions      {sug}{sev}")
+    if gaps:
+        finding_lines.append(f"Gaps             {gaps} new, {open_gaps} open")
+    if corrs:
+        finding_lines.append(f"Correlations     {corrs} detected")
+
+    if finding_lines:
+        print(card("Ambient Findings", finding_lines, color="green", indent=0))
+        print()
+
+    # Error card if present.
     if status.get("last_error"):
-        print(f"  Last error:    {status['last_error'][:200]}")
+        print(card("Last Error", [status["last_error"][:200]], color="red", indent=0))
+        print()
+
+    # Path info.
+    print(gray(f"  PID: {PID_FILE}  Log: {LOG_FILE}  Status: {STATUS_FILE}"))
     print()
 
+    # Next action.
     if running:
-        print(f"Use 'friday daemon stop' to stop the daemon.")
+        print(gray("  › friday daemon stop    to stop"))
+        print(gray("  › friday daemon logs    to see recent activity"))
     else:
-        print(f"Use 'friday daemon start' to start the daemon.")
+        print(gray("  › friday daemon start   to start"))
     print()
 
     return 0

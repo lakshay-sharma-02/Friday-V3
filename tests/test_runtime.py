@@ -27,14 +27,12 @@ from friday.runtime import (
     ExecutionReport,
     ExecutionResult,
     MockWorker,
-    PythonWorker,
     RunState,
     RuntimeEngine,
     RuntimeEvent,
     RuntimeTask,
     SCHEMA_VERSION,
     SessionState,
-    ShellWorker,
     Worker,
     blocked_descendants,
     can_transition,
@@ -43,6 +41,7 @@ from friday.runtime import (
     mark_cancelled,
     next_state_for_result,
 )
+from friday.runtime.executors import BuiltinPythonExecutor, BuiltinShellExecutor
 from friday.runtime.engine import _session_id
 from friday.scheduler.models import ExecutionSchedule, ScheduledTask, TaskState
 
@@ -808,7 +807,7 @@ def test_python_worker_executes(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
-    eng = RuntimeEngine(conn, workers={"worker:mock": PythonWorker()})
+    eng = RuntimeEngine(conn, workers={"worker:mock": BuiltinPythonExecutor()})
     # Inject a payload via runtime_hint? No — RuntimeTask has runtime_payload.
     # Build a custom schedule whose task carries a payload through the engine.
     # Simpler: resolve mock -> PythonWorker and set payload on the task.
@@ -825,7 +824,7 @@ def test_shell_worker_executes(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
-    eng = RuntimeEngine(conn, workers={"worker:mock": ShellWorker()})
+    eng = RuntimeEngine(conn, workers={"worker:mock": BuiltinShellExecutor()})
     for st in sched.tasks:
         st.runtime_payload = "echo shell-ran"
     rep = eng.run(sched)
@@ -839,7 +838,7 @@ def test_python_worker_failure_propagates(tmp_path):
     conn = _db()
     _seed_graph(conn, "g1", 1)
     sched = _schedule("g1", [("A", 1)])
-    eng = RuntimeEngine(conn, workers={"worker:mock": PythonWorker()})
+    eng = RuntimeEngine(conn, workers={"worker:mock": BuiltinPythonExecutor()})
     for st in sched.tasks:
         st.runtime_payload = "import sys; sys.exit(3)"
     rep = eng.run(sched)

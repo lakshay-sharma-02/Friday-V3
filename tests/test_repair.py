@@ -270,15 +270,20 @@ def test_escalate_bottleneck(db):
 # ---------------------------------------------------------------------------
 
 def test_escalate_depth_cap(db):
-    """Set up a 2-deep repair chain: original -> repair-1 (depth=1) ->
-    repair-2 (depth=2 == MAX_REPAIR_DEPTH). A third failure on this graph
-    should escalate."""
+    """Set up a 5-deep repair chain: original -> mid-1 (depth=1) ->
+    mid-2 (depth=2) -> mid-3 (depth=3) -> mid-4 (depth=4) ->
+    active (depth=5 == MAX_REPAIR_DEPTH). Beyond auto-approve threshold
+    (depth >= 2), but still hits hard ceiling at depth 5.
+    """
     _setup_graph_and_session(db, gid="graph-repair-1")
     _n = _now()
 
     # Create plans for the intermediate graphs (FK constraint on task_graphs).
     for pid, goal in [("plan:original", "original goal"),
-                       ("plan:repair-intermediate", "repair goal")]:
+                       ("plan:repair-mid-1", "repair goal 1"),
+                       ("plan:repair-mid-2", "repair goal 2"),
+                       ("plan:repair-mid-3", "repair goal 3"),
+                       ("plan:repair-mid-4", "repair goal 4")]:
         db.execute(
             """INSERT OR REPLACE INTO plans
                (id, goal, plan_type, confidence, status, created_at, updated_at)
@@ -286,10 +291,13 @@ def test_escalate_depth_cap(db):
             (pid, goal, "engineering", "medium", "planned", _n, _n),
         )
 
-    # Create a 2-deep repair chain:
+    # Create a 5-deep repair chain:
     # 1) original-graph (no source, depth=0)
-    # 2) repair-intermediate (source=repair:original-graph:task, depth=1)
-    # 3) graph-repair-1 (source=repair:repair-intermediate:task, depth=2)
+    # 2) repair-mid-1 (source=repair:original-graph:task, depth=1)
+    # 3) repair-mid-2 (source=repair:repair-mid-1:task, depth=2)
+    # 4) repair-mid-3 (source=repair:repair-mid-2:task, depth=3)
+    # 5) repair-mid-4 (source=repair:repair-mid-3:task, depth=4)
+    # 6) graph-repair-1 (source=repair:repair-mid-4:task, depth=5)
 
     db.execute(
         """INSERT OR REPLACE INTO task_graphs
@@ -299,21 +307,30 @@ def test_escalate_depth_cap(db):
         ("original-graph", "original goal", "plan:original",
          "engineering", 1, 0, 1, 1, "compiled", _n, _n),
     )
-    db.execute(
-        """INSERT OR REPLACE INTO task_graphs
-           (id, goal, plan_id, plan_type, task_count, edge_count,
-            critical_path_length, parallel_groups, status, created_at, updated_at,
-            source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        ("repair-intermediate", "repair goal", "plan:repair-intermediate",
-         "engineering", 1, 0, 1, 1, "compiled", _n, _n,
-         "repair:original-graph:some-task"),
-    )
+    for (gid, source), actual_plan_id in [
+        (("repair-mid-1", "repair:original-graph:some-task"),
+         "plan:repair-mid-1"),
+        (("repair-mid-2", "repair:repair-mid-1:some-task"),
+         "plan:repair-mid-2"),
+        (("repair-mid-3", "repair:repair-mid-2:some-task"),
+         "plan:repair-mid-3"),
+        (("repair-mid-4", "repair:repair-mid-3:some-task"),
+         "plan:repair-mid-4"),
+    ]:
+        db.execute(
+            """INSERT OR REPLACE INTO task_graphs
+               (id, goal, plan_id, plan_type, task_count, edge_count,
+                critical_path_length, parallel_groups, status,
+                created_at, updated_at, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (gid, "repair goal", actual_plan_id,
+             "engineering", 1, 0, 1, 1, "compiled", _n, _n, source),
+        )
 
-    # Set graph-repair-1's source to point to the intermediate repair.
+    # Set graph-repair-1's source to point to repair-mid-4 (depth=5 chain).
     db.execute(
         "UPDATE task_graphs SET source = ? WHERE id = 'graph-repair-1'",
-        ("repair:repair-intermediate:repair-task-2",),
+        ("repair:repair-mid-4:repair-task-2",),
     )
     db.commit()
 
@@ -418,3 +435,210 @@ def test_proposal_reject_lifecycle(db):
     ).fetchone()
     assert hist is not None
     assert hist["event_type"] == "rejected" or hist["event_type"] == "proposed"
+
+
+# ===================================================================
+# Gap #6 — Repair Escalation: auto-approve on 3x consecutive failure
+# ===================================================================
+
+
+def test_auto_approve_decision_at_depth_threshold(db):
+    """When repair_depth >= AUTO_APPROVE_DEPTH, evaluate_repair returns
+    auto_approve instead of auto_eligible."""
+    from friday.repair import AUTO_APPROVE_DEPTH
+
+    _setup_graph_and_session(db)
+    _n = _now()
+
+    # Create a plan for the repair graph's FK.
+    db.execute(
+        "INSERT OR REPLACE INTO plans (id, goal, plan_type, confidence, status, "
+        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("plan:repair-chain", "repair goal", "engineering",
+         "medium", "planned", _n, _n),
+    )
+
+    # Chain: original → repair-1 (=depth 2 when 2 more repairs stacked on)
+    # We need depth >= AUTO_APPROVE_DEPTH on the active graph.
+    # Build: G0 (source=none) → G1 (source=repair:G0:task) → G2 (source=repair:G1:task)
+    # G2 has depth=2, which >= AUTO_APPROVE_DEPTH=2 → auto_approve
+
+    for gid, source in [
+        ("original-graph-auto", None),
+        ("repair-intermediate-auto", "repair:original-graph-auto:some-task"),
+    ]:
+        if source:
+            db.execute(
+                """INSERT OR REPLACE INTO task_graphs
+                   (id, goal, plan_id, plan_type, task_count, edge_count,
+                    critical_path_length, parallel_groups, status,
+                    created_at, updated_at, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (gid, "repair goal", "plan:repair-chain",
+                 "engineering", 1, 0, 1, 1, "compiled", _n, _n, source),
+            )
+        else:
+            db.execute(
+                """INSERT OR REPLACE INTO task_graphs
+                   (id, goal, plan_id, plan_type, task_count, edge_count,
+                    critical_path_length, parallel_groups, status,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (gid, "original goal", "plan:repair-chain",
+                 "engineering", 1, 0, 1, 1, "compiled", _n, _n),
+            )
+
+    # Set graph-repair-1's source to point to repair-intermediate-auto
+    db.execute(
+        "UPDATE task_graphs SET source = ? WHERE id = 'graph-repair-1'",
+        ("repair:repair-intermediate-auto:repair-task-2",),
+    )
+    db.commit()
+
+    # Now detect and evaluate
+    candidates = detect_repair_candidates(db)
+    assert len(candidates) >= 1
+    c = candidates[0]
+    assert c.repair_depth >= AUTO_APPROVE_DEPTH, (
+        f"Expected depth >= {AUTO_APPROVE_DEPTH}, got {c.repair_depth}"
+    )
+
+    proposal = evaluate_repair(db, c)
+    assert proposal.decision == "auto_approve", (
+        f"Expected auto_approve, got {proposal.decision}"
+    )
+    assert proposal.status == "pending"
+
+
+def test_auto_approve_persists_proposal_with_auto_approve_status(db):
+    """propose_repair with auto_approve decision persists the proposal,
+    transitions it to approved, and logs history events."""
+    from friday.repair import AUTO_APPROVE_DEPTH
+
+    _setup_graph_and_session(db)
+    _n = _now()
+
+    db.execute(
+        "INSERT OR REPLACE INTO plans (id, goal, plan_type, confidence, status, "
+        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("plan:auto-approve-chain", "repair goal", "engineering",
+         "medium", "planned", _n, _n),
+    )
+
+    # Build a 2-deep repair chain to reach auto_approve threshold.
+    for gid, source in [
+        ("original-graph-auto2", None),
+        ("repair-intermediate-auto2",
+         "repair:original-graph-auto2:some-task"),
+    ]:
+        if source:
+            db.execute(
+                """INSERT OR REPLACE INTO task_graphs
+                   (id, goal, plan_id, plan_type, task_count, edge_count,
+                    critical_path_length, parallel_groups, status,
+                    created_at, updated_at, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (gid, "repair goal", "plan:auto-approve-chain",
+                 "engineering", 1, 0, 1, 1, "compiled", _n, _n, source),
+            )
+        else:
+            db.execute(
+                """INSERT OR REPLACE INTO task_graphs
+                   (id, goal, plan_id, plan_type, task_count, edge_count,
+                    critical_path_length, parallel_groups, status,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (gid, "original goal", "plan:auto-approve-chain",
+                 "engineering", 1, 0, 1, 1, "compiled", _n, _n),
+            )
+
+    db.execute(
+        "UPDATE task_graphs SET source = ? WHERE id = 'graph-repair-1'",
+        ("repair:repair-intermediate-auto2:repair-task-2",),
+    )
+    db.commit()
+
+    # Propose — should auto-approve + attempt auto-execute
+    candidates = detect_repair_candidates(db)
+    assert len(candidates) >= 1
+
+    # The planning pipeline will likely fail (no evidence seeded), but the
+    # proposal should still be persisted and history logged.
+    result = propose_repair(db, candidates[0])
+    # result may be graph_id (success) or None (planning failed) — both valid
+    # for this test; we check the persisted state.
+
+    # The proposal should now be in auto_approved status
+    prop_row = db.execute(
+        "SELECT status, decision FROM repair_proposals ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    assert prop_row is not None
+    # The proposal should have decision='auto_approve'
+    assert prop_row["decision"] == "auto_approve", (
+        f"Expected auto_approve decision, got {prop_row['decision']}"
+    )
+
+    # History should contain the auto_approve events
+    events = db.execute(
+        "SELECT event_type FROM repair_history ORDER BY recorded_at"
+    ).fetchall()
+    event_types = [e["event_type"] for e in events]
+    assert "auto_approved" in event_types, (
+        f"Expected auto_approved event in history, got {event_types}"
+    )
+
+
+def test_get_pending_proposals_excludes_auto_approved(db):
+    """Auto-approved proposals should not appear in get_pending_proposals()."""
+    # Two proposals: one regular (pending), one auto-approved
+    _n = _now()
+
+    # Insert a regular pending proposal
+    db.execute(
+        """INSERT OR REPLACE INTO repair_proposals
+           (id, original_graph_id, original_task_id, failure_reason,
+            capability, repair_depth, decision, evidence_ids,
+            proposed_goal, status, created_at, schema_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("proposal:pending-1", "g1", "t1", "failed",
+         "python", 0, "auto_eligible", "[]",
+         "Repair: fix t1", "pending", _n, "1"),
+    )
+    # Insert an auto-approved proposal
+    db.execute(
+        """INSERT OR REPLACE INTO repair_proposals
+           (id, original_graph_id, original_task_id, failure_reason,
+            capability, repair_depth, decision, evidence_ids,
+            proposed_goal, status, created_at, schema_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("proposal:auto-1", "g2", "t2", "failed",
+         "python", 2, "auto_approve", "[]",
+         "Repair: fix t2", "approved", _n, "1"),
+    )
+    db.commit()
+
+    pending = get_pending_proposals(db)
+    pending_ids = {p["id"] for p in pending}
+    assert "proposal:pending-1" in pending_ids
+    assert "proposal:auto-1" not in pending_ids, (
+        "auto-approved proposal should not appear in pending list"
+    )
+
+
+def test_auto_approve_does_not_apply_at_low_depth(db):
+    """A first-time failure (repair_depth=0) still gets auto_eligible,
+    not auto_approve."""
+    _setup_graph_and_session(db)
+
+    candidates = detect_repair_candidates(db)
+    assert len(candidates) >= 1
+    c = candidates[0]
+    assert c.repair_depth == 0, (
+        f"Expected depth 0 for first failure, got {c.repair_depth}"
+    )
+
+    proposal = evaluate_repair(db, c)
+    assert proposal.decision == "auto_eligible", (
+        f"Expected auto_eligible for depth 0, got {proposal.decision}"
+    )
+

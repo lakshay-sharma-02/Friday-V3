@@ -51,6 +51,11 @@ def default_registry() -> ObserverRegistry:
     from .research_observer import ResearchObserver
     from .runtime_observer import RuntimeObserver
     from .terminal_observer import TerminalObserver
+    from .workspace_observer import WorkspaceObserver
+    from ..services.email import EmailObserver
+    from ..services.slack import SlackObserver
+    from ..services.discord import DiscordObserver
+    from ..services.telegram import TelegramObserver
 
     reg = ObserverRegistry()
     reg.register(GitObserver())
@@ -61,4 +66,9 @@ def default_registry() -> ObserverRegistry:
     reg.register(CalendarObserver())
     reg.register(RuntimeObserver())
     reg.register(HyprlandObserver())
+    reg.register(WorkspaceObserver())
+    reg.register(EmailObserver())
+    reg.register(SlackObserver())
+    reg.register(DiscordObserver())
+    reg.register(TelegramObserver())
     return reg

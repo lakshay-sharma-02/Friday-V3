@@ -42,6 +42,7 @@ from .confirm_gate import (
 )
 from ..hyprctl_util import hyprctl as _hyprctl
 from ..action_log import ActionEvent, log_action, now_iso as _now
+from ..autonomy import record_action_outcome
 from ..db import connect as _db_connect
 import json
 
@@ -142,6 +143,7 @@ class HyprlandExecutor(Executor):
     def execute(self, task) -> ExecutionResult:
         raw = _payload(task).strip()
         if not raw:
+            self._autonomy_record("hyprctl_parse", "", False, "empty payload")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=0,
@@ -152,6 +154,7 @@ class HyprlandExecutor(Executor):
         try:
             obj = json.loads(raw)
         except (ValueError, TypeError):
+            self._autonomy_record("hyprctl_parse", "", False, "bad JSON")
             return ExecutionResult(
                 success=False, stdout="", stderr=raw[:200],
                 exit_code=None, duration_ms=0,
@@ -161,6 +164,7 @@ class HyprlandExecutor(Executor):
         action = (obj.get("action") or "").lower().strip()
         target = (obj.get("target") or "").strip()
         if not action:
+            self._autonomy_record("hyprctl_parse", target, False, "no action field")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=0,
@@ -169,6 +173,28 @@ class HyprlandExecutor(Executor):
 
         t0 = time.monotonic()
 
+        # Helper: log action outcome + record for autonomy escalation.
+        def _record(action_internal_type: str, success: bool) -> None:
+            try:
+                conn = _db_connect()
+                status = "success" if success else "failure"
+                log_action(conn, ActionEvent(
+                    source="friday",
+                    action_type=action_internal_type,
+                    target=target,
+                    detail=json.dumps({"action": action, "target": target,
+                                       "status": status}),
+                    confidence="observed",
+                    observed_at=_now(),
+                ))
+                record_action_outcome(action, success, conn=conn)
+                conn.close()
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
         # --- CONFIRM GATE: block before any side-effecting action ---
         if not prompt_confirm(
             action=action,
@@ -176,6 +202,7 @@ class HyprlandExecutor(Executor):
             worker_id=self.worker_id,
             skip_prompt=False,
         ):
+            _record("hyprctl_cancelled", False)
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=int((time.monotonic() - t0) * 1000),
@@ -188,21 +215,13 @@ class HyprlandExecutor(Executor):
             sub_action = target if action == "query" else action
             result = _hyprctl([sub_action])
             if result is None:
+                _record("hyprctl_" + sub_action, False)
                 return ExecutionResult(
                     success=False, stdout="", stderr="",
                     exit_code=None, duration_ms=int((time.monotonic() - t0) * 1000),
                     error=f"hyprctl {sub_action} returned no output",
                 )
-            try:
-                conn = _db_connect()
-                log_action(conn, ActionEvent(
-                    source="friday", action_type="hyprctl_" + sub_action,
-                    target="", detail=json.dumps({"output": result[:200]}),
-                    confidence="observed",
-                    observed_at=_now(),
-                ))
-            except Exception:
-                pass
+            _record("hyprctl_" + sub_action, True)
             return ExecutionResult(
                 success=True, stdout=result, stderr="",
                 exit_code=0, duration_ms=int((time.monotonic() - t0) * 1000),
@@ -217,6 +236,7 @@ class HyprlandExecutor(Executor):
 
         dispatched = self._dispatch(action, target)
         if not dispatched:
+            _record("hyprctl_" + action, False)
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=int((time.monotonic() - t0) * 1000),
@@ -239,22 +259,14 @@ class HyprlandExecutor(Executor):
         dur = int((time.monotonic() - t0) * 1000)
 
         if verified:
-            try:
-                conn = _db_connect()
-                log_action(conn, ActionEvent(
-                    source="friday", action_type="hyprctl_" + action,
-                    target=target, detail=json.dumps({"action": action, "target": target}),
-                    confidence="observed",
-                    observed_at=_now(),
-                ))
-            except Exception:
-                pass
+            _record("hyprctl_" + action, True)
             return ExecutionResult(
                 success=True,
                 stdout=f"hyprctl dispatch {action} {target} — verified",
                 stderr="", exit_code=0, duration_ms=dur,
             )
         else:
+            _record("hyprctl_" + action, False)
             return ExecutionResult(
                 success=False,
                 stdout="", stderr="",
@@ -389,6 +401,31 @@ class HyprlandExecutor(Executor):
 
         return False  # Default: don't trust dispatch — require explicit verification
 
+
+    @staticmethod
+    def _autonomy_record(action_type: str, target: str, success: bool,
+                         detail: str = "") -> None:
+        """Standalone helper for logging outcomes at early return points
+        before the `_record` closure is defined (parse errors, etc.)."""
+        try:
+            conn = _db_connect()
+            status = "success" if success else "failure"
+            log_action(conn, ActionEvent(
+                source="friday",
+                action_type=action_type,
+                target=target,
+                detail=json.dumps({"action": action_type, "target": target,
+                                   "status": status, "error": detail}),
+                confidence="observed",
+                observed_at=_now(),
+            ))
+            record_action_outcome(action_type, success, conn=conn)
+            conn.close()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def verify(self, task, result: ExecutionResult) -> VerificationResult:
         """Post-execution verify: the action reported success and verification

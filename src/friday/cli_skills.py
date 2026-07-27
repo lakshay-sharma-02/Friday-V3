@@ -2,6 +2,7 @@
 
 ``friday skills``              — list all formed skills with their worker status.
 ``friday skills run <name>``   — invoke a formed skill by worker name.
+``friday skills drift``        — analyze all formed skills for degradation.
 """
 
 from __future__ import annotations
@@ -16,10 +17,12 @@ from .runtime.executors import resolve_executor
 
 
 def cmd_skills(args: argparse.Namespace) -> int:
-    """Dispatch ``friday skills [list|run]``."""
+    """Dispatch ``friday skills [list|run|drift]``."""
     action = getattr(args, "action", None)
     if action == "run":
         return _run(args)
+    elif action == "drift":
+        return _drift(args)
     else:
         return _list()
 
@@ -75,9 +78,30 @@ def _list() -> int:
 
         print("Actions:")
         print("  friday skills run <name>    Invoke a formed skill by worker name")
+        print("  friday skills drift         Analyze skills for degradation")
     finally:
         conn.close()
     return 0
+
+
+def _drift(args: argparse.Namespace) -> int:
+    """Run drift detection on all formed skills with sufficient replay history."""
+    from .skill_formation import detect_skill_drift, format_drift_reports
+
+    conn = connect()
+    try:
+        reports = detect_skill_drift(conn)
+        output = format_drift_reports(reports)
+        print(output)
+        unhealthy = sum(1 for r in reports if r.overall_health == "unhealthy")
+        degrading = sum(1 for r in reports if r.overall_health == "degrading")
+        if unhealthy > 0:
+            print()
+            print(f"🔴 {unhealthy} skill(s) need attention. "
+                  f"Run 'friday patterns form --force' to re-form.")
+        return 0 if degrading + unhealthy == 0 else 1
+    finally:
+        conn.close()
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -145,8 +169,6 @@ def _run(args: argparse.Namespace) -> int:
             return 2
 
         # If executor is a ReplayExecutor, set its strategy.
-        # Auto-downgrade is enabled when user omits --on-failure
-        # (args.on_failure is None) and disabled when explicitly passed.
         if hasattr(executor, "_on_failure"):
             if on_failure is None:
                 executor._on_failure = "abort"

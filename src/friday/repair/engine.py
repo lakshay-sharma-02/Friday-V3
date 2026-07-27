@@ -28,7 +28,25 @@ from .models import RepairCandidateEvent, RepairProposal
 
 # Maximum repair depth. A graph whose source already indicates
 # repair_depth >= 2 will escalate rather than auto-drafting.
-MAX_REPAIR_DEPTH = 2
+# Maximum repair depth. Beyond this, the system escalates rather than
+# auto-drafting proposals. Set higher than AUTO_APPROVE_DEPTH so there's
+# still an upper bound beyond auto-approval.
+MAX_REPAIR_DEPTH = 5
+
+# Repair depth threshold for auto-approval (Gap #6 — Repair Escalation). (Gap #6 — Repair Escalation).
+# When a repair candidate's depth reaches AUTO_APPROVE_DEPTH, the repair is
+# auto-approved and auto-executed instead of creating a pending proposal that
+# requires human approval. This prevents the system from requiring manual
+# intervention after repeated failures.
+#
+# With depth=2:
+#   Original run fails   → depth=0 → pending (human approves)
+#   First repair fails   → depth=1 → pending (human approves)
+#   Second repair fails  → depth=2 → AUTO-APPROVE + AUTO-EXECUTE
+#
+# Concretely: after 3 consecutive failures on the same (graph, task), the
+# system recovers without manual intervention.
+AUTO_APPROVE_DEPTH = 2
 
 
 def _get_repair_depth(conn, graph_id: str) -> int:
@@ -141,12 +159,29 @@ def evaluate_repair(
     proposal_id = f"repair-proposal:{candidate.original_graph_id}:{candidate.original_task_id}"
     proposed_goal = f"Repair: fix {candidate.original_task_id} ({candidate.failure_reason})"
 
-    # 1. Check depth cap.
+    # 1. Check depth cap FIRST — hard safety valve against infinite repair loops.
+    #    Beyond MAX_REPAIR_DEPTH, the system escalates (rejects the repair)
+    #    regardless of auto-approval settings. This check takes priority over
+    #    auto-approve so the hard ceiling is always enforced.
     if candidate.repair_depth >= MAX_REPAIR_DEPTH:
         return RepairProposal(
             id=proposal_id,
             candidate=candidate,
             decision="escalate_depth_cap",
+            evidence_ids=list(evidence_ids),
+            proposed_goal=proposed_goal,
+        )
+
+    # 2. Check auto-approval threshold (Gap #6).
+    #    When repair_depth >= AUTO_APPROVE_DEPTH, skip human approval and
+    #    auto-approve + auto-execute. This allows the system to recover from
+    #    repeated failures without manual intervention.
+    #    Must be AFTER the depth cap check so escalation takes priority.
+    if candidate.repair_depth >= AUTO_APPROVE_DEPTH:
+        return RepairProposal(
+            id=proposal_id,
+            candidate=candidate,
+            decision="auto_approve",
             evidence_ids=list(evidence_ids),
             proposed_goal=proposed_goal,
         )
@@ -229,17 +264,140 @@ def _persist_proposal(conn, proposal: RepairProposal) -> None:
     conn.commit()
 
 
-def propose_repair(conn, candidate: RepairCandidateEvent) -> Optional[str]:
-    """Detect + evaluate + persist as pending. Returns proposal id or None.
+def propose_repair(conn, candidate: RepairCandidateEvent,
+                   workspace: str = ".") -> Optional[str]:
+    """Detect + evaluate + persist (or auto-approve + auto-execute).
 
-    All candidates are persisted, regardless of decision type. The decision
-    field distinguishes auto-eligible from escalated proposals. This ensures
-    nothing is lost between CLI invocations — the human can see all candidates
-    via `friday repair pending`.
+    Returns proposal id (or graph id for auto-approved proposals).
+
+    Gap #6 — Repair Escalation:
+    When ``candidate.repair_depth >= AUTO_APPROVE_DEPTH``, the decision is
+    ``auto_approve``. Instead of creating a pending proposal, the repair is
+    automatically approved (re-enters Planning to create a new task graph)
+    AND automatically executed through the RuntimeEngine. This allows the
+    system to recover from repeated failures without manual intervention.
+
+    All candidates with depth < AUTO_APPROVE_DEPTH are persisted as pending
+    proposals, regardless of decision type, so the human can see them via
+    ``friday repair pending``.
     """
     proposal = evaluate_repair(conn, candidate)
+
+    # Gap #6: auto-approve + auto-execute when repair depth reaches threshold.
+    if proposal.decision == "auto_approve":
+        # Persist the proposal as 'auto_approved' for history/audit.
+        _persist_proposal(conn, proposal)
+
+        # Mark as approved immediately (no human review needed).
+        now = now_iso()
+        conn.execute(
+            "UPDATE repair_proposals SET status = 'approved', reviewed_at = ? "
+            "WHERE id = ?",
+            (now, proposal.id),
+        )
+        conn.execute(
+            """INSERT INTO repair_history
+               (proposal_id, event_type, detail, recorded_at)
+               VALUES (?, ?, ?, ?)""",
+            (proposal.id, "auto_approved",
+             f"Auto-approved at depth={candidate.repair_depth} "
+             f"(threshold={AUTO_APPROVE_DEPTH})",
+             now),
+        )
+        conn.commit()
+
+        # Generate the repair graph via the normal approval pipeline.
+        graph_id = approve_repair(conn, proposal.id)
+        if graph_id is None:
+            # Planning pipeline couldn't produce a graph. Log and return None.
+            conn.execute(
+                """INSERT INTO repair_history
+                   (proposal_id, event_type, detail, recorded_at)
+                   VALUES (?, ?, ?, ?)""",
+                (proposal.id, "auto_approve_failed",
+                 f"Planning pipeline failed to produce a graph for "
+                 f"{proposal.proposed_goal}",
+                 now_iso()),
+            )
+            conn.commit()
+            return None
+
+        # Auto-execute the approved repair graph.
+        report = _auto_execute_repair(conn, graph_id, workspace=workspace)
+
+        # Record execution outcome in repair_history.
+        outcome = (
+            "succeeded" if report.failed == 0 else
+            f"completed with {report.failed} failure(s)"
+        )
+        conn.execute(
+            """INSERT INTO repair_history
+               (proposal_id, event_type, detail, recorded_at)
+               VALUES (?, ?, ?, ?)""",
+            (proposal.id, "auto_executed",
+             f"Graph {graph_id} auto-executed: {report.succeeded} succeeded, "
+             f"{report.failed} failed, {report.cancelled} cancelled ({outcome})",
+             now_iso()),
+        )
+        conn.commit()
+
+        return graph_id
+
+    # Normal path: depth < threshold — persist as pending for human review.
     _persist_proposal(conn, proposal)
     return proposal.id
+
+
+def _auto_execute_repair(conn, graph_id: str,
+                          workspace: str = ".") -> "ExecutionReport":
+    """Auto-execute a repair graph through the normal execution pipeline.
+
+    Gap #6: after auto-approval creates a new task graph, this function
+    resolves capabilities, schedules, and runs the graph through the
+    RuntimeEngine — the same path every other goal goes through.
+
+    Returns an ExecutionReport with the outcome. Never raises (exceptions
+    are caught and returned as a failed report).
+    """
+    from ..resolver import CapabilityResolver
+    from ..scheduler.engine import TaskScheduler
+    from ..runtime import RuntimeEngine
+    from ..runtime.models import ExecutionReport
+
+    try:
+        # 1. Resolve capabilities for the new graph.
+        CapabilityResolver(conn).resolve_graph(graph_id)
+
+        # 2. Schedule the graph.
+        sched_result = TaskScheduler(conn).schedule_graph(graph_id)
+        if not sched_result or not sched_result.schedule:
+            return ExecutionReport(
+                session_id="", schedule_id=graph_id,
+                state="failed", started_at="", finished_at="",
+                wave_count=0, duration_ms=0, verification_time_ms=0,
+                stopped_at=graph_id,
+                stop_reason="scheduling failed for auto-executed repair graph",
+                executed=0, succeeded=0, failed=1, cancelled=0,
+                tasks=[], workers_used=[], artifacts=[],
+            )
+
+        # 3. Execute through RuntimeEngine.
+        eng = RuntimeEngine(conn, workspace=workspace)
+        report = eng.run(sched_result.schedule)
+        return report
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).exception(
+            "auto_execute_repair: exception for graph %s: %s", graph_id, exc)
+        return ExecutionReport(
+            session_id="", schedule_id=graph_id,
+            state="failed", started_at="", finished_at="",
+            wave_count=0, duration_ms=0, verification_time_ms=0,
+            stopped_at=graph_id,
+            stop_reason=f"auto-execute exception: {exc}",
+            executed=0, succeeded=0, failed=1, cancelled=0,
+            tasks=[], workers_used=[], artifacts=[],
+        )
 
 
 def approve_repair(conn, proposal_id: str) -> Optional[str]:

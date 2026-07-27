@@ -1,7 +1,18 @@
-"""Tests for the Integration Engine (cross-project integration via the pipeline)."""
+"""Tests for the Cross-Project Integration Engine.
+
+Covers:
+1. Input validation (too few, too many, non-existent, empty)
+2. Multi-repo support (2-8 repos)
+3. Correlation-aware behavior (positive score, low score warnings)
+4. Plan + Task Graph creation (persisted in DB)
+5. Milestone content in generated plans
+6. IntegrateResult formatting
+"""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -9,266 +20,350 @@ import pytest
 from friday.db import connect
 
 
-def _db():
-    """Create a fresh in-memory database for each test."""
-    return connect(":memory:")
+# ──────────────────────────────────────────────────────────────────────
+# Fixtures
+# ──────────────────────────────────────────────────────────────────────
 
 
-# ---------------------------------------------------------------------------
-# IntegrationEngine tests
-# ---------------------------------------------------------------------------
+@pytest.fixture
+def db():
+    """In-memory DB with test repos."""
+    conn = connect(Path(":memory:"))
+    _seed_repos(conn)
+    return conn
 
 
-class TestIntegrationEngine:
-    def test_engine_import(self):
-        """IntegrationEngine can be imported."""
+def _seed_repos(conn) -> None:
+    """Insert 3 test repos with languages, tech, and architecture."""
+    from friday.db import now_iso
+
+    now = now_iso()
+
+    # Repositories
+    cur = conn.execute(
+        "INSERT INTO repositories (name, path, ingestion_time) VALUES (?, ?, ?)",
+        ("vivaha", "/tmp/vivaha", now),
+    )
+    vid = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO repositories (name, path, ingestion_time) VALUES (?, ?, ?)",
+        ("aether", "/tmp/aether", now),
+    )
+    aid = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO repositories (name, path, ingestion_time) VALUES (?, ?, ?)",
+        ("jarvis", "/tmp/jarvis", now),
+    )
+    jid = cur.lastrowid
+
+    # Languages
+    for rid, lang, count in [
+        (vid, "Python", 100), (vid, "TypeScript", 30),
+        (aid, "Python", 80), (aid, "Rust", 20),
+        (jid, "Python", 50), (jid, "Go", 40),
+    ]:
+        conn.execute(
+            "INSERT INTO languages (repo_id, language, file_count) VALUES (?, ?, ?)",
+            (rid, lang, count),
+        )
+
+    # Technologies — vivaha and aether both use FastAPI → shared overlap
+    for rid, tech in [
+        (vid, "FastAPI"), (vid, "SQLite"),
+        (aid, "FastAPI"), (aid, "PostgreSQL"),
+        (jid, "Django"), (jid, "PostgreSQL"),
+    ]:
+        conn.execute(
+            "INSERT INTO technologies (repo_id, tech, evidence) VALUES (?, ?, 'detected')",
+            (rid, tech),
+        )
+
+    # Architecture
+    conn.execute(
+        "INSERT INTO architecture (repo_id, architecture, evidence) VALUES (?, ?, ?)",
+        (vid, "Microservices with REST APIs", "detected"),
+    )
+    conn.execute(
+        "INSERT INTO architecture (repo_id, architecture, evidence) VALUES (?, ?, ?)",
+        (aid, "Modular monolith with async workers", "detected"),
+    )
+
+    # Snapshots for recency
+    for path in ["/tmp/vivaha", "/tmp/aether", "/tmp/jarvis"]:
+        conn.execute(
+            "INSERT INTO snapshots (observed_at, repo_path) VALUES (?, ?)",
+            (now, path),
+        )
+
+    conn.commit()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Input validation
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestValidation:
+    def test_requires_at_least_two(self, db):
         from friday.integration import IntegrationEngine
-        assert IntegrationEngine is not None
 
-    def test_integrate_result_dataclass(self):
-        """IntegrateResult has expected fields."""
-        from friday.integration.engine import IntegrateResult
-        r = IntegrateResult(
-            graph_id="test:123",
-            repo_a="repo-a",
-            repo_b="repo-b",
-            overlap_found=True,
-            overlap_kind="shared dependency",
-            description="Both use Python.",
-            confidence="Medium",
-            basis=["Shared: Python"],
-            note=None,
+        eng = IntegrationEngine(db)
+        with pytest.raises(ValueError, match="at least 2"):
+            eng.integrate("vivaha")
+
+    def test_empty_list(self, db):
+        from friday.integration import IntegrationEngine
+        eng = IntegrationEngine(db)
+        with pytest.raises(ValueError, match="at least 2"):
+            eng.integrate()
+
+    def test_whitespace_stripped(self, db):
+        from friday.integration import IntegrationEngine
+        eng = IntegrationEngine(db)
+        with pytest.raises(ValueError, match="at least 2"):
+            eng.integrate("vivaha", "  ")
+
+    def test_non_existent_repo_raises(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        with pytest.raises(ValueError, match="not found"):
+            eng.integrate("vivaha", "nonexistent")
+
+    def test_max_repos_threshold(self, db):
+        from friday.integration import IntegrationEngine, _MAX_REPOS
+
+        eng = IntegrationEngine(db)
+        names = [f"repo-{n}" for n in range(_MAX_REPOS + 1)]
+        with pytest.raises(ValueError, match="Max"):
+            eng.integrate(*names)
+
+    def test_duplicates_not_allowed_in_cli(self):
+        """CLI layer rejects duplicates — verify the check works."""
+        names = ["vivaha", "vivaha"]
+        assert len(set(r.lower() for r in names)) != len(names)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Multi-repo support
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestMultiRepo:
+    def test_two_repos(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
+        assert len(result.repo_names) == 2
+        assert "vivaha" in result.repo_names
+        assert "aether" in result.repo_names
+
+    def test_three_repos(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether", "jarvis")
+        assert len(result.repo_names) == 3
+
+    def test_repo_names_integrity(self, db):
+        """Verify repo_names match input order."""
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("jarvis", "vivaha", "aether")
+        assert result.repo_names == ["jarvis", "vivaha", "aether"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Correlation / synthesis integration
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestCorrelation:
+    def test_returns_positive_score_for_overlapping_repos(self, db):
+        """vivaha + aether share FastAPI → overlap found → score > 0."""
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
+        assert result.correlation_score > 0
+        # The pairwise synthesis should find the FastAPI overlap
+        assert result.overlap_found is True
+
+    def test_synthesis_fields_populated(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
+        # overlap fields should be set (vivaha↔aether share FastAPI)
+        assert result.overlap_kind is not None
+        assert result.confidence in ("Strong", "Medium", "Weak")
+
+    def test_basis_includes_shared_technology(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
+        # basis should include FastAPI
+        basis_text = " ".join(result.basis).lower()
+        assert "fastapi" in basis_text
+
+    def test_warning_on_no_overlap(self, db):
+        """When repos share no technologies, a warning is emitted."""
+        from friday.integration import IntegrationEngine
+        from friday.db import now_iso
+
+        now = now_iso()
+        conn = db
+        cur = conn.execute(
+            "INSERT INTO repositories (name, path, ingestion_time) VALUES (?, ?, ?)",
+            ("unrelated", "/tmp/unrelated", now),
         )
-        assert r.graph_id == "test:123"
-        assert r.repo_a == "repo-a"
-        assert r.overlap_found is True
-        assert "Python" in r.description
-
-    def test_integrate_result_text_no_overlap(self):
-        """to_text works when no overlap found."""
-        from friday.integration.engine import IntegrateResult
-        r = IntegrateResult(
-            graph_id=None,
-            repo_a="a", repo_b="b",
-            overlap_found=False,
-            overlap_kind=None,
-            description=None,
-            confidence="Weak",
-            basis=[],
-            note="No LLM available.",
-        )
-        text = r.to_text()
-        assert "No meaningful structural overlap" in text
-
-    def test_integrate_result_text_with_graph(self):
-        """to_text includes next steps when graph_id is set."""
-        from friday.integration.engine import IntegrateResult
-        r = IntegrateResult(
-            graph_id="integ:abc123",
-            repo_a="foo", repo_b="bar",
-            overlap_found=True,
-            overlap_kind="complementary",
-            description="foo produces input bar consumes.",
-            confidence="Strong",
-            basis=["Architecture: pipeline"],
-            note=None,
-        )
-        text = r.to_text()
-        assert "Next steps" in text
-        assert "graph review" in text
-        assert "graph review approve" in text
-
-    def test_integrate_calls_synthesis_and_graph(self):
-        """IntegrationEngine.integrate() runs synthesis and generates a graph."""
-        from friday.integration.engine import IntegrationEngine
-
-        # Set up a real in-memory DB with two repos so synthesis doesn't fail.
-        conn = _db()
+        uid = cur.lastrowid
         conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("repo-a", "/tmp/repo-a", "2026-01-01T00:00:00"),
+            "INSERT INTO languages (repo_id, language, file_count) VALUES (?, ?, ?)",
+            (uid, "Ruby", 100),
         )
         conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("repo-b", "/tmp/repo-b", "2026-01-01T00:00:00"),
+            "INSERT INTO technologies (repo_id, tech, evidence) VALUES (?, ?, 'detected')",
+            (uid, "Sinatra"),
+        )
+        conn.execute(
+            "INSERT INTO snapshots (observed_at, repo_path) VALUES (?, ?)",
+            (now, "/tmp/unrelated"),
         )
         conn.commit()
 
-        engine = IntegrationEngine(conn)
-        result = engine.integrate("repo-a", "repo-b")
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "unrelated")
+        # These share nothing (Python vs Ruby, FastAPI vs Sinatra)
+        # The warning should fire for low correlation
+        assert len(result.warnings) >= 1
 
-        # Should produce a result with a graph.
-        assert result is not None
-        assert result.repo_a == "repo-a"
-        assert result.repo_b == "repo-b"
 
-        # The graph should exist in the DB with provenance tag.
-        row = conn.execute(
-            "SELECT id, source FROM task_graphs WHERE source LIKE 'integration:%'"
-        ).fetchone()
-        assert row is not None
-        assert "repo-a" in row["source"]
-        assert "repo-b" in row["source"]
+# ──────────────────────────────────────────────────────────────────────
+# Plan + Task Graph creation
+# ──────────────────────────────────────────────────────────────────────
 
-        conn.close()
 
-    def test_integrate_with_no_repos(self):
-        """IntegrationEngine gracefully handles missing repos."""
-        from friday.integration.engine import IntegrationEngine
+class TestPlanAndGraph:
+    def test_creates_plan_and_graph_in_db(self, db):
+        from friday.integration import IntegrationEngine
 
-        conn = _db()
-        engine = IntegrationEngine(conn)
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
 
-        # With no repos, synthesis still runs (returns no-overlap result).
-        result = engine.integrate("nonexistent-a", "nonexistent-b")
-
-        assert result is not None
-        # No overlap because repos don't exist in the DB.
-        assert not result.overlap_found
-        # The graph should still be generated (a minimal one).
+        assert result.plan_id is not None
         assert result.graph_id is not None
 
-        conn.close()
+        # Verify plan exists in DB
+        row = db.execute(
+            "SELECT id FROM plans WHERE id = ?", (result.plan_id,)
+        ).fetchone()
+        assert row is not None
 
-    def test_integrate_provenance_tagged(self):
-        """IntegrationEngine tags graphs with source='integration:...'."""
-        from friday.integration.engine import IntegrationEngine
-
-        conn = _db()
-        conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("alpha", "/tmp/alpha", "2026-01-01T00:00:00"),
-        )
-        conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("beta", "/tmp/beta", "2026-01-01T00:00:00"),
-        )
-        conn.commit()
-
-        engine = IntegrationEngine(conn)
-        result = engine.integrate("alpha", "beta")
-
-        row = conn.execute(
-            "SELECT source FROM task_graphs WHERE id = ?",
+        # Verify graph exists in DB
+        row = db.execute(
+            "SELECT id, status FROM task_graphs WHERE id = ?",
             (result.graph_id,),
         ).fetchone()
         assert row is not None
-        assert row["source"] == "integration:alpha/beta"
+        assert row["status"] == "proposal"
 
-        conn.close()
+    def test_plan_has_milestones(self, db):
+        from friday.integration import IntegrationEngine
 
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
 
-# ---------------------------------------------------------------------------
-# CLI tests
-# ---------------------------------------------------------------------------
-
-
-class TestCliIntegration:
-    def test_cli_integrate_error_missing_args(self, capsys):
-        """CLI handler shows error with no args."""
-        from friday.cli_integration import cmd_integrate
-        import argparse
-
-        args = argparse.Namespace(repo_a=None, repo_b=None)
-        rc = cmd_integrate(args)
-        assert rc == 2
-        captured = capsys.readouterr()
-        assert "error" in captured.err
-
-    def test_cli_integrate_same_repo(self, capsys):
-        """CLI handler rejects same-repo integration."""
-        from friday.cli_integration import cmd_integrate
-        import argparse
-
-        args = argparse.Namespace(repo_a="same", repo_b="same")
-        rc = cmd_integrate(args)
-        assert rc == 2
-
-    def test_cli_integrate_invalid_repo(self, capsys):
-        """CLI handler handles nonexistent repos gracefully."""
-        from friday.cli_integration import cmd_integrate
-        import argparse
-
-        # This opens the real DB, which is fine — it won't find the repos.
-        args = argparse.Namespace(repo_a="zzz_nonexistent_aaa", repo_b="zzz_nonexistent_bbb")
-        rc = cmd_integrate(args)
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "Integration:" in captured.out
-
-
-# ---------------------------------------------------------------------------
-# Pipeline compatibility tests
-# ---------------------------------------------------------------------------
-
-
-class TestPipelineIntegration:
-    def test_integrate_graph_appears_in_review(self):
-        """Graph generated by IntegrationEngine is persisted with correct source tag."""
-        from friday.integration.engine import IntegrationEngine
-
-        conn = _db()
-        conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("proj-x", "/tmp/proj-x", "2026-01-01T00:00:00"),
-        )
-        conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("proj-y", "/tmp/proj-y", "2026-01-01T00:00:00"),
-        )
-        conn.commit()
-
-        engine = IntegrationEngine(conn)
-        result = engine.integrate("proj-x", "proj-y")
-
-        # Verify the provenance tag in the DB (not on the in-memory TaskGraph).
-        row = conn.execute(
-            "SELECT id, source FROM task_graphs WHERE id = ?",
-            (result.graph_id,),
+        assert result.plan_id is not None
+        row = db.execute(
+            "SELECT milestones FROM plans WHERE id = ?", (result.plan_id,)
         ).fetchone()
-        assert row is not None, "Graph should exist in task_graphs table"
-        assert row["source"] == "integration:proj-x/proj-y", \
-            f"Expected source 'integration:proj-x/proj-y', got '{row['source']}'"
+        assert row is not None
+        milestones = json.loads(row["milestones"])
+        assert len(milestones) >= 3
+        # First milestone should reference architecture analysis
+        assert "analyse" in milestones[0]["title"].lower()
+        assert "vivaha" in milestones[0]["title"]
 
-        # The graph should be findable via TaskGraphEngine.
-        from friday.planning import TaskGraphEngine
-        graph_eng = TaskGraphEngine(conn)
-        graph = graph_eng.graph_by_id(result.graph_id)
-        assert graph is not None
-        conn.close()
+    def test_docs_generated_listed_in_result(self, db):
+        from friday.integration import IntegrationEngine
 
-    def test_integrate_graph_has_tasks(self):
-        """Graph generated by IntegrationEngine has expected task structure."""
-        from friday.integration.engine import IntegrationEngine
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
 
-        conn = _db()
-        conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("app-a", "/tmp/app-a", "2026-01-01T00:00:00"),
-        )
-        conn.execute(
-            "INSERT INTO repositories (name, path, ingestion_time) "
-            "VALUES (?, ?, ?)",
-            ("app-b", "/tmp/app-b", "2026-01-01T00:00:00"),
-        )
-        conn.commit()
+        # Should have at least 3 docs (analysis, patterns, plan)
+        assert len(result.docs_generated) >= 3
+        # All doc paths should be unique
+        assert len(result.docs_generated) == len(set(result.docs_generated))
 
-        engine = IntegrationEngine(conn)
-        result = engine.integrate("app-a", "app-b")
+    def test_three_repo_graph_created(self, db):
+        from friday.integration import IntegrationEngine
 
-        # The graph should have tasks and edges in the DB.
-        tasks = conn.execute(
-            "SELECT COUNT(*) AS c FROM tasks WHERE graph_id = ?",
-            (result.graph_id,),
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether", "jarvis")
+
+        assert result.graph_id is not None
+        row = db.execute(
+            "SELECT id FROM task_graphs WHERE id = ?", (result.graph_id,)
         ).fetchone()
-        assert tasks is not None
-        assert tasks["c"] > 0  # At least one task.
+        assert row is not None
 
-        conn.close()
+
+# ──────────────────────────────────────────────────────────────────────
+# IntegrateResult formatting
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestResultFormatting:
+    def test_to_text_includes_goal_and_repos(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
+        text = result.to_text()
+
+        assert "vivaha" in text
+        assert "aether" in text
+        assert "Integrate" in text
+
+    def test_to_text_includes_correlation_score(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
+        text = result.to_text()
+
+        assert str(round(result.correlation_score, 3)) in text
+
+    def test_to_text_mentions_review(self, db):
+        from friday.integration import IntegrationEngine
+
+        eng = IntegrationEngine(db)
+        result = eng.integrate("vivaha", "aether")
+        text = result.to_text()
+
+        # Should mention the graph review command
+        assert "graph review" in text.lower()
+
+    def test_to_text_includes_warnings(self, db):
+        """When warnings are present, they appear in the text."""
+        from friday.integration import IntegrationEngine, IntegrateResult
+
+        result = IntegrateResult(
+            goal="test",
+            repo_names=["a", "b"],
+            graph_id="graph:test",
+            plan_id="plan:test",
+            correlation_score=0.12,
+            overlap_found=False,
+            overlap_kind=None,
+            overlap_description=None,
+            confidence="Weak",
+            basis=[],
+            warnings=["Low structural correlation (0.12) among repos."],
+        )
+        text = result.to_text()
+        assert "Low structural" in text

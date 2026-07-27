@@ -12,6 +12,7 @@ Public surface:
 """
 
 from .engine import (
+    AUTO_APPROVE_DEPTH,
     MAX_REPAIR_DEPTH,
     approve_repair,
     detect_repair_candidates,
@@ -25,6 +26,7 @@ from .models import RepairCandidateEvent, RepairProposal
 __all__ = [
     "RepairCandidateEvent",
     "RepairProposal",
+    "AUTO_APPROVE_DEPTH",
     "MAX_REPAIR_DEPTH",
     "detect_repair_candidates",
     "evaluate_repair",

@@ -31,6 +31,7 @@ from typing import Optional
 from .models import ExecutionResult, Executor, VerificationResult
 from .confirm_gate import ActionLevel, get_action_level, prompt_confirm
 from ..action_log import ActionEvent, log_action, now_iso as _now
+from ..autonomy import record_action_outcome
 from ..db import connect as _db_connect
 
 
@@ -106,6 +107,7 @@ class BrowserExecutor(Executor):
     def execute(self, task) -> ExecutionResult:
         raw = _payload(task).strip()
         if not raw:
+            self._autonomy_record("browser_parse", "", False, "empty payload")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=0,
@@ -116,6 +118,7 @@ class BrowserExecutor(Executor):
         try:
             obj = json.loads(raw)
         except (ValueError, TypeError):
+            self._autonomy_record("browser_parse", "", False, "bad JSON")
             return ExecutionResult(
                 success=False, stdout="", stderr=raw[:200],
                 exit_code=None, duration_ms=0,
@@ -126,6 +129,7 @@ class BrowserExecutor(Executor):
         target = (obj.get("target") or "").strip()
         value = obj.get("value", "")
         if not action:
+            self._autonomy_record("browser_parse", target or "", False, "no action field")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=0,
@@ -134,6 +138,29 @@ class BrowserExecutor(Executor):
 
         t0 = time.monotonic()
 
+        # Helper: log action outcome + record for autonomy escalation.
+        def _record(success: bool, err: str = "") -> None:
+            try:
+                conn = _db_connect()
+                status = "success" if success else "failure"
+                log_action(conn, ActionEvent(
+                    source="friday",
+                    action_type="browser_" + action,
+                    target=target,
+                    detail=json.dumps({"action": action, "target": target,
+                                       "value": str(value)[:200] if value else "",
+                                       "status": status, "error": err}),
+                    confidence="observed",
+                    observed_at=_now(),
+                ))
+                record_action_outcome("browser_" + action, success, conn=conn)
+                conn.close()
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
         # --- CONFIRM GATE: block before any side-effecting action ---
         if not prompt_confirm(
             action=action,
@@ -141,6 +168,7 @@ class BrowserExecutor(Executor):
             worker_id=self.worker_id,
             skip_prompt=False,
         ):
+            _record(False, "cancelled by user")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=int((time.monotonic() - t0) * 1000),
@@ -149,6 +177,7 @@ class BrowserExecutor(Executor):
 
         # --- Connect to browser ---
         if not self._ensure_connected():
+            _record(False, "could not connect to browser")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=int((time.monotonic() - t0) * 1000),
@@ -170,12 +199,14 @@ class BrowserExecutor(Executor):
                 take_screenshot,
             )
         except CDPError as e:
+            _record(False, f"CDP error: {e}")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=int((time.monotonic() - t0) * 1000),
                 error=f"browser CDP error: {e}",
             )
         except Exception as e:
+            _record(False, f"{type(e).__name__}: {e}")
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=int((time.monotonic() - t0) * 1000),
@@ -185,16 +216,7 @@ class BrowserExecutor(Executor):
         dur = int((time.monotonic() - t0) * 1000)
 
         if result["success"]:
-            try:
-                conn = _db_connect()
-                log_action(conn, ActionEvent(
-                    source="friday", action_type="browser_" + action,
-                    target=target, detail=json.dumps({"action": action, "target": target, "value": str(value)[:200] if value else ""}),
-                    confidence="observed",
-                    observed_at=_now(),
-                ))
-            except Exception:
-                pass
+            _record(True)
             stdout_parts = [f"browser {action}"]
             if result.get("output"):
                 stdout_parts.append(f": {result['output'][:200]}")
@@ -203,10 +225,12 @@ class BrowserExecutor(Executor):
                 exit_code=0, duration_ms=dur,
             )
         else:
+            err = result.get("error", f"browser {action} failed")
+            _record(False, err)
             return ExecutionResult(
                 success=False, stdout="", stderr="",
                 exit_code=None, duration_ms=dur,
-                error=result.get("error", f"browser {action} failed"),
+                error=err,
             )
 
     def _dispatch_action(self, action, target, value,
@@ -274,6 +298,31 @@ class BrowserExecutor(Executor):
 
         else:
             return {"success": False, "error": f"browser worker: unknown action '{action}'"}
+
+    @staticmethod
+    def _autonomy_record(action_type: str, target: str, success: bool,
+                         detail: str = "") -> None:
+        """Standalone helper for logging outcomes at early return points
+        before the `_record` closure is defined (parse errors, etc.)."""
+        try:
+            conn = _db_connect()
+            status = "success" if success else "failure"
+            log_action(conn, ActionEvent(
+                source="friday",
+                action_type=action_type,
+                target=target,
+                detail=json.dumps({"action": action_type, "target": target,
+                                   "status": status, "error": detail}),
+                confidence="observed",
+                observed_at=_now(),
+            ))
+            record_action_outcome(action_type, success, conn=conn)
+            conn.close()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def verify(self, task, result: ExecutionResult) -> VerificationResult:
         return VerificationResult(

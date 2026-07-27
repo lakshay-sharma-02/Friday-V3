@@ -7,6 +7,7 @@ replayable skills registered in the shared workers registry.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Optional
 from uuid import uuid4
 
@@ -800,3 +801,265 @@ class _MiniTask:
         self.runtime_payload = payload
         self.runtime_hint = hint
         self.manifest_ref = ref
+
+
+# ---------------------------------------------------------------------------
+# Drift Detection — detect degrading skills by comparing recent invocations
+# against formation-time exemplars
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DriftReport:
+    """Drift assessment for one formed skill."""
+
+    skill_id: int
+    worker_name: str
+    worker_id: str
+    overall_health: str  # "healthy", "degrading", "unhealthy"
+    invocation_count: int
+    recent_invocations: int  # how many invocations were analyzed
+    overall_success_rate: float  # 0.0 to 1.0
+    step_breakdown: list[dict]  # per-step: step_idx, action, success_rate, failure_count, exemplar_stable
+    recommendation: str  # what to do about this skill
+
+
+def detect_skill_drift(conn) -> list[DriftReport]:
+    """Analyze all formed skills for signs of degradation.
+
+    For each formed skill with at least 3 invocations, queries the last 10
+    ``skill_replay`` action log entries. Computes per-step success rates
+    and compares against formation-time exemplar stability.
+
+    Health levels:
+      - ``healthy``: overall success rate ≥ 80% in recent invocations
+      - ``degrading``: overall success rate 50-80%, or any step failing in
+        more than 2 recent invocations
+      - ``unhealthy``: overall success rate < 50%, or any step failing in
+        more than 5 recent invocations
+
+    Returns a list of ``DriftReport`` objects (empty if no skills with
+    sufficient replay history exist).
+    """
+    from collections import Counter
+    from datetime import datetime, timezone
+
+    reports: list[DriftReport] = []
+
+    try:
+        skills = conn.execute(
+            """SELECT fs.id, fs.task_graph, fs.exemplars,
+                      fs.invocation_count, fs.last_invoked_at,
+                      w.id AS worker_id, w.name AS worker_name
+               FROM formed_skills fs
+               JOIN workers w
+                 ON w.manifest_ref = 'formed_skill:' || CAST(fs.id AS TEXT)
+               WHERE w.kind = 'formed_skill'"""
+        ).fetchall()
+
+        if not skills:
+            return reports
+
+        for skill in skills:
+            skill_id = skill["id"]
+            inv_count = skill["invocation_count"] or 0
+            worker_name = skill["worker_name"] or f"skill_{skill_id}"
+            worker_id = skill["worker_id"] or ""
+
+            # Need at least 3 invocations for meaningful analysis.
+            if inv_count < 3:
+                continue
+
+            # Parse formation-time exemplars for baseline stability.
+            exemplars_raw = skill["exemplars"] or "{}"
+            try:
+                exemplars = json.loads(exemplars_raw) if isinstance(exemplars_raw, str) else exemplars_raw
+            except (json.JSONDecodeError, TypeError):
+                exemplars = {}
+
+            # Build exemplar stability map: step_key -> {'stable': bool, 'consensus': float}
+            exemplar_stability: dict[str, dict] = {}
+            for pos_key, pos_data in exemplars.items():
+                if isinstance(pos_data, dict):
+                    exemplar_stability[str(pos_key)] = {
+                        "stable": pos_data.get("stable", False),
+                        "consensus": pos_data.get("consensus", 1.0),
+                        "default": pos_data.get("default", ""),
+                    }
+
+            # Query recent skill_replay entries with matching skill_id.
+            recent = conn.execute(
+                """SELECT target, detail, observed_at
+                   FROM actions
+                   WHERE action_type = 'skill_replay'
+                   AND target LIKE '%skill_id%'
+                   ORDER BY observed_at DESC LIMIT 10""",
+            ).fetchall()
+
+            # Filter to rows for THIS skill_id.
+            target_marker = f'"skill_id": {skill_id}'
+            matching = []
+            for r in recent:
+                t = r["target"] if isinstance(r["target"], str) else json.dumps(r["target"])
+                if target_marker in t:
+                    matching.append(r)
+
+            if len(matching) < 3:
+                # Not enough replay history for drift analysis.
+                continue
+
+            # Analyze per-step outcomes across all matching entries.
+            step_stats: dict[str, dict] = {}  # step_idx -> {total, failures}
+            step_action_map: dict[str, str] = {}  # step_idx -> action_type
+            total_invocations = len(matching)
+            total_successes = 0
+
+            for r in matching:
+                try:
+                    detail = json.loads(r["detail"]) if isinstance(r["detail"], str) else dict(r["detail"])
+                except (json.JSONDecodeError, TypeError):
+                    detail = {}
+
+                # The "succeeded" flag is in the TARGET JSON, not the detail.
+                try:
+                    target_data = json.loads(r["target"]) if isinstance(r["target"], str) else dict(r["target"])
+                    invocation_succeeded = target_data.get("succeeded", False) if isinstance(target_data, dict) else False
+                except (json.JSONDecodeError, TypeError):
+                    invocation_succeeded = False
+
+                step_results = detail.get("results", []) if isinstance(detail, dict) else []
+
+                if invocation_succeeded:
+                    total_successes += 1
+
+                for sr in step_results:
+                    step_i = sr.get("step")
+                    if step_i is None:
+                        continue
+                    sk = str(step_i)
+                    if sk not in step_stats:
+                        step_stats[sk] = {"total": 0, "failures": 0}
+                    step_stats[sk]["total"] += 1
+                    if not sr.get("success"):
+                        step_stats[sk]["failures"] += 1
+                    # Capture action type from the first occurrence.
+                    if sk not in step_action_map:
+                        step_action_map[sk] = sr.get("action", "?")
+
+            if not step_stats:
+                continue
+
+            overall_success_rate = total_successes / max(total_invocations, 1)
+
+            # Build per-step breakdown.
+            step_breakdown: list[dict] = []
+            for sk in sorted(step_stats.keys(), key=int):
+                stats = step_stats[sk]
+                total = stats["total"]
+                failures = stats["failures"]
+                success_rate = (total - failures) / max(total, 1)
+                exemplar_info = exemplar_stability.get(str(sk), {})
+                step_breakdown.append({
+                    "step_idx": int(sk),
+                    "action": step_action_map.get(sk, "?"),
+                    "total": total,
+                    "failures": failures,
+                    "success_rate": round(success_rate, 3),
+                    "exemplar_stable": exemplar_info.get("stable", False),
+                    "exemplar_consensus": exemplar_info.get("consensus", 1.0),
+                })
+
+            # Determine health level.
+            max_step_failures = max((s["failures"] for s in step_breakdown), default=0)
+
+            if overall_success_rate < 0.5 or max_step_failures > 5:
+                overall_health = "unhealthy"
+            elif overall_success_rate < 0.8 or max_step_failures > 2:
+                overall_health = "degrading"
+            else:
+                overall_health = "healthy"
+
+            # Generate recommendation.
+            if overall_health == "unhealthy":
+                recommendation = (
+                    f"This skill has a {overall_success_rate:.0%} success rate. "
+                    "Consider re-forming it with 'friday patterns form --force' "
+                    "to capture current workflows, or delete it if the workflow "
+                    "is no longer relevant."
+                )
+            elif overall_health == "degrading":
+                failing_steps = [s["step_idx"] for s in step_breakdown if s["success_rate"] < 0.5]
+                if failing_steps:
+                    steps_str = ", ".join(str(s) for s in failing_steps)
+                    recommendation = (
+                        f"Step(s) {steps_str} are failing frequently. "
+                        "The ReplayExecutor will auto-skip these steps. "
+                        "If failures persist, consider re-forming the skill."
+                    )
+                else:
+                    recommendation = (
+                        "Success rate is acceptable but below optimal. "
+                        "Monitor for further degradation."
+                    )
+            else:
+                recommendation = "Skill is performing well. No action needed."
+
+            reports.append(DriftReport(
+                skill_id=skill_id,
+                worker_name=worker_name,
+                worker_id=worker_id,
+                overall_health=overall_health,
+                invocation_count=inv_count,
+                recent_invocations=total_invocations,
+                overall_success_rate=round(overall_success_rate, 3),
+                step_breakdown=step_breakdown,
+                recommendation=recommendation,
+            ))
+
+    except Exception:
+        pass
+
+    return reports
+
+
+def format_drift_reports(reports: list[DriftReport]) -> str:
+    """Render drift reports as a human-readable summary."""
+    if not reports:
+        return "No skills with sufficient replay history for drift analysis."
+
+    lines = ["Skill Drift Analysis", "=" * 40, ""]
+
+    healthy = [r for r in reports if r.overall_health == "healthy"]
+    degrading = [r for r in reports if r.overall_health == "degrading"]
+    unhealthy = [r for r in reports if r.overall_health == "unhealthy"]
+
+    if unhealthy:
+        lines.append(f"🔴 Unhealthy ({len(unhealthy)}):")
+        for r in unhealthy:
+            lines.append(f"  {r.worker_name}")
+            lines.append(f"    Success rate: {r.overall_success_rate:.0%} over {r.recent_invocations} invocations")
+            lines.append(f"    Recommendation: {r.recommendation}")
+        lines.append("")
+
+    if degrading:
+        lines.append(f"🟡 Degrading ({len(degrading)}):")
+        for r in degrading:
+            lines.append(f"  {r.worker_name}")
+            lines.append(f"    Success rate: {r.overall_success_rate:.0%} over {r.recent_invocations} invocations")
+            failing = [s for s in r.step_breakdown if s["success_rate"] < 0.8]
+            if failing:
+                lines.append(f"    Failing steps: {', '.join(f'#{s["step_idx"]} ({s["action"]})' for s in failing)}")
+            lines.append(f"    Recommendation: {r.recommendation}")
+        lines.append("")
+
+    if healthy:
+        lines.append(f"🟢 Healthy ({len(healthy)}):")
+        for r in healthy:
+            lines.append(f"  {r.worker_name} — {r.overall_success_rate:.0%} success rate")
+        lines.append("")
+
+    summary = f"{len(healthy)} healthy, {len(degrading)} degrading, {len(unhealthy)} unhealthy"
+    lines.append("─" * 40)
+    lines.append(f"Summary: {summary}")
+
+    return "\n".join(lines)

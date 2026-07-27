@@ -687,12 +687,21 @@ class TaskGraphEngine:
 
         Idempotent on goal: recompiling REPLACES the same graph row and appends
         a snapshot to task_history.
+
+        When workspace observations are available, the compiler enriches task
+        inputs with real file paths from the workspace index (Gap #1 fix —
+        planner context-blindness).
         """
         if generated_at is None:
             generated_at = now_iso()
 
         plan = self._plan_eng.generate(goal, generated_at=generated_at)
-        graph = compile_plan(plan, generated_at=generated_at)
+
+        # Query the most recent workspace observations for planner context.
+        ws_obs = self._workspace_observations()
+
+        graph = compile_plan(plan, generated_at=generated_at,
+                             workspace_observations=ws_obs)
 
         # Enforce the frozen Task Graph contract before persisting. A malformed
         # graph must fail loudly, not silently enter the execution pipeline.
@@ -713,6 +722,31 @@ class TaskGraphEngine:
         self._record_history(generated_at, graph, prev)
         self._record_evolution(generated_at, graph, prev)
         return graph
+
+    def _workspace_observations(self) -> list:
+        """Query workspace observations for planner context.
+
+        Returns observation dicts with ``source == 'workspace'``, ordered by
+        observed_at descending (most recent first). Caps at 1000 rows to keep
+        the query bounded. These are the file-path facts emitted by the
+        WorkspaceObserver.
+
+        Unlike ``latest_observations()`` (which returns only the single most
+        recent timestamp across ALL sources), this query filters by source
+        directly so workspace observations are available even when other
+        observers ran at slightly different timestamps.
+
+        Returns an empty list if no observations exist yet (graceful fallback
+        — planning continues without workspace context).
+        """
+        try:
+            rows = self.conn.execute(
+                "SELECT * FROM observations WHERE source = 'workspace' "
+                "ORDER BY observed_at DESC LIMIT 1000"
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
 
     def _persist(self, g: TaskGraph, prev_created: str) -> None:
         graph_row = TaskGraphRow(
