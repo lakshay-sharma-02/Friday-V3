@@ -18,18 +18,15 @@ from typing import Dict, List, Optional, Tuple
 
 from ..db import (
     atomic,
-    InitiativeEvolutionRow,
     InitiativeHistoryRow,
     InitiativeRelationshipRow,
     get_all_initiatives,
     get_all_understanding,
     get_initiative_by_id,
     insert_initiative,
-    insert_initiative_evolution,
     insert_initiative_history,
     insert_initiative_relationships,
-    initiative_evolution_all,
-    initiative_evolution_for,
+    insert_layer_history,
     initiative_history_for,
     initiative_relationships_all,
     latest_initiative_snapshot,
@@ -312,15 +309,23 @@ class InitiativeEngine:
         contributors = self._build_contributors(i, understanding, knowledge)
         score, breakdown = explain_score(contributors, i.participating_repositories)
         hist = initiative_history_for(self.conn, iid)
-        evo = initiative_evolution_for(self.conn, iid)
+        evo = list(self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'initiative' AND entity_id = ? "
+            "ORDER BY recorded_at ASC", (iid,)).fetchall())
         rels = [
             r for r in initiative_relationships_all(self.conn)
             if iid in (r.parent_ids.split(",") + r.child_ids.split(","))
         ]
-        return i, breakdown, hist, evo, rels
+        return i, breakdown, hist, [dict(r) for r in evo], rels
 
-    def timeline(self) -> List[InitiativeEvolutionRow]:
-        return initiative_evolution_all(self.conn)
+    def timeline(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'initiative' "
+            "ORDER BY recorded_at DESC LIMIT 100"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def relationships(self) -> List[InitiativeRelationshipRow]:
         return initiative_relationships_all(self.conn)
@@ -328,8 +333,9 @@ class InitiativeEngine:
     # --- internals ------------------------------------------------------------
 
     def _evolution_events(self):
-        from ..db import evolution_events_all
-        return evolution_events_all(self.conn)
+        # Evolution events no longer exist as a dedicated table.
+        # Knowledge evolution is tracked via layer_history when needed.
+        return []
 
     def _merge_candidates(self, candidates: List[Candidate]) -> Dict[str, Candidate]:
         """Merge candidates with the SAME title, resolving type by majority vote.
@@ -635,46 +641,49 @@ class InitiativeEngine:
             for i in to_persist
         ])
 
-        events: List[InitiativeEvolutionRow] = []
         for i in to_persist:
             iid = i.id or i._generate_id()
             prev_h = prev.get(iid)
+            meta = {
+                "initiative_type": i.type.value,
+                "understanding_count": len(i.understanding_ids),
+                "knowledge_count": len(i.knowledge_ids),
+            }
             if prev_h is None:
-                events.append(self._event(
-                    build_at, "Started", iid, None, i.status.value, None,
-                    i.confidence.value, None, i.title,
-                    f"Initiative emerged with {len(i.understanding_ids)} understanding "
+                insert_layer_history(
+                    self.conn, "initiative", iid, "Started",
+                    new_state=i.status.value,
+                    reason=f"Initiative emerged with {len(i.understanding_ids)} understanding "
                     f"and {len(i.knowledge_ids)} knowledge (status {i.status.value}).",
-                    [], [], i.understanding_ids, i.knowledge_ids,
-                ))
+                    metadata=meta,
+                )
                 continue
             prev_conf = InitiativeConfidence.from_str(prev_h.confidence)
             if self._conf_order(i.confidence) > self._conf_order(prev_conf):
-                events.append(self._event(
-                    build_at, "Strengthened", iid, prev_h.status, i.status.value,
-                    prev_h.confidence, i.confidence.value, prev_h.title, i.title,
-                    f"Confidence grew {prev_conf.value}->{i.confidence.value}.",
-                    [], [], i.understanding_ids, i.knowledge_ids,
-                ))
+                insert_layer_history(
+                    self.conn, "initiative", iid, "Strengthened",
+                    previous_state=prev_h.status, new_state=i.status.value,
+                    reason=f"Confidence grew {prev_conf.value}->{i.confidence.value}.",
+                    metadata=meta,
+                )
             if self._status_rank(i.status) > self._status_rank(
                     InitiativeStatus.from_str(prev_h.status)):
                 et = "Completed" if i.status == InitiativeStatus.COMPLETED else (
                     "Archived" if i.status == InitiativeStatus.ARCHIVED else "Advanced")
-                events.append(self._event(
-                    build_at, et, iid, prev_h.status, i.status.value,
-                    prev_h.confidence, i.confidence.value, prev_h.title, i.title,
-                    f"Lifecycle advanced {prev_h.status}->{i.status.value}.",
-                    [], [], i.understanding_ids, i.knowledge_ids,
-                ))
+                insert_layer_history(
+                    self.conn, "initiative", iid, et,
+                    previous_state=prev_h.status, new_state=i.status.value,
+                    reason=f"Lifecycle advanced {prev_h.status}->{i.status.value}.",
+                    metadata=meta,
+                )
             if i.title != prev_h.title and i.confidence == prev_conf:
-                events.append(self._event(
-                    build_at, "Renamed", iid, prev_h.status, i.status.value,
-                    prev_h.confidence, i.confidence.value, prev_h.title, i.title,
-                    "Title refined; prior wording retained.",
-                    [], [], i.understanding_ids, i.knowledge_ids,
-                ))
-        insert_initiative_evolution(self.conn, events)
-        return len(events)
+                insert_layer_history(
+                    self.conn, "initiative", iid, "Renamed",
+                    previous_state=prev_h.status, new_state=i.status.value,
+                    reason="Title refined; prior wording retained.",
+                    metadata=meta,
+                )
+        return len(to_persist)
 
     def _record_relationships(
         self, build_at, rtype, parent_ids, child_ids, uids, kids, note,
@@ -694,35 +703,10 @@ class InitiativeEngine:
         from ..db import update_initiative_status
         completed = build_at if status == InitiativeStatus.COMPLETED else None
         update_initiative_status(self.conn, iid, status.value, completed)
-        ev = self._event(
-            build_at, "Advanced" if status != InitiativeStatus.ARCHIVED else "Archived",
-            iid, None, status.value, None, None, None, None,
-            reason, [], [], [], [],
-        )
-        insert_initiative_evolution(self.conn, [ev])
-
-    @staticmethod
-    def _event(
-        build_at, etype, iid, prev_status, new_status, prev_conf, new_conf,
-        prev_title, new_title, reason, parent_ids, child_ids, uids, kids,
-    ) -> InitiativeEvolutionRow:
-        return InitiativeEvolutionRow(
-            id=f"{build_at}:{etype}:{iid}",
-            build_at=build_at,
-            event_type=etype,
-            initiative_id=iid,
-            previous_status=prev_status,
-            new_status=new_status,
-            previous_confidence=prev_conf,
-            new_confidence=new_conf,
-            previous_title=prev_title,
-            new_title=new_title,
-            reason=reason,
-            parent_ids=",".join(parent_ids),
-            child_ids=",".join(child_ids),
-            understanding_ids=",".join(uids),
-            knowledge_ids=",".join(kids),
-            timestamp=build_at,
+        insert_layer_history(
+            self.conn, "initiative", iid,
+            "Advanced" if status != InitiativeStatus.ARCHIVED else "Archived",
+            new_state=status.value, reason=reason,
         )
 
     @staticmethod

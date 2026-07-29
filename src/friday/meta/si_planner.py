@@ -1,31 +1,294 @@
-"""Self-Improvement Planner — generates real worker code for a detected gap.
+"""Self-Improvement Planner — generates multi-file capability plans.
 
-Uses the configured LLM (via services/llm._call) to write the worker's
-execute() function. The generated code goes through these stages:
+Upgraded for the Self-Evolution Engine: replaces the single-worker generator
+with a multi-file capability planner that outputs JSON plans covering:
 
-  1. Design prompt — LLM receives the gap description, evidence, and existing
-     worker registry context, and outputs a Python module implementing the
-     Worker execute() contract.
-  2. Syntax validation — the generated code is parsed (compile()) to catch
-     basic errors before it touches the sandbox.
-  3. If LLM unavailable or generation fails, falls back to the stub scaffold
-     (marking the gap as requiring human implementation).
+  - Multiple new files
+  - Multiple modified files (full content, not diffs)
+  - Dependency changes
+  - Config/env var changes
+  - Test files
+  - Verification steps
+  - Rollback risk assessment
 
-The generated code is written into the sandbox checkout of Friday's own
-repo, then tested and verified before deploy.
+The old single-worker generator is preserved as generate_worker_code() for
+backward compatibility with gap-driven self-improvement.
 """
 
 from __future__ import annotations
 
 import ast
+import json
+import re
 import textwrap
-import traceback
-from typing import Optional
+from typing import Any, Optional
 
 from ..db import get_capability_gap, get_all_workers, now_iso, update_capability_gap
 from ..services.llm import _call as llm_call, _enabled as llm_enabled
 from .sandbox import Sandbox
 
+
+# ──────────────────────────────────────────────────────────────────────────
+# Phase 2: Multi-file Capability Planner
+# ──────────────────────────────────────────────────────────────────────────
+
+CAPABILITY_SYSTEM_PROMPT = textwrap.dedent("""\
+You are Friday's self-evolution engine. You upgrade Friday's capabilities.
+You receive a capability request and produce a structured plan of changes.
+
+You must output a JSON plan:
+
+```json
+{
+  "capability_name": "voice_support",
+  "description": "Add speech-to-text and text-to-speech to Friday",
+  "new_files": [
+    {
+      "path": "src/friday/services/voice.py",
+      "content": "..."
+    }
+  ],
+  "modified_files": [
+    {
+      "path": "src/friday/cli.py",
+      "content": "..." // FULL file content after modification
+    }
+  ],
+  "dependencies": ["edge-tts", "faster-whisper"],
+  "config_changes": {
+    "env_vars": ["FRIDAY_VOICE_ENABLED", "FRIDAY_TTS_VOICE"],
+    "defaults": {"FRIDAY_VOICE_ENABLED": "false"}
+  },
+  "test_files": [
+    {
+      "path": "tests/test_voice.py",
+      "content": "..."
+    }
+  ],
+  "rollback_risk": "low" | "medium" | "high",
+  "verification_steps": [
+    "python -m pytest tests/test_voice.py -x",
+    "python -m pytest tests/ -x --tb=short"
+  ]
+}
+```
+
+RULES:
+- Every modified file must include the COMPLETE file content, not just the diff
+- New files must include __init__.py entries if added to a package
+- Dependencies must be real pip packages with correct names
+- Rollback_risk assessment: low = new files only, no existing code changes; medium = modifies existing files; high = changes core architecture or DB schema
+- Verification steps must be runnable commands
+- Keep new files under 500 lines unless absolutely necessary
+- Follow existing code style (type hints, docstrings, existing patterns)
+- For new CLI commands, follow the pattern in cli.py (argparse, cmd_* functions)
+- For new executors, follow the pattern in runtime/executors.py
+- For new services, follow the pattern in services/ (llm.py, email.py)
+- New capabilities must be feature-flagged (disabled by default)
+- Output ONLY the JSON. No surrounding text, no markdown unless it wraps the JSON.
+""")
+
+
+def _get_codebase_map(sandbox: Sandbox) -> str:
+    """Build a map of Friday's codebase structure for the planner prompt."""
+    if not sandbox.sandbox_path:
+        return "(sandbox not available)"
+    sp = sandbox.sandbox_path
+    parts: list[str] = []
+    try:
+        result = __import__("subprocess").run(
+            ["find", "src/friday", "-name", "*.py", "-type", "f"],
+            cwd=sp, capture_output=True, text=True, timeout=10,
+        )
+        files = result.stdout.strip().splitlines()[:50]
+        parts.append("Key source files:")
+        for f in files:
+            parts.append(f"  {f}")
+    except Exception:
+        parts.append("(could not scan codebase)")
+    return "\n".join(parts)
+
+
+def _get_pyproject_deps(sandbox: Sandbox) -> str:
+    """Read the pyproject.toml dependencies from the sandbox."""
+    content = sandbox.read_file("pyproject.toml")
+    if not content:
+        return "(no pyproject.toml found)"
+    lines = content.splitlines()
+    deps_lines = [l for l in lines if "dependencies" in l.lower() or l.strip().startswith('"') or l.strip().startswith("'")]
+    return "\n".join(deps_lines[:20]) if deps_lines else "(no deps section found)"
+
+
+def generate_capability_plan(
+    request: str,
+    sandbox: Sandbox,
+    conn=None,
+) -> Optional[dict]:
+    """Generate a multi-file capability plan from a natural-language request.
+
+    Args:
+        request: Natural-language capability request (e.g. "make yourself capable of speaking")
+        sandbox: Sandbox with Friday's repo checkout (for codebase context).
+        conn: Optional DB connection for reading existing workers/context.
+
+    Returns:
+        Parsed JSON plan dict, or None if LLM unavailable or generation fails.
+    """
+    if not llm_enabled():
+        return None
+
+    codebase_map = _get_codebase_map(sandbox)
+    pyproject = _get_pyproject_deps(sandbox)
+
+    # Include existing workers summary if conn is available.
+    existing_workers = ""
+    if conn:
+        try:
+            workers = get_all_workers(conn)
+            if workers:
+                summaries = []
+                for w in workers:
+                    caps = getattr(w, "capabilities", "") or ""
+                    desc = getattr(w, "description", "") or ""
+                    summaries.append(f"  - {w.name}: {caps} — {desc[:80]}")
+                existing_workers = "EXISTING WORKERS:\n" + "\n".join(summaries)
+        except Exception:
+            pass
+
+    user_prompt = textwrap.dedent(f"""\
+    CAPABILITY REQUEST: {request}
+
+    EXISTING CODEBASE STRUCTURE:
+    {codebase_map}
+
+    EXISTING DEPENDENCIES (pyproject.toml):
+    {pyproject}
+
+    {existing_workers}
+
+    Generate a plan for this capability upgrade.
+    """)
+
+    print(f"  meta: generating capability plan for '{request[:60]}' via LLM...")
+
+    try:
+        raw = llm_call(CAPABILITY_SYSTEM_PROMPT, user_prompt)
+        if not raw:
+            return None
+
+        # Strip markdown fences.
+        text = raw.strip()
+        if "```json" in text:
+            m = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+            if m:
+                text = m.group(1)
+        elif "```" in text:
+            m = re.search(r"```\s*(\{.*?\})\s*```", text, re.DOTALL)
+            if m:
+                text = m.group(1)
+
+        plan = json.loads(text)
+        if not isinstance(plan, dict) or "capability_name" not in plan:
+            return None
+
+        # Validate required fields.
+        required = ["capability_name", "new_files", "rollback_risk"]
+        for r in required:
+            if r not in plan:
+                plan[r] = "" if r == "capability_name" else [] if r == "new_files" else "medium"
+
+        return plan
+
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"  meta: plan generation failed: {e}")
+        return None
+
+
+def validate_capability_plan(plan: dict) -> list[str]:
+    """Validate a capability plan structure. Returns list of error messages.
+
+    Empty list = plan is valid.
+    """
+    errors: list[str] = []
+
+    if not plan.get("capability_name"):
+        errors.append("Missing capability_name")
+    if not isinstance(plan.get("new_files"), list):
+        errors.append("new_files must be a list")
+    else:
+        for nf in plan["new_files"]:
+            if not nf.get("path"):
+                errors.append("new_file entry missing 'path'")
+            if not nf.get("content"):
+                errors.append(f"new_file '{nf.get('path', '?')}' missing 'content'")
+
+    if not isinstance(plan.get("modified_files"), list):
+        errors.append("modified_files must be a list")
+
+    if plan.get("rollback_risk") not in ("low", "medium", "high"):
+        plan["rollback_risk"] = "medium"
+
+    return errors
+
+
+def apply_capability_plan_to_sandbox(sandbox: Sandbox, plan: dict) -> bool:
+    """Write a capability plan's new files and modified files into the sandbox.
+
+    Returns True on success.
+    """
+    # Write new files.
+    for nf in plan.get("new_files", []):
+        path = nf.get("path", "")
+        content = nf.get("content", "")
+        if path and content:
+            ok = sandbox.write_file(path, content)
+            if not ok:
+                print(f"  warning: failed to write new file {path}")
+
+    # Write modified files (full content replacement).
+    for mf in plan.get("modified_files", []):
+        path = mf.get("path", "")
+        content = mf.get("content", "")
+        if path and content:
+            ok = sandbox.write_file(path, content)
+            if not ok:
+                print(f"  warning: failed to write modified file {path}")
+
+    return True
+
+
+def estimate_plan_changes(plan: dict) -> str:
+    """Return a human-readable summary of what a plan would change."""
+    lines: list[str] = []
+    new_count = len(plan.get("new_files", []))
+    mod_count = len(plan.get("modified_files", []))
+    dep_count = len(plan.get("dependencies", []))
+    test_count = len(plan.get("test_files", []))
+
+    if new_count:
+        lines.append(f"Would create: {new_count} new file(s)")
+        for nf in plan.get("new_files", [])[:5]:
+            path = nf.get("path", "?")
+            lines.append(f"    {path}")
+    if mod_count:
+        lines.append(f"Would modify: {mod_count} file(s)")
+        for mf in plan.get("modified_files", [])[:5]:
+            path = mf.get("path", "?")
+            lines.append(f"    {path}")
+    if dep_count:
+        lines.append(f"Dependencies: {', '.join(plan.get('dependencies', []))}")
+    if test_count:
+        lines.append(f"Tests: {test_count} test file(s)")
+    risk = plan.get("rollback_risk", "medium")
+    lines.append(f"Risk: {risk}")
+    lines.append("Rollback is safe (git revert)")
+
+    return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Legacy single-worker generator (preserved for gap-driven self-improvement)
+# ──────────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = textwrap.dedent("""\
 You are Friday's self-improvement code generator. You write Python worker
@@ -38,12 +301,12 @@ CONTRACT:
     WORKER_CAPABILITIES: list[str]  — capability tags
     WORKER_EXAMPLE_INPUT: str  — JSON string that is a valid minimal input to execute()
     def execute(input_data: str, workspace: str = ".") -> dict:
-        \"""Execute this worker's operation. Returns dict with keys:
+        \"\"\"Execute this worker's operation. Returns dict with keys:
            success: bool
            output: str   (human-readable result)
            artifacts: list[str] (optional, file paths created)
            error: str    (if success=False)
-        \"""
+        \"\"\"
 
 RULES:
 - Use ONLY the Python standard library. No pip/poetry/conda deps.
@@ -52,20 +315,11 @@ RULES:
   Meta-Engine runs the code in a sandbox first, but write it as if it will
   eventually run inline).
 - Accept input_data as a JSON string; parse it with json.loads.
-  The parsed result may be ANY JSON type (string, object, array, number,
-  boolean, or null) depending on the gap. Look at the FAILURE EVIDENCE
-  below to see the REAL input shape — design execute() for that shape,
-  not an idealized object you imagine.
-- workspace is a directory path. All file operations must be relative to it.
 - Keep it under 200 lines. Prefer simple implementation over clever.
 - Include a __doc__ string describing what the worker does.
 - **CRITICAL: return {"success": True, "output": ...} for non-zero exit codes
   from a subprocess you control.** Catch the failure and return the exit code
-  and error in the "output" field. For *unexpected exceptions* (file not found,
-  permission denied, import error, type error), return
-  {"success": False, "error": str(e)}. This distinction matters: a subprocess
-  that ran but failed (exit code 2) was handled gracefully = success for the
-  worker. An unhandled crash = failure.
+  and error in the "output" field.
 - Place subprocess stdout/stderr in the "output" field. Only set the "error"
   field for actual exceptions/crashes, not for captured command failures.
 - The worker runs in-process. Do NOT import socket (restricted for
@@ -81,12 +335,7 @@ OUTPUT ONLY THE PYTHON FILE. NO SURROUNDING TEXT.
 
 def _evidence_summary(evidence_refs: str, conn=None) -> str:
     """Condense JSON evidence refs into a short text for the prompt.
-
-    Handles both old-format strings (``"task_id:error_message"``) and
-    new-format integers (``runtime_results.result_id``). For integers,
-    loads the runtime_results row to extract the actual input payload
-    and error message, so the LLM can see the real shape of inputs the
-    worker will receive.
+    Handles both old-format strings and new-format integers.
     """
     import json
     try:
@@ -98,9 +347,6 @@ def _evidence_summary(evidence_refs: str, conn=None) -> str:
     lines = []
     for r in refs[:5]:
         if isinstance(r, int) and conn is not None:
-            # Load the actual runtime_results row to get the real input
-            # and error, so the LLM sees genuine evidence instead of
-            # a placeholder reference.
             row = conn.execute(
                 "SELECT worker_id, payload, error, exit_code "
                 "FROM runtime_results WHERE result_id = ?", (r,)).fetchone()
@@ -108,26 +354,21 @@ def _evidence_summary(evidence_refs: str, conn=None) -> str:
                 wid = row["worker_id"] or "?"
                 err = (row["error"] or "")[:200]
                 exit_c = row["exit_code"] or "?"
-                # Extract the actual input payload.
                 payload = row["payload"] or ""
                 try:
                     pdata = json.loads(payload) if payload else {}
                     inp = pdata.get("input", "")
                 except (ValueError, TypeError):
                     inp = ""
-                lines.append(
-                    f"  - runtime_result #{r}: worker={wid}, exit_code={exit_c}")
+                lines.append(f"  - runtime_result #{r}: worker={wid}, exit_code={exit_c}")
                 if inp:
                     lines.append(f"    actual input: {repr(inp)[:300]}")
                 if err:
                     lines.append(f"    error: {err}")
             else:
-                lines.append(f"  - runtime_result #{r}: (not found in runtime_results)")
-        elif isinstance(r, int):
-            lines.append(f"  - runtime_result #{r} (see runtime_results table for details)")
+                lines.append(f"  - runtime_result #{r}: (not found)")
         else:
-            s = str(r)[:200]
-            lines.append(f"  - {s}")
+            lines.append(f"  - {str(r)[:200]}")
     return "\n".join(lines)
 
 
@@ -148,12 +389,7 @@ def generate_worker_code(conn, gap_id: int,
                          max_attempts: int = 3) -> Optional[str]:
     """Generate a working Python worker module for this gap using the LLM.
 
-    ``max_attempts`` caps LLM round-trips (default 3). The deploy caller
-    passes ``min(3, 3 - attempt_count)`` so the inner and outer retry
-    budgets share a single pool — never 9 total LLM calls per gap.
-
-    Returns the Python source code as a string, or None if generation failed
-    (LLM unavailable or produced invalid code after retries).
+    Preserved for backward compatibility with gap-driven self-improvement.
     """
     gap = get_capability_gap(conn, gap_id)
     if not gap:
@@ -229,7 +465,6 @@ def _validate_code(code: str) -> bool:
     except SyntaxError:
         return False
 
-    # Collect top-level assignments and function defs.
     assigns: dict[str, ast.AST] = {}
     funcs: dict[str, ast.FunctionDef] = {}
     for node in ast.walk(tree):
@@ -242,7 +477,6 @@ def _validate_code(code: str) -> bool:
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             assigns[node.target.id] = node
 
-    # Required symbols.
     if "WORKER_NAME" not in assigns:
         return False
     if "WORKER_CAPABILITIES" not in assigns:
@@ -252,13 +486,11 @@ def _validate_code(code: str) -> bool:
     if "execute" not in funcs:
         return False
 
-    # execute() must accept at least 1 parameter (input_data).
     fn = funcs["execute"]
     pos_args = [a for a in fn.args.args if a.arg not in ("self", "cls")]
     if len(pos_args) < 1:
         return False
 
-    # WORKER_CAPABILITIES must be a list literal of strings.
     cap_node = assigns["WORKER_CAPABILITIES"]
     if isinstance(cap_node, ast.Assign) and len(cap_node.targets) == 1:
         val = cap_node.value
@@ -270,9 +502,6 @@ def _validate_code(code: str) -> bool:
         elif isinstance(val, ast.Constant) and val.value is None:
             return False
 
-    # Flag top-level usage of dangerous modules (defence-in-depth).
-    # socket is banned for network safety — subprocess, os, shutil are
-    # allowed for shell-handling workers (gap #8+, shell exit code fixers).
     banned = frozenset({"socket"})
     imported = set()
     for node in ast.walk(tree):
@@ -294,11 +523,7 @@ def _validate_code(code: str) -> bool:
 
 def write_worker_to_sandbox(sandbox: Sandbox, code: str, name: str) -> bool:
     """Write the generated worker code into the sandbox checkout.
-
     Creates the module at src/friday/workers/{name}.py and a matching test.
-    Derives the smoke test input from the WORKER_EXAMPLE_INPUT constant
-    in the generated code via AST extraction.
-    Returns True on success.
     """
     sp = sandbox.sandbox_path
     if not sp:
@@ -306,17 +531,14 @@ def write_worker_to_sandbox(sandbox: Sandbox, code: str, name: str) -> bool:
     from pathlib import Path
     sp_path = Path(sp)
 
-    # Write worker module
     worker_dir = sp_path / "src" / "friday" / "workers"
     worker_dir.mkdir(parents=True, exist_ok=True)
     (worker_dir / "__init__.py").write_text("")
     worker_file = worker_dir / f"{name}.py"
     worker_file.write_text(code)
 
-    # Extract WORKER_EXAMPLE_INPUT from generated code via AST.
     example_input = _extract_example_input(code)
 
-    # Write a smoke test using the example input.
     test_dir = sp_path / "tests" / "test_meta"
     test_dir.mkdir(parents=True, exist_ok=True)
     (test_dir / "__init__.py").write_text("")
@@ -328,11 +550,7 @@ def write_worker_to_sandbox(sandbox: Sandbox, code: str, name: str) -> bool:
 
 
 def _extract_example_input(code: str) -> str:
-    """Extract WORKER_EXAMPLE_INPUT from generated Python code via AST.
-
-    Returns the JSON string as-is (it is a JSON literal already — the
-    LLM writes it as '{"file_path": "test.py"}'), or '{}' if not found.
-    """
+    """Extract WORKER_EXAMPLE_INPUT from generated Python code via AST."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -347,17 +565,7 @@ def _extract_example_input(code: str) -> str:
 
 
 def plan_for_gap(conn, gap_id: int) -> Optional[str]:
-    """Validate a gap is plan-able and generate a plan.
-
-    Runs the LLM code generation to confirm a worker can be built for this
-    gap. On success, marks the gap status as 'planned' and returns a plan
-    identifier. The deploy step re-generates the code — this is a
-    validation pass that confirms plan-ability without persisting the code
-    across lifecycle phases.
-
-    Returns a plan ID string, or None if the gap is not plan-able or code
-    generation fails.
-    """
+    """Validate a gap is plan-able and generate a plan."""
     gap = get_capability_gap(conn, gap_id)
     if not gap:
         print(f"  error: no gap with id {gap_id}")
@@ -382,21 +590,8 @@ def plan_for_gap(conn, gap_id: int) -> Optional[str]:
 
 
 def _generate_smoke_test(name: str, example_input: str = "{}") -> str:
-    """Generate a smoke test for the auto-built worker using its declared
-    example input. This ensures the test actually exercises the worker with
-    a payload it expects, rather than a hand-rolled guess.
-
-    ``example_input`` is the WORKER_EXAMPLE_INPUT JSON string from the
-    generated worker module. It is embedded in the test as a Python string
-    literal (wrapped in triple-single-quotes for safety against internal
-    double quotes in the JSON).
-
-    Falls back to a minimal structural test if example_input is empty or
-    would clearly cause the worker to fail (e.g. sends test.json when the
-    worker requires file_path).
-    """
-    import json    # Only use example_input if it's non-empty and wouldn't obviously fail
-    # (i.e. it contains at least one key with a value).
+    """Generate a smoke test for the auto-built worker."""
+    import json
     use_example = False
     try:
         parsed = json.loads(example_input) if example_input else {}
@@ -406,12 +601,6 @@ def _generate_smoke_test(name: str, example_input: str = "{}") -> str:
         pass
 
     if use_example:
-        # Embed the example input in triple-single-quotes to avoid clashes
-        # with JSON's internal double quotes. JSON never contains triple
-        # single quotes, so this is safe.
-        # 8-space body indent: 4 spaces for the function body + 4 more
-        # to survive textwrap.dedent() which removes the common 4-space
-        # leading indent from the f-string template below.
         example_escaped = example_input.replace("'''", "\\'\\'\\'")
         success_test_lines = [
             "def test_execute_with_example_input():",
@@ -421,9 +610,6 @@ def _generate_smoke_test(name: str, example_input: str = "{}") -> str:
         ]
         success_test = "\n".join(success_test_lines)
     else:
-        # 8-space body indent: 4 spaces for the function body + 4 more
-        # to survive textwrap.dedent() which removes the common 4-space
-        # leading indent from the f-string template below.
         success_test = (
             "def test_execute_returns_dict():\n"
             "        result = execute('{}')\n"

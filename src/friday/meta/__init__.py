@@ -5,9 +5,9 @@ using the same Plan -> TaskGraph -> Execute machinery Friday already uses.
 
 Submodules:
   gap_analyzer    — detect + score capability gaps from runtime_results
-  si_planner      — generate Plans for the top-scored gap
+  si_planner      — generate Plans (single worker) + capability plans (multi-file)
   sandbox         — execute self-modifying code in isolated worktree
   verification    — test gates before deploy
-  deploy          — human-approved merge into worker registry
-  loop            — background meta-loop daemon + insight integration
+  deploy          — human-approved merge into worker/capability registry
+  capability      — CapabilityFlag lifecycle management
 """

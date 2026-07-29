@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from typing import Optional
 
@@ -81,7 +82,41 @@ def _call(system: str, user: str) -> Optional[str]:
         with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read().decode("utf-8")
         return _extract_content(raw)
-    except Exception:
+    except Exception as exc:
+        from .errors import error_from_exception, ErrorType, friday_error
+        # Classify the error: timeout vs auth vs parse vs network.
+        exc_str = str(exc).lower()
+        if isinstance(exc, urllib.error.HTTPError):
+            code = getattr(exc, "code", 0)
+            wrapped = friday_error(
+                ErrorType.API_ERROR if code != 401 else ErrorType.AUTH_ERROR,
+                action="llm_chat_call",
+                target=f"{base}/chat/completions",
+                message=f"LLM API returned HTTP {code}: {exc}",
+                eta_hint="10s — retrying on the next cycle",
+                recovery_hint="Check your LLM API key with `echo $FRIDAY_LLM_API_KEY`",
+                cause=exc,
+            )
+        elif isinstance(exc, urllib.error.URLError):
+            wrapped = friday_error(
+                ErrorType.NETWORK_ERROR,
+                action="llm_chat_call",
+                target=base,
+                message=f"LLM endpoint unreachable: {exc}",
+                eta_hint="30s — network may recover",
+                recovery_hint="Verify LLM endpoint is running: `curl {base}/models`",
+                cause=exc,
+            )
+        else:
+            wrapped = error_from_exception(
+                exc,
+                action="llm_chat_call",
+                target=f"{base}/chat/completions",
+                recovery_hint="Check the LLM configuration: FRIDAY_LLM_MODEL, FRIDAY_LLM_API_KEY",
+            )
+        # Log the structured error but still return None for backwards compat.
+        import sys
+        print(f"[LLM ERROR] {str(wrapped)}", file=sys.stderr)
         return None
 
 

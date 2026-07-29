@@ -135,17 +135,50 @@ def get_preferred_capabilities(conn=None) -> list[str]:
 def should_notify(conn=None) -> bool:
     """Check if the operator has opted into desktop notifications.
 
-    Default: True (opt-out via 'friday profile set no_notifications true').
+    Checks BOTH explicit and derived preferences so that LLM-learned
+    preferences from conversation (Phase B) are respected.
+
+    Default: True (opt-out via 'friday profile set no_notifications true'
+    or saying "I don't want notifications" on Telegram/Slack).
     """
     own_conn = conn is None
     if own_conn:
         conn = connect()
     try:
-        prefs = get_all_operator_preferences(conn, source="explicit")
-        for p in prefs:
-            if p.key == "no_notifications" and p.value.lower() in ("true", "1", "yes"):
-                return False
+        # Check both explicit and derived — the conversation learner stores
+        # learned preferences as 'derived' source.
+        for source in ("explicit", "derived"):
+            prefs = get_all_operator_preferences(conn, source=source)
+            for p in prefs:
+                if p.key == "no_notifications" and p.value.lower() in ("true", "1", "yes"):
+                    return False
         return True
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def get_preferred_channel(conn=None) -> str | None:
+    """Return the operator's preferred notification channel from preferences.
+
+    Checks both explicit and derived preferences so that LLM-learned
+    preferences from conversation (Phase B) are respected.
+
+    Returns:
+        Channel name ("telegram", "slack", "email", "desktop") or None
+        if no preference is set.
+    """
+    own_conn = conn is None
+    if own_conn:
+        conn = connect()
+    try:
+        # Check explicit first (takes priority), then derived.
+        for source in ("explicit", "derived"):
+            prefs = get_all_operator_preferences(conn, source=source)
+            for p in prefs:
+                if p.key == "preferred_channel" and p.value.strip():
+                    return p.value.strip().lower()
+        return None
     finally:
         if own_conn:
             conn.close()

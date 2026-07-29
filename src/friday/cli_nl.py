@@ -986,45 +986,119 @@ def classify_intent(text: str) -> tuple[Callable, argparse.Namespace]:
 # ---------------------------------------------------------------------------
 
 
+def _classify_action_or_question(text: str) -> Optional[str]:
+    """Fast deterministic check: is this an action or a question?
+
+    Returns "action", "question", or None if ambiguous.
+    """
+    lower = text.lower().strip()
+    _ACTION_KEYWORDS = frozenset({
+        "copy", "paste", "clipboard", "run", "execute", "deploy", "fix",
+        "build", "compile", "create", "write", "make", "delete",
+        "remove", "move", "start", "stop", "restart", "install",
+        "open", "close", "send", "test", "refactor", "migrate",
+        "commit", "push", "pull", "merge", "reboot", "rebuild",
+        "edit", "modify", "update", "change", "add", "remove",
+    })
+    _QUESTION_KEYWORDS = frozenset({
+        "what", "why", "how", "who", "when", "where", "explain",
+        "describe", "can", "is", "are", "do", "does", "did",
+        "would", "could", "should", "will",
+    })
+    first_word = lower.split()[0] if lower.split() else ""
+    is_action = first_word in _ACTION_KEYWORDS
+    is_question = first_word in _QUESTION_KEYWORDS
+
+    # Also check multi-word question starters.
+    if not is_question:
+        _MULTI_WORD_QUESTIONS = frozenset({
+            "tell me", "show me", "list me", "can you", "would you",
+            "could you", "do you", "is there", "are there",
+        })
+        is_question = any(lower.startswith(mw) for mw in _MULTI_WORD_QUESTIONS)
+
+    if is_action and not is_question:
+        return "action"
+    if is_question and not is_action:
+        return "question"
+    return None
+
+
 def cmd_do(args: argparse.Namespace) -> int:
     """``friday do <text>`` — natural language command dispatcher.
 
-    Parses the text, classifies the intent, builds the appropriate
-    ``argparse.Namespace``, and dispatches to the matching CLI handler.
+    PRIMARY PATH: AgenticExecutor (for action-oriented tasks like "copy the
+    git diff to clipboard", "run the tests", "deploy the app").
+
+    FALLBACK: Intent classification → specific CLI handler (for Q&A,
+    configuration, workspace queries).
     """
-    from .presentation.cli_format import header, error as perror
+    from .presentation.cli_format import header, error as perror, green
 
     text = " ".join(args.text)
     if not text.strip():
-        print("  Friday — Natural Language Commands\n")
-        print("  Just tell me what you want in plain English:")
-        print()
-        print("    friday what's the state of things")
-        print("    friday show my recent patterns")
-        print("    friday deploy the staging server")
-        print("    friday refresh my workspace")
-        print("    friday start the daemon")
-        print("    friday what's the architecture")
-        print("    friday send an email to lakshay")
-        print("    friday analyze the codebuff project")
+        print("  Friday — Agentic Natural Language Commands\n")
+        print("  Tell me what you want in plain English. I'll figure out how to do it:\n")
+        print("    friday do copy the git diff to clipboard")
+        print("    friday do run the tests and fix failures")
+        print("    friday do deploy the staging server")
+        print("    friday do find where JWTs are handled")
+        print("    friday do what's the architecture of this project")
         print()
         return 0
 
+    # ── Fast predicate: action or question? ─────────────────────────────
+    intent = _classify_action_or_question(text)
+
+    # Clearly an action → AgenticExecutor.
+    if intent == "action":
+        print(header("agent", text[:80]), file=sys.stderr)
+        print(file=sys.stderr)
+        from .agent import run_agent, format_session
+        session = run_agent(text, workspace=".", persist=True)
+        print(format_session(session))
+        return 0 if session.status == "succeeded" else 1
+
+    # Clearly a question → ask pipeline.
+    if intent == "question":
+        print(header("ask", text[:80]), file=sys.stderr)
+        print(file=sys.stderr)
+        handler, ns = _build_ask(text)
+        rc = handler(ns)
+        if rc != 0:
+            print(perror(f"Command returned exit code {rc}"))
+        return rc
+
+    # ── Ambiguous: try intent classification, then agentic executor. ────
     try:
         handler, ns = classify_intent(text)
-    except Exception as exc:
-        print(header("ask", "not sure"), file=sys.stderr)
-        print(perror(f"Couldn't understand: {exc}"), file=sys.stderr)
-        handler, ns = _build_ask(text)
+        cmd_name = handler.__name__.replace("cmd_", "").replace("_dispatch", "")
+    except Exception:
+        cmd_name = None
 
-    cmd_name = handler.__name__.replace("cmd_", "").replace("_dispatch", "")
+    # If classified as ask, try the agent first (it might be an action).
+    if cmd_name == "ask" or cmd_name is None:
+        print(header("agent", text[:80]), file=sys.stderr)
+        print(file=sys.stderr)
+        from .agent import run_agent, format_session
+        session = run_agent(text, workspace=".", persist=True)
+        print(format_session(session))
+        if session.status == "succeeded":
+            return 0
+        # Agent failed — fall through to ask.
+        print()
+        print(header("ask", "trying Q&A..."), file=sys.stderr)
+        print(file=sys.stderr)
+        handler, ns = _build_ask(text)
+        rc = handler(ns)
+        if rc != 0:
+            print(perror(f"Command returned exit code {rc}"))
+        return rc
+
+    # Classified to a specific handler — use it.
     print(header(cmd_name, text[:80]), file=sys.stderr)
     print(file=sys.stderr)
-
-    # Stream handler output directly — don't buffer.
     rc = handler(ns)
-
     if rc != 0:
         print(perror(f"Command returned exit code {rc}"))
-
     return rc

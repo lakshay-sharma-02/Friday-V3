@@ -1311,6 +1311,10 @@ def resolve_executor(worker_id: str, workspace: str = ".") -> Optional[Executor]
     if name == "worker:deepseek":
         return DeepSeekWorker(workspace=workspace)
 
+    if name == "worker:clipboard":
+        from .clipboard_executor import ClipboardExecutor
+        return ClipboardExecutor()
+
     if name == "worker:email":
         from ..services.email import EmailExecutor
         return EmailExecutor()

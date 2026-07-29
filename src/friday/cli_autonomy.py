@@ -71,10 +71,10 @@ def _status(args) -> int:
     else:
         print(f"│  Action workers: {'🟢 ENABLED' if enabled else '🔴 DISABLED'}")
     print("├───────────────────────────────────────────────────┤")
-    print("│  Per-action-type permissions:                     │")
+    print("│  Per-action-type permissions (two-axis classifier): │")
     for p in perms:
         eff = p.effective_level
-        icon = {"auto": "🟢", "confirm": "🟡", "double": "🔴"}.get(eff, "⚪")
+        icon = {"auto": "🟢", "notify": "🔵", "confirm": "🟡", "double": "🔴"}.get(eff, "⚪")
         parts = [f"{icon} {p.action_type:<20} {eff:<8}"]
 
         # Show escalation progress.
@@ -161,7 +161,9 @@ def _set_perm(args) -> int:
 
     if not action_type or not level:
         print("Usage: friday autonomy set <action_type> <level>", file=sys.stderr)
-        print(f"  level must be one of: {', '.join(sorted(VALID_LEVELS))}",
+        print(f"    level must be one of: {', '.join(sorted(VALID_LEVELS))}",
+              file=sys.stderr)
+        print("    auto=execute silently, notify=do+notify, confirm=ask, double=ask twice",
               file=sys.stderr)
         return 2
 

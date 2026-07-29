@@ -151,7 +151,7 @@ _NEED_TYPES = (
     "reuse", "integration", "universe", "strengths", "effort",
     "engineering-profile", "impact", "platform", "learning", "opportunity",
     "priority", "converge", "merge", "compare", "describe", "inactive",
-    "newest", "recommend", "by-tech", "insights", "chitchat", "general",
+    "newest", "recommend", "by-tech", "insights", "chitchat", "operator", "general",
     "general_reasoning", "similarity", "theme-repeat", "lessons", "habits", "assumptions", "drift",
     "surprise", "evolve", "direction", "blockers", "knowledge", "understanding",
     "initiative", "insight",
@@ -1042,6 +1042,81 @@ def _p_general(req, conn, ev, today):
     return
 
 
+# --- operator (who you are — Friday knows the operator) -----------------------
+
+
+@_provider("operator")
+def _p_operator(req, conn, ev, today):
+    """Evidence provider for operator identity — name, preferences, stats.
+
+    Calls build_operator_profile() from the operator module and formats
+    the known information about you (the operator) as evidence blocks.
+    Every field is Optional; we never invent.
+    """
+    from .operator import build_operator_profile
+
+    profile = build_operator_profile(conn)
+    lines: list[str] = []
+
+    if not profile.has_profile:
+        lines.append(
+            "No operator profile exists yet. Set your name with: `friday profile set name <your name>`"
+        )
+        ev.blocks = lines
+        ev.raw["operator_name"] = None
+        ev.raw["has_profile"] = False
+        return
+
+    # Explicit preferences — name is the key one.
+    name = profile.explicit_preferences.get("name")
+    if name:
+        lines.append(f"Name: {name}")
+    else:
+        lines.append("Name: (not set yet — use `friday profile set name <your name>`)")
+
+    # Other explicit preferences (filter out name since we already showed it).
+    other_prefs = {
+        k: v for k, v in profile.explicit_preferences.items()
+        if k != "name"
+    }
+    if other_prefs:
+        prefs_str = "; ".join(f"{k}={v}" for k, v in sorted(other_prefs.items()))
+        lines.append(f"Preferences: {prefs_str}")
+
+    # Derived preferences — capability approval rate.
+    if profile.capability_approval_rate:
+        rate = profile.capability_approval_rate
+        lines.append(f"Capability approval: {rate.get('approved', 0)} approved, "
+                     f"{rate.get('rejected', 0)} rejected "
+                     f"({rate.get('rate', 0) * 100:.0f}% approval)")
+
+    # Active repos.
+    if profile.active_repos:
+        repo_names = [r.get("name", "?") for r in profile.active_repos[:5]]
+        lines.append(f"Active repos: {', '.join(repo_names)}")
+
+    # Watch cycle stats.
+    if profile.watch_stats:
+        ws = profile.watch_stats
+        lines.append(f"Watch cycles: {ws.get('total', 0)} total, "
+                     f"{ws.get('succeeded', 0)} succeeded, "
+                     f"{ws.get('failed', 0)} failed "
+                     f"({ws.get('success_rate', 0) * 100:.0f}% success)")
+
+    # Preferred initiative types.
+    if profile.preferred_initiative_types:
+        lines.append(
+            f"Preferred initiative types: {', '.join(profile.preferred_initiative_types)}"
+        )
+
+    ev.blocks = lines
+    ev.raw["operator_name"] = name
+    ev.raw["has_profile"] = profile.has_profile
+    ev.raw["preferences"] = dict(profile.explicit_preferences)
+    return
+
+
+
 # --- insight (what deserves attention now, derived from understanding/ ---- ---
 # initiatives/knowledge) — see engine.insert/_p_initiative above for the M8.4
 # pattern. Insights are EPHEMERAL: a build retires those whose triggering
@@ -1247,7 +1322,22 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
     ev.raw["objective"] = decision.objective
     ev.raw["objective_reason"] = decision.reason
 
+    # Operator-identity keyword detection: for questions about "my name", "who am
+    # i", etc., inject the "operator" need so the ask() routing picks it up over
+    # chitchat, and ensure the operator provider runs regardless of the LLM's
+    # need classification. This check must happen BEFORE the chitchat early
+    # return because chitchat questions about the operator ("what's my name bud?")
+    # should resolve to operator, not to the static chitchat response.
+    _OPERATOR_HINTS = ("my name", "who am i", "whoami", "operator",
+                       "what do you know about me")
+    needs_operator = "operator" in decision.needs or any(
+        h in (req.query or "").lower() for h in _OPERATOR_HINTS)
+    if needs_operator and "operator" not in req.needs:
+        req.needs.append("operator")
+
     if "chitchat" in decision.needs:
+        if needs_operator:
+            _p_operator.fn(req, conn, ev, today)
         return ev
 
     if "general_reasoning" in decision.needs:
@@ -1386,6 +1476,33 @@ def retrieve_requirements(req: RetrievalRequirements, conn) -> Evidence:
                     ev.raw[key] = side.raw[key]
             if "_p_plan" not in audit_returned:
                 audit_returned.append("_p_plan")
+
+    # Guarantee operator identity surfaces when the question asks about you
+    # (the operator), even when the understanding step did not name the
+    # `operator` need explicitly (e.g. "what's my name?" -> GENERAL/PROFILE).
+    # The operator is a first-class user model built from explicit preferences
+    # and derived evidence, so it belongs in any "who am I" answer. When the
+    # question is clearly operator-related (detected via _OPERATOR_HINTS above)
+    # but the operator evidence is NOT already leading the answer, run the
+    # operator provider and prepend its blocks. This handles the case where
+    # "operator" is in decision.needs but the general provider ran as primary
+    # (because judge() prioritizes general before operator in needs order),
+    # causing the operator provider's output to be relegated to supporting.
+    # Only skip when operator blocks are already present in ev.blocks.
+    has_operator_blocks = any(b.startswith("Name:") or "operator profile" in b.lower()
+                              for b in ev.blocks)
+    if needs_operator and not has_operator_blocks:
+        side = Evidence(requirements=req, blocks=[], raw={}, subject=None)
+        _p_operator.fn(req, conn, side, today)
+        if side.blocks:
+            ev.raw.setdefault("supporting", []).extend(side.blocks)
+            # Operator evidence leads the answer — place it first in ev.blocks.
+            ev.blocks = list(side.blocks) + list(ev.blocks)
+            for key in ("operator_name", "has_profile", "preferences"):
+                if key in side.raw:
+                    ev.raw[key] = side.raw[key]
+            if "_p_operator" not in audit_returned:
+                audit_returned.append("_p_operator")
 
     # Retrieval audit (Part H) — providers requested vs returned, surfaced via
     # `ask --verbose` only. Never affects the normal answer.
@@ -1709,6 +1826,16 @@ def requirements_from_question(question: str, conn) -> RetrievalRequirements:
             scope=scope, subjects=list(subjects or []), operation=operation,
             needs=list(needs), lens=lens, query=question,
         )
+
+    # Operator identity questions — checked BEFORE chitchat so personal
+    # questions ("what's my name?") resolve to operator, not chitchat.
+    if any(w in qlow for w in (
+        "my name", "my operator", "who am i", "profile",
+        "who are you talking to", "what do you know about me",
+        "what do you know about the operator",
+        "set my name", "friday profile",
+    )):
+        return mk(needs=("operator",))
 
     if any(w in qlow for w in ("hello", "hi ", "hey", "thanks", "thank you", "who are you")):
         return mk(needs=("chitchat",))
@@ -2299,36 +2426,23 @@ def _card_text(card) -> str:
 # ---------------------------------------------------------------------------
 
 
+# _SYSTEM is the fallback system prompt used when persona/prompts.py's
+# FRIDAY_PERSONA is unavailable (e.g. import error). The primary path in
+# _synthesize() builds the prompt dynamically from FRIDAY_PERSONA + context.
+# Keep only answer rules here — personality lives in persona/prompts.py.
 _SYSTEM = (
-    "You are Friday, an operating partner that answers questions about the user's "
-    "software projects using ONLY the provided Evidence. Rules:\n"
+    "You are Friday, an AI operating partner. Answer questions about the user's "
+    "software projects using the provided Evidence. Rules:\n"
     "1. Answer concisely and in plain prose.\n"
-    "2. Use ONLY facts present in the Evidence block. Never invent repositories, "
-    "technologies, dates, or relationships.\n"
-    "3. If the Evidence is insufficient to answer, say so plainly (e.g. "
-    "'I don't have enough evidence to answer that.').\n"
-    "4. For 'what should I work on next' style questions, you MAY offer a grounded "
-    "suggestion derived from the activity signals in the Evidence (most active, "
-    "newest, uncommitted changes), clearly framed as a suggestion, not a command.\n"
-    "5. Cite the basis briefly where natural (README, git metadata, technology "
-    "detection, relationships).\n"
-    "6. PRIMACY: when a question is about one project, spend 80-90% of the answer "
-    "on that project's purpose, context and meaning. Put its relationships and "
-    "other repositories only near the END. Never open with implementation, "
-    "architecture dumps, or component lists.\n"
-    "7. CONFIDENCE: when the Evidence supports a judgement (value, overlap, "
-    "integration, themes), state Confidence: Strong / Medium / Weak and the basis. "
-    "Prefer context, purpose and engineering meaning; reserve architecture detail "
-    "for the final part of the answer.\n"
-    "8. ANSWER OBJECTIVE: the Engineering Objective below names the KIND of "
-    "judgment being requested (explain / compare / profile / platform / merge / "
-    "themes / direction / lessons / habits / assumptions / drift / etc.). Answer "
-    "THAT judgment, not a generic evidence summary. Follow the Answer Contract "
-    "section order when it is given — it tells you how the answer must be "
-    "structured (e.g. a compare must cover shared goal, different goals, "
-    "architecture, technology, maturity, recommendation — NOT two description "
-    "dumps). Do NOT collapse distinct objectives into the same answer shape.\n"
-    "Do not role-play or add commentary beyond the answer."
+    "2. Use ONLY facts present in the Evidence block. Never invent.\n"
+    "3. If the Evidence is insufficient, say so plainly.\n"
+    "4. For 'what should I work on next', offer grounded suggestions.\n"
+    "5. Cite basis briefly where natural.\n"
+    "6. PRIMACY: focus on project purpose, not architecture.\n"
+    "7. CONFIDENCE: state Strong/Medium/Weak when supporting judgement.\n"
+    "8. ANSWER OBJECTIVE: follow the Answer Contract order when given.\n"
+    "9. PERSONALIZE: reference what you know about the person naturally.\n"
+    "10. Never fabricate details."
 )
 
 
@@ -2395,16 +2509,78 @@ def _synthesize(question: str, ev: Evidence, conn=None,
                 "Answer Contract (follow this section order): "
                 + " > ".join(decision.contract) + ".\n"
             )
+
+    # Build the system prompt dynamically: FRIDAY_PERSONA + learned context + evidence rules.
+    # This makes the personality the foundation of every answer.
+    try:
+        from .persona.prompts import FRIDAY_PERSONA, EVIDENCE_DIRECTIVE
+        evidence_block = evidence_str
+        evidence_directive = EVIDENCE_DIRECTIVE.format(evidence=evidence_block)
+        # Inject learned context (operator name, memories, preferences) into a
+        # WHAT YOU KNOW block that gets appended to the personality prompt.
+        ops_context = ""
+        if learned_context:
+            ops_context = "\n\n--- WHAT YOU KNOW ABOUT THIS PERSON ---\n" + learned_context + "\n--- END WHAT YOU KNOW ---\n"
+        system = FRIDAY_PERSONA + ops_context + evidence_directive + objective_line
+    except Exception:
+        # Fallback to the static _SYSTEM if persona.prompts is unavailable.
+        system = _SYSTEM + learned_context
+
     user = (
         f"Question: {question}\n\n"
-        f"Evidence:\n{evidence_str}\n\n"
-        f"Answer (grounded only in Evidence):{ctx}{objective_line}{learned_context}"
+        f"{ctx}"
     )
-    return _call(_SYSTEM, user)
+
+    # Use the ensemble reasoner for workspace-grounded questions (not
+    # general-reasoning or chitchat). The ensemble fires 2-3 models in
+    # parallel and measures their agreement as a confidence signal.
+    # If the ensemble is unavailable (fewer than 2 providers), falls
+    # back to the single-model call below.
+    if not is_general_reasoning:
+        try:
+            from .reasoning import EnsembleReasoner
+            er = EnsembleReasoner(timeout_per_model=25)
+            ensemble_result = er.reason(system, user)
+            if ensemble_result.text and ensemble_result.response_count >= 2:
+                # Tag the evidence with the ensemble's confidence.
+                conf_label = er.confidence_label(ensemble_result.confidence)
+                ev.raw["ensemble_confidence"] = ensemble_result.confidence
+                ev.raw["ensemble_agreement"] = ensemble_result.agreement
+                ev.raw["ensemble_models"] = (
+                    f"{ensemble_result.response_count} models, "
+                    f"{ensemble_result.agreement_score:.0%} agreement"
+                )
+                ev.raw["ensemble_primary"] = ensemble_result.primary_model
+                # Append a confidence note to the evidence so the answer
+                # can reference it naturally.
+                if ensemble_result.confidence < 0.5:
+                    ev.blocks.append(f"\n[Calibrated confidence: {conf_label} "
+                                     f"— ensemble models disagree on this answer.]")
+                return ensemble_result.text
+        except Exception:
+            pass
+
+    return _call(system, user)
 
 
 def _deterministic_answer(question: str, ev: Evidence, label: str,
                            decision: Optional[object] = None) -> str:
+    if label == "operator":
+        if ev.blocks:
+            # Extract the operator's name from evidence blocks, if set.
+            name = None
+            for b in ev.blocks:
+                if b.startswith("Name:"):
+                    raw = b.split("Name:", 1)[1].strip()
+                    if raw and "not set yet" not in raw:
+                        name = raw
+            if name:
+                return f"Your name is {name}! How can I help you, {name}?"
+            # Profile exists but no name — show what we know.
+            return "Here's what I know about you:\n\n" + "\n".join(ev.blocks)
+        return ("I don't have enough information about you yet. "
+                "Set your name with: `friday profile set name <your name>`")
+
     if label == "chitchat":
         return ("I'm Friday, your workspace operating partner. Ask me about your "
                 "projects — which use a technology, what a project is for, how two "
@@ -2587,6 +2763,25 @@ def resolve_followup(question: str, prev: "Exchange", conn) -> Optional[tuple]:
                 return ("rewrite", f"How stale is {subj}?")
             return ("clarify",
                     "Stale compared to what? Ask about a specific project first.")
+
+    # Anaphora fallback: try pronoun resolution, action repetition, and
+    # implicit subject switches that the deterministic prefix matcher above
+    # did not catch. Returns a rewritten question that flows through fresh
+    # retrieval, or None if not anaphoric.
+    try:
+        from .anaphora import resolve_anaphora
+        rewritten = resolve_anaphora(
+            question=question,
+            prev_question=prev.question,
+            prev_subject=subj,
+            prev_needs=list(ev.requirements.needs),
+            conn=conn,
+        )
+        if rewritten and rewritten != question:
+            return ("rewrite", rewritten)
+    except Exception:
+        pass
+
     return None
 
 
@@ -2728,15 +2923,27 @@ def _synthesize_followup(question: str, ev: Evidence, prev: "Exchange",
         except Exception:
             pass
 
+    # Build the system prompt dynamically with personality + context,
+    # matching the same approach used in _synthesize().
+    try:
+        from .persona.prompts import FRIDAY_PERSONA, EVIDENCE_DIRECTIVE
+        evidence_block = evidence_str + extra_str
+        evidence_directive = EVIDENCE_DIRECTIVE.format(evidence=evidence_block)
+        ops_context = ""
+        if learned_context:
+            ops_context = "\n\n--- WHAT YOU KNOW ABOUT THIS PERSON ---\n" + learned_context + "\n--- END WHAT YOU KNOW ---\n"
+        system = FRIDAY_PERSONA + ops_context + evidence_directive
+    except Exception:
+        system = _SYSTEM + learned_context
+
     user = (
         f"Follow-up question: {question}\n\n"
         f"{meta_instruction}\n\n"
         f"PREVIOUS ANSWER (context only):\n{prev.answer.text}\n\n"
-        f"PREVIOUS EVIDENCE (the ONLY source you may cite):\n{evidence_str}{extra_str}\n\n"
-        f"Answer the follow-up grounded only in the PREVIOUS EVIDENCE."
-        f"{learned_context}"
+        f"{extra_str}\n\n"
+        f"Answer the follow-up grounded only in the workspace evidence shown above."
     )
-    return _call(_SYSTEM, user)
+    return _call(system, user)
 
 
 def ask(question: str, conn, prev: Optional["Exchange"] = None,
@@ -2764,7 +2971,19 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
             if kind == "rewrite":
                 question = payload
 
-    if llm_enabled():
+    # Operator-identity questions ("what's my name?", "who am i?") bypass LLM
+    # understanding and use the deterministic offline path, which reliably
+    # routes them to the operator provider via keyword detection — regardless
+    # of LLM availability or classification. This is not "LLM uncertainty" —
+    # the user asked about themselves, and the deterministic path handles it
+    # perfectly and instantly.
+    _ASK_OPERATOR_HINTS = ("my name", "who am i", "whoami", "operator",
+                           "what do you know about me")
+    is_operator_q = any(h in question.lower() for h in _ASK_OPERATOR_HINTS)
+
+    if is_operator_q or not llm_enabled():
+        req = requirements_from_question(question, conn)
+    else:
         req = understand(question, conn)
         # When the LLM understanding path fails (returns None), it means the
         # model explicitly said "Unknown" or couldn't parse the response.
@@ -2781,8 +3000,6 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
                 evidence=Evidence(requirements=RetrievalRequirements(needs=["general"])),
                 used_llm=False,
             )
-    else:
-        req = requirements_from_question(question, conn)
 
     if req is None:
         # Could not confidently determine the question. Honest, rare case.
@@ -2805,7 +3022,10 @@ def ask(question: str, conn, prev: Optional["Exchange"] = None,
 
     text: Optional[str] = None
     used_llm = False
-    if "chitchat" in ev.requirements.needs:
+    if "operator" in ev.requirements.needs:
+        text = _deterministic_answer(question, ev, "operator", decision)
+        used_llm = False
+    elif "chitchat" in ev.requirements.needs:
         text = _deterministic_answer(question, ev, "chitchat", decision)
     elif "general_reasoning" in ev.requirements.needs:
         text = _synthesize(question, ev, conn=conn, prev=prev, decision=decision)

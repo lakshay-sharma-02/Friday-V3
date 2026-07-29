@@ -160,8 +160,48 @@ def _post_message(
     """Post a message to a Discord channel. Returns (success, error_message)."""
     result = _api_post(config, f"/channels/{channel_id}/messages", {"content": content})
     if result and result.get("id"):
-        return True, ""
+        return True, result.get("id", "")
     return False, "failed to post message"
+
+
+def _edit_message(
+    config: DiscordConfig,
+    channel_id: str,
+    message_id: str,
+    content: str,
+) -> tuple[bool, str]:
+    """Edit an existing Discord message in-place via PATCH.
+
+    Uses the Discord REST API ``PATCH /channels/{channel_id}/messages/{message_id}``.
+    Returns (success, error_message).
+
+    Args:
+        config: Discord bot configuration.
+        channel_id: Channel ID.
+        message_id: ID of the message to edit.
+        content: New message content.
+    """
+    if not config.configured:
+        return False, "Discord not configured"
+    url = f"{_API_BASE}/channels/{channel_id}/messages/{message_id}"
+    body = json.dumps({"content": content}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body,
+        headers={
+            "Authorization": f"Bot {config.bot_token}",
+            "Content-Type": "application/json",
+            "User-Agent": "Friday/1.0",
+        },
+        method="PATCH",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            if result and result.get("id"):
+                return True, ""
+            return False, "edit failed"
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        return False, f"{type(e).__name__}: {e}"
 
 
 # ---------------------------------------------------------------------------

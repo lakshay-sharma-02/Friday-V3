@@ -1,273 +1,440 @@
-"""Meta-Engine CLI — `friday meta` commands."""
+"""CLI for Self-Evolution Engine — `friday upgrade` command group.
+
+Usage:
+    friday upgrade plan "make yourself capable of speaking"    — dry-run: show what would change
+    friday upgrade "add a simple text file reader worker"      — full pipeline: sandbox → verify → deploy
+    friday upgrade list                                        — list installed capabilities
+    friday upgrade enable <name>                               — enable a deployed capability
+    friday upgrade disable <name>                              — disable a deployed capability
+    friday upgrade rollback <name>                             — rollback a capability
+"""
 
 from __future__ import annotations
 
 import argparse
-import sys
-from typing import Optional
 
-import json
-
-from .db import (
-    connect,
-    get_capability_gaps,
-    get_capability_gap,
-    get_si_runs,
-    get_si_run,
-    now_iso,
-    update_si_run,
-)
-from .meta.loop import run_cycle
-from .meta.deploy import deploy, approve, reject, promote
-from .meta.verification import verify
+from .db import connect
+from .presentation.cli_format import header, green, yellow, red, gray, cyan, bold
 
 
-def cmd_meta(args: argparse.Namespace) -> int:
-    """Dispatch friday meta <action>."""
-    action = args.action or "status"
-    conn = connect()
+def cmd_upgrade(args: argparse.Namespace) -> int:
+    """Dispatch `friday upgrade` subcommands."""
+    action = getattr(args, "action", None)
+    if not action:
+        return _show_upgrade_help()
 
-    try:
-        if action == "status":
-            return _cmd_status(conn, args)
-        elif action == "analyze":
-            return _cmd_analyze(conn, args)
-        elif action == "plan":
-            return _cmd_plan(conn, args)
-        elif action == "deploy":
-            gap_id = args.gap_id or _prompt_gap_id(conn)
-            if gap_id is None:
-                print("error: specify --gap-id or have open gaps")
-                return 1
-            run_id = deploy(conn, gap_id)
-            if run_id:
-                print(f"Deploy staged as run #{run_id}")
-                print(f"  Approve: friday meta approve --run-id {run_id}")
-                print(f"  Reject:  friday meta reject --run-id {run_id}")
-            return 0 if run_id else 1
-        elif action == "approve":
-            rid = args.run_id or _prompt_run_id(conn, "approve")
-            if rid is None:
-                return 1
-            if approve(conn, rid):
-                return 0
-            return 1
-        elif action == "reject":
-            rid = args.run_id or _prompt_run_id(conn, "reject")
-            if rid is None:
-                return 1
-            if reject(conn, rid):
-                return 0
-            return 1
-        elif action == "promote":
-            worker_name = args.worker
-            if not worker_name:
-                print("error: specify <name> to promote: friday meta promote <worker-name>")
-                return 1
-            if promote(conn, worker_name):
-                return 0
-            return 1
-        elif action == "verify":
-            gap_id = args.gap_id or _prompt_gap_id(conn)
-            run_id = args.run_id
-            if run_id is None:
-                run_id = _prompt_run_id(conn, "verify")
-            if gap_id is None or run_id is None:
-                return 1
-            _cmd_verify(conn, gap_id, run_id, args)
-            return 0
-        elif action == "run":
-            return _cmd_run_cycle(conn, args)
-        else:
-            print(f"unknown action: {action}", file=sys.stderr)
-            print("Available: status, analyze, plan, deploy, approve, reject, verify, run")
-            return 2
-    finally:
-        conn.close()
+    if action == "plan":
+        return _upgrade_plan(args)
+    if action in ("deploy", "run"):
+        return _upgrade_run(args)
+    if action == "list":
+        return _upgrade_list()
+    if action == "enable":
+        return _upgrade_enable(args)
+    if action == "disable":
+        return _upgrade_disable(args)
+    if action == "rollback":
+        return _upgrade_rollback(args)
+    if action in ("status", "show"):
+        return _upgrade_status(args)
 
-
-def _cmd_status(conn, args: argparse.Namespace) -> int:
-    """Show current meta-engine status."""
-    gaps = get_capability_gaps(conn)
-    runs = get_si_runs(conn)
-
-    print("Meta-Engine — Friday's Self-Improvement Loop")
-    print()
-
-    # Gap summary.
-    open_gaps = [g for g in gaps if g["status"] == "open"]
-    planned = [g for g in gaps if g["status"] == "planned"]
-    verifying = [g for g in gaps if g["status"] == "verifying"]
-    deployed = [g for g in gaps if g["status"] == "deployed"]
-    rejected = [g for g in gaps if g["status"] == "rejected"]
-
-    print(f"  Gaps: {len(gaps)} total")
-    print(f"  Open:     {len(open_gaps)}")
-    print(f"  Planned:  {len(planned)}")
-    print(f"  Building: {len(verifying)}")
-    print(f"  Deployed: {len(deployed)}")
-    print(f"  Rejected: {len(rejected)}")
-    print()
-
-    if open_gaps:
-        print("  Top open gaps:")
-        for g in open_gaps[:5]:
-            score = g["score"]
-            freq = g["frequency"]
-            att = g["attempt_count"]
-            print(f"    #{g['id']} [score={score:.1f} freq={freq} attempts={att}]")
-            print(f"      {g['description'][:80]}")
-        print()
-
-    # Pending approvals.
-    pending = [r for r in runs if not r.get("deployed") and r.get("human_approved") == 0]
-    if pending:
-        print("  Pending approval:")
-        for r in pending[:5]:
-            g = get_capability_gap(conn, r["gap_id"])
-            desc = g["description"][:60] if g else "?"
-            print(f"    run #{r['id']} -> gap #{r['gap_id']}: {desc}")
-            print(f"      Approve: friday meta approve --run-id {r['id']}")
-        print()
-
-    if args.verbose:
-        print("  All self-improvement runs:")
-        for r in runs[:10]:
-            status = "deployed" if r.get("deployed") else (
-                "approved" if r.get("human_approved") else "staged")
-            print(f"    run #{r['id']} gap=#{r['gap_id']} [{status}] {r.get('created_at', '?')[:19]}")
-        print()
-
-    return 0
-
-
-def _cmd_analyze(conn, args: argparse.Namespace) -> int:
-    """Run gap analysis and display results."""
-    from .meta.gap_analyzer import analyze
-    report = analyze(conn)
-    print(report.to_text())
-    return 0
-
-
-def _cmd_plan(conn, args: argparse.Namespace) -> int:
-    """Plan for a specific gap."""
-    gap_id = args.gap_id or _prompt_gap_id(conn)
-    if gap_id is None:
-        print("error: specify --gap-id")
-        return 1
-    from .meta.si_planner import plan_for_gap
-    plan_id = plan_for_gap(conn, gap_id)
-    if plan_id:
-        print(f"Plan generated: {plan_id}")
-        return 0
-    print("Planning failed or gap not plan-able")
+    print(f"Unknown upgrade action: {action}")
+    print(gray("  Try: friday upgrade plan, friday upgrade list, friday upgrade enable <name>"))
     return 1
 
 
-def _cmd_verify(conn, gap_id: int, run_id: int, args: argparse.Namespace) -> None:
-    """Run verification and display results."""
-    from .meta.sandbox import Sandbox
-    sandbox = Sandbox(label=f"verify_gap_{gap_id}_run_{run_id}")
-    sb_path = sandbox.create()
-    print(f"Sandbox at {sb_path}")
-
-    # Apply the deploy's diff so the sandbox has the new worker code.
-    # Use a file-level approach: parse the diff and extract new files,
-    # since git apply fails when the sandbox base commit differs.
-    run = get_si_run(conn, run_id)
-    if run:
-        diff_path = run.get("diff_path") or ""
-        if diff_path:
-            from pathlib import Path
-            dp = Path(diff_path)
-            if dp.exists():
-                from .meta.sandbox import _apply_diff_files
-                _apply_diff_files(sandbox.sandbox_path, dp.read_text(encoding="utf-8"))
-                print(f"  applied files from {diff_path}")
-            else:
-                print(f"  warning: diff not found at {diff_path}")
-
-    result = verify(conn, gap_id, run_id, sandbox)
-
-    # Persist the verification result back to the run record so that
-    # `approve()` and `status` can read it.
-    update_si_run(
-        conn, run_id,
-        verification_result=json.dumps(result.to_dict()),
-        verification_log="\n".join(result.log),
-        updated_at=now_iso(),
-    )
-
-    sandbox.cleanup()
-    print(f"Verification: {'PASS' if result.passed else 'FAIL'}")
-    if result.failure_reason:
-        print(f"  Reason: {result.failure_reason}")
-    print("Log:")
-    for line in result.log:
-        print(f"  {line}")
-
-
-def _cmd_run_cycle(conn, args: argparse.Namespace) -> int:
-    """Run one meta-loop cycle."""
-    print("Meta-Engine: running analysis cycle...")
-    report = run_cycle(conn, dry_run=args.dry_run, gap_id=args.gap_id)
-    print(report.to_text())
+def _show_upgrade_help() -> int:
+    print(header("Self-Evolution Engine", "friday upgrade"))
+    print()
+    print("  Friday can upgrade itself — you can add new capabilities through")
+    print("  natural language requests. Each upgrade goes through a sandbox,")
+    print("  verification, and is deployed with rollback safety.")
+    print()
+    print(gray("  Commands:"))
+    print()
+    print(gray("    friday upgrade plan \"<request>\""))
+    print(gray("      Dry-run: show what would change without modifying anything"))
+    print()
+    print(gray("    friday upgrade \"<request>\""))
+    print(gray("      Full pipeline: plan → sandbox → verify → deploy"))
+    print()
+    print(gray("    friday upgrade list"))
+    print(gray("      List installed capabilities and their status"))
+    print()
+    print(gray("    friday upgrade enable <name>"))
+    print(gray("      Enable a deployed capability"))
+    print()
+    print(gray("    friday upgrade disable <name>"))
+    print(gray("      Disable a deployed capability"))
+    print()
+    print(gray("    friday upgrade rollback <name>"))
+    print(gray("      Rollback a deployed capability to pre-deployment state"))
+    print()
+    print(gray("  Examples:"))
+    print(gray('    friday upgrade plan "make yourself capable of speaking"'))
+    print(gray('    friday upgrade "add a simple text file reader worker"'))
+    print(gray("    friday upgrade list"))
+    print(gray("    friday upgrade enable voice_support"))
+    print(gray("    friday upgrade rollback voice_support"))
     return 0
 
 
-def _prompt_gap_id(conn) -> Optional[int]:
-    """Prompt user to pick a gap from open ones."""
-    gaps = get_capability_gaps(conn, status="open")
-    if not gaps:
-        gaps = get_capability_gaps(conn)
-        open_list = [g for g in gaps if g["status"] == "open"]
-        if not open_list:
-            print("No open gaps found")
-            return None
-        gaps = open_list
-    print("Open gaps:")
-    for g in gaps[:10]:
-        print(f"  #{g['id']}: [{g['score']}] {g['description'][:80]}")
-    try:
-        raw = input("Enter gap id: ").strip()
-        return int(raw)
-    except (ValueError, EOFError):
-        return None
+def _get_request(args: argparse.Namespace) -> str:
+    """Extract the upgrade request from args."""
+    request = getattr(args, "request", None)
+    if request:
+        return request
+    # Fall back to positional text.
+    text = getattr(args, "text", None)
+    if text:
+        return " ".join(text) if isinstance(text, list) else text
+    return ""
 
 
-def _prompt_run_id(conn, action: str) -> Optional[int]:
-    """Prompt user to pick a run."""
-    runs = get_si_runs(conn)
-    pending = [r for r in runs if not r.get("deployed")]
-    if not pending:
-        print(f"No pending runs to {action}")
-        return None
-    print(f"Available runs to {action}:")
-    for r in pending[:10]:
-        g = get_capability_gap(conn, r["gap_id"])
-        desc = g["description"][:60] if g else "?"
-        print(f"  #{r['id']}: gap #{r['gap_id']} — {desc}")
+def _upgrade_plan(args: argparse.Namespace) -> int:
+    """Dry-run: show what would change without modifying anything."""
+    request = _get_request(args)
+    if not request:
+        print(red("  Specify what capability to add."))
+        print(gray('  Example: friday upgrade plan "make yourself capable of speaking"'))
+        return 1
+
+    from .meta.sandbox import Sandbox
+    from .meta.si_planner import (
+        generate_capability_plan,
+        estimate_plan_changes,
+        validate_capability_plan,
+    )
+
+    print(header("Upgrade Plan", "dry-run"))
+    print(yellow(f"  Analyzing: {request}"))
+    print()
+
+    # Create sandbox for codebase context (no real changes).
+    sandbox = Sandbox(label="plan_preview")
     try:
-        raw = input(f"Enter run id to {action}: ").strip()
-        return int(raw)
-    except (ValueError, EOFError):
-        return None
+        sb_path = sandbox.create()
+        print(gray(f"  Sandbox created for analysis"))
+        print()
+
+        conn = connect()
+        try:
+            plan = generate_capability_plan(request, sandbox, conn=conn)
+        finally:
+            conn.close()
+
+        if not plan:
+            print(red("  Could not generate a plan. Is the LLM configured?"))
+            print(gray("  Set GROQ_API_KEY, OPENROUTER_API_KEY, or similar."))
+            sandbox.cleanup()
+            return 1
+
+        # Validate.
+        errors = validate_capability_plan(plan)
+        if errors:
+            print(red("  Plan validation errors:"))
+            for e in errors:
+                print(f"    - {e}")
+            sandbox.cleanup()
+            return 1
+
+        # Show the plan summary.
+        cap_name = plan.get("capability_name", "?")
+        print(header("Plan", cap_name))
+        print()
+        print(estimate_plan_changes(plan))
+        print()
+
+        # Show verification steps.
+        ver_steps = plan.get("verification_steps", [])
+        if ver_steps:
+            print(gray("  Verification steps:"))
+            for vs in ver_steps:
+                print(f"    • {vs}")
+
+        print()
+        print(gray(f"  Run the full pipeline: friday upgrade \"{request}\""))
+
+    finally:
+        sandbox.cleanup()
+
+    return 0
+
+
+def _upgrade_run(args: argparse.Namespace) -> int:
+    """Full pipeline: plan → sandbox → verify → deploy."""
+    request = _get_request(args)
+    if not request:
+        print(red("  Specify what capability to add."))
+        print(gray('  Example: friday upgrade "make yourself capable of speaking"'))
+        return 1
+
+    # Confirm with the operator (safety gate).
+    print(header("Self-Evolution", "deploy"))
+    print(yellow(f"  This will modify Friday's own source code!"))
+    print(f"  Request: {request}")
+    print()
+    answer = input(gray("  Continue? (y/N): ")).strip().lower()
+    if answer not in ("y", "yes"):
+        print(gray("  Aborted."))
+        return 0
+
+    from .meta.sandbox import Sandbox
+    from .meta.si_planner import (
+        generate_capability_plan,
+        validate_capability_plan,
+    )
+    from .meta.deploy import deploy_capability
+
+    print()
+    print(gray("  Phase 1: Planning..."))
+
+    conn = connect()
+    sandbox = Sandbox(label="capability_deploy")
+    try:
+        sb_path = sandbox.create()
+        print(gray(f"  Sandbox created"))
+
+        plan = generate_capability_plan(request, sandbox, conn=conn)
+        if not plan:
+            print(red("  Could not generate a plan. Is the LLM configured?"))
+            sandbox.cleanup()
+            conn.close()
+            return 1
+
+        errors = validate_capability_plan(plan)
+        if errors:
+            print(red("  Plan validation errors:"))
+            for e in errors:
+                print(f"    - {e}")
+            sandbox.cleanup()
+            conn.close()
+            return 1
+
+        cap_name = plan.get("capability_name", "?")
+        print(green(f"  ✓ Plan generated: {cap_name}"))
+        print()
+
+        print(gray("  Phase 2: Building & Verifying..."))
+        result = deploy_capability(conn, plan)
+        if result:
+            print()
+            print(green(f"  ✅ Upgrade complete: {cap_name}"))
+            print(gray(f"  Enable it: friday upgrade enable {cap_name}"))
+            print(gray(f"  Check status: friday upgrade list"))
+        else:
+            print(red(f"  ❌ Upgrade failed"))
+            return 1
+
+    except Exception as e:
+        print(red(f"  Error: {e}"))
+        import traceback
+        traceback.print_exc()
+        return 1
+    finally:
+        sandbox.cleanup()
+        conn.close()
+
+    return 0
+
+
+def _upgrade_list() -> int:
+    """List installed capabilities and their status."""
+    from .meta.capability import CapabilityRegistry
+
+    conn = connect()
+    try:
+        registry = CapabilityRegistry(conn)
+        flags = registry.list_all()
+
+        if not flags:
+            print(header("Capabilities", "none deployed"))
+            print()
+            print(gray("  No capabilities deployed yet."))
+            print(gray('  Deploy one: friday upgrade "make yourself capable of speaking"'))
+            print(gray('  Preview:    friday upgrade plan "make yourself capable of speaking"'))
+            return 0
+
+        print(header("Capabilities", f"{len(flags)} total"))
+        print()
+
+        for f in flags:
+            if f.enabled:
+                status = green("✅ Enabled")
+            elif f.installed:
+                status = yellow("❌ Disabled")
+            else:
+                status = gray("⏳ Pending")
+
+            deps_str = green("deps ✓") if f.deps_installed else yellow("no deps")
+            print(f"  {f.name:<25s} {status:<15s}  {deps_str}")
+            if f.description:
+                print(f"  {'':25s} {gray(f.description[:60])}")
+
+            # Show rollback commit if available.
+            if f.rollback_commit:
+                print(f"  {'':25s} {gray(f'rollback: {f.rollback_commit[:12]}')}")
+            print()
+
+    finally:
+        conn.close()
+
+    return 0
+
+
+def _upgrade_enable(args: argparse.Namespace) -> int:
+    """Enable a deployed capability."""
+    name = getattr(args, "name", "") or getattr(args, "request", "")
+    if not name:
+        print(red("  Specify a capability name."))
+        print(gray("  Use: friday upgrade list"))
+        return 1
+
+    from .meta.capability import CapabilityRegistry
+
+    conn = connect()
+    try:
+        registry = CapabilityRegistry(conn)
+        flag = registry.get(name)
+        if not flag:
+            print(red(f"  Capability '{name}' not found."))
+            print(gray("  Use: friday upgrade list"))
+            return 1
+
+        if flag.enabled:
+            print(yellow(f"  Capability '{name}' is already enabled."))
+            return 0
+
+        registry.enable(name)
+        print(green(f"  ✅ Capability '{name}' enabled."))
+    finally:
+        conn.close()
+
+    return 0
+
+
+def _upgrade_disable(args: argparse.Namespace) -> int:
+    """Disable a deployed capability."""
+    name = getattr(args, "name", "") or getattr(args, "request", "")
+    if not name:
+        print(red("  Specify a capability name."))
+        print(gray("  Use: friday upgrade list"))
+        return 1
+
+    from .meta.capability import CapabilityRegistry
+
+    conn = connect()
+    try:
+        registry = CapabilityRegistry(conn)
+        flag = registry.get(name)
+        if not flag:
+            print(red(f"  Capability '{name}' not found."))
+            print(gray("  Use: friday upgrade list"))
+            return 1
+
+        if not flag.enabled:
+            print(yellow(f"  Capability '{name}' is already disabled."))
+            return 0
+
+        registry.disable(name)
+        print(yellow(f"  Capability '{name}' disabled."))
+    finally:
+        conn.close()
+
+    return 0
+
+
+def _upgrade_rollback(args: argparse.Namespace) -> int:
+    """Rollback a deployed capability."""
+    name = getattr(args, "name", "") or getattr(args, "request", "")
+    if not name:
+        print(red("  Specify a capability name to rollback."))
+        print(gray("  Use: friday upgrade list"))
+        return 1
+
+    # Confirm with the operator.
+    print(header("Self-Evolution", "rollback"))
+    print(yellow(f"  This will revert all changes made by '{name}'!"))
+    print()
+    answer = input(gray(f"  Rollback {name}? (y/N): ")).strip().lower()
+    if answer not in ("y", "yes"):
+        print(gray("  Aborted."))
+        return 0
+
+    from .meta.deploy import rollback_capability
+
+    conn = connect()
+    try:
+        ok = rollback_capability(conn, name)
+        if ok:
+            print(green(f"  ✅ Capability '{name}' rolled back successfully."))
+        else:
+            print(red(f"  ❌ Rollback failed."))
+            return 1
+    finally:
+        conn.close()
+
+    return 0
+
+
+def _upgrade_status(args: argparse.Namespace) -> int:
+    """Show status of a specific capability."""
+    name = getattr(args, "name", "") or getattr(args, "request", "")
+    if not name:
+        return _upgrade_list()
+
+    from .meta.capability import CapabilityRegistry
+
+    conn = connect()
+    try:
+        registry = CapabilityRegistry(conn)
+        flag = registry.get(name)
+        if not flag:
+            print(red(f"  Capability '{name}' not found."))
+            print(gray("  Use: friday upgrade list"))
+            return 1
+
+        print(header("Capability", flag.name))
+        print(f"  Description:  {flag.description}")
+        print(f"  Status:       {'✅ Enabled' if flag.enabled else '❌ Disabled' if flag.installed else '⏳ Pending'}")
+        print(f"  Installed:    {'Yes' if flag.installed else 'No'}")
+        print(f"  Deps:         {'Installed' if flag.deps_installed else 'Not installed'}")
+        if flag.added_at:
+            print(f"  Deployed at:  {flag.added_at[:19]}")
+        if flag.enabled_at:
+            print(f"  Enabled at:   {flag.enabled_at[:19]}")
+        if flag.rollback_commit:
+            print(f"  Rollback:     {flag.rollback_commit[:16]}")
+        if flag.last_used_at:
+            print(f"  Last used:    {flag.last_used_at[:19]}")
+
+    finally:
+        conn.close()
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subparser registration
+# ---------------------------------------------------------------------------
 
 
 def add_subparser(sub) -> None:
-    """Add the `meta` subcommand parser."""
+    """Add the ``upgrade`` subcommand parser for self-evolution."""
     p = sub.add_parser(
-        "meta",
-        help="Self-improvement loop: detect gaps, plan, build, verify, deploy.",
+        "upgrade",
+        help="Self-evolution engine — upgrade Friday's own capabilities."
     )
     p.add_argument(
-        "action", nargs="?", default="status",
-        choices=["status", "analyze", "plan", "deploy", "approve", "reject", "promote", "verify", "run"],
-        help="Action (default: status).",
+        "action",
+        nargs="?",
+        choices=["plan", "deploy", "run", "list", "enable", "disable", "rollback", "status", "show"],
+        default=None,
     )
-    p.add_argument("--gap-id", type=int, default=None, help="Capability gap ID.")
-    p.add_argument("--run-id", type=int, default=None, help="Self-improvement run ID.")
-    p.add_argument("--worker", default=None, help="Worker name for 'promote' action.")
-    p.add_argument("--dry-run", action="store_true", help="Analyze only; don't plan.")
-    p.add_argument("--verbose", "-v", action="store_true", help="Show detailed output.")
-    p.set_defaults(func=cmd_meta)
+    p.add_argument(
+        "request",
+        nargs="?",
+        default="",
+    )
+    p.add_argument("--name", "-n", default="")
+    p.set_defaults(func=cmd_upgrade)

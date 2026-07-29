@@ -158,12 +158,56 @@ def _get_updates(
     return []
 
 
-def _send_message(config: TelegramConfig, chat_id: str, text: str) -> tuple[bool, str]:
-    """Send a message to a Telegram chat. Returns (success, error_message)."""
-    result = _api_post(config, "sendMessage", {
+def _send_message(config: TelegramConfig, chat_id: str, text: str, parse_mode: str = "") -> tuple[bool, str]:
+    """Send a message to a Telegram chat. Returns (success, message_id_or_error).
+
+    On success, the second element is the sent message_id (as a string) so
+    callers can use ``_edit_message()`` to edit it in-place later.
+
+    Args:
+        config: Telegram bot configuration.
+        chat_id: Target chat ID.
+        text: Message text.
+        parse_mode: Optional parse mode ("HTML" or "MarkdownV2").
+    """
+    payload: dict = {
         "chat_id": chat_id,
         "text": text,
-    })
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    result = _api_post(config, "sendMessage", payload)
+    if result and result.get("ok"):
+        sent_msg = result.get("result", {}) or {}
+        msg_id = sent_msg.get("message_id", None)
+        if msg_id is not None:
+            return True, str(msg_id)
+        return True, ""
+    error = (result or {}).get("description", "unknown error") if result else "API request failed"
+    return False, error
+
+
+def _edit_message(config: TelegramConfig, chat_id: str, message_id: int, text: str,
+                   parse_mode: str = "") -> tuple[bool, str]:
+    """Edit an existing Telegram message in-place.
+
+    Uses the ``editMessageText`` API. Returns (success, error_message).
+
+    Args:
+        config: Telegram bot configuration.
+        chat_id: Target chat ID.
+        message_id: ID of the message to edit (returned by ``_send_message``).
+        text: New message text.
+        parse_mode: Optional parse mode ("HTML" or "MarkdownV2").
+    """
+    payload: dict = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    result = _api_post(config, "editMessageText", payload)
     if result and result.get("ok"):
         return True, ""
     error = (result or {}).get("description", "unknown error") if result else "API request failed"

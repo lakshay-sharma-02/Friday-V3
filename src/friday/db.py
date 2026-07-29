@@ -6,12 +6,13 @@ re-derived at summary time from stored rows, so we never persist derived pairs.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 
 def db_path() -> Path:
@@ -21,6 +22,8 @@ def db_path() -> Path:
     return Path.home() / ".friday" / "friday.db"
 
 
+# Legacy — kept for reference; migrations/*.sql is the source of truth.
+# Remove once no external code imports this constant.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS repositories (
     id              INTEGER PRIMARY KEY,
@@ -163,31 +166,9 @@ CREATE TABLE IF NOT EXISTS knowledge_history (
     verification_count  INTEGER NOT NULL DEFAULT 0,
     is_static            INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (build_at, knowledge_id)
-);
-
--- M8.2: deterministic evolution events derived from history diffs.
--- Every record references: knowledge id, previous version, new version,
--- evidence ids, timestamp, reason. Append-only.
-CREATE TABLE IF NOT EXISTS evolution_events (
-    id                  TEXT PRIMARY KEY,
-    build_at            TEXT NOT NULL,
-    event_type          TEXT NOT NULL,
-    knowledge_id        TEXT NOT NULL,
-    previous_confidence TEXT,
-    new_confidence      TEXT,
-    previous_status     TEXT,
-    new_status          TEXT,
-    previous_statement  TEXT,
-    new_statement       TEXT,
-    reason              TEXT NOT NULL,
-    evidence_ids        TEXT NOT NULL DEFAULT '',
-    related_ids         TEXT NOT NULL DEFAULT '',
-    timestamp           TEXT NOT NULL
-);
-
--- M8.3: Understanding Engine. Write-only layer on top of Knowledge. NEVER
+);-- M8.3: Understanding Engine. Write-only layer on top of Knowledge. NEVER
 -- reads observations/context directly. Every understanding cites knowledge ids.
--- Append-only history + evolution, mirroring knowledge_history/evolution_events.
+-- Append-only history, evolution tables removed (dead code). Uses layer_history instead.
 CREATE TABLE IF NOT EXISTS understanding (
     id                  TEXT PRIMARY KEY,
     type                TEXT NOT NULL,
@@ -217,23 +198,6 @@ CREATE TABLE IF NOT EXISTS understanding_history (
     updated_at          TEXT NOT NULL,
     reinforced_count    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (build_at, understanding_id)
-);
-
--- Deterministic evolution events derived from understanding history diffs.
-CREATE TABLE IF NOT EXISTS understanding_evolution (
-    id                  TEXT PRIMARY KEY,
-    build_at            TEXT NOT NULL,
-    event_type          TEXT NOT NULL,
-    understanding_id    TEXT NOT NULL REFERENCES understanding(id) ON DELETE CASCADE,
-    previous_confidence TEXT,
-    new_confidence      TEXT,
-    previous_status     TEXT,
-    new_status          TEXT,
-    previous_statement  TEXT,
-    new_statement       TEXT,
-    reason              TEXT NOT NULL,
-    knowledge_ids       TEXT NOT NULL DEFAULT '',
-    timestamp           TEXT NOT NULL
 );
 
 -- M8.4: Initiative Engine. Write-only layer on top of Understanding. NEVER
@@ -272,26 +236,6 @@ CREATE TABLE IF NOT EXISTS initiative_history (
     understanding_ids      TEXT NOT NULL DEFAULT '',
     knowledge_ids          TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (build_at, initiative_id)
-);
-
--- Deterministic lifecycle / merge / split events derived from history diffs.
-CREATE TABLE IF NOT EXISTS initiative_evolution (
-    id                  TEXT PRIMARY KEY,
-    build_at            TEXT NOT NULL,
-    event_type          TEXT NOT NULL,
-    initiative_id       TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
-    parent_ids          TEXT NOT NULL DEFAULT '',
-    child_ids           TEXT NOT NULL DEFAULT '',
-    previous_status     TEXT,
-    new_status          TEXT,
-    previous_confidence TEXT,
-    new_confidence      TEXT,
-    previous_title      TEXT,
-    new_title           TEXT,
-    reason              TEXT NOT NULL,
-    understanding_ids   TEXT NOT NULL DEFAULT '',
-    knowledge_ids       TEXT NOT NULL DEFAULT '',
-    timestamp           TEXT NOT NULL
 );
 
 -- Explicit merge/split edges. Parent/child references preserved forever.
@@ -342,26 +286,6 @@ CREATE TABLE IF NOT EXISTS insight_history (
     initiative_ids          TEXT NOT NULL DEFAULT '',
     knowledge_ids           TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (build_at, insight_id)
-);
-
--- Deterministic lifecycle (Candidate->Observed->Verified->Stable->Retired) and
--- retirement events derived from build diffs. Append-only.
-CREATE TABLE IF NOT EXISTS insight_evolution (
-    id                      TEXT PRIMARY KEY,
-    build_at                TEXT NOT NULL,
-    event_type              TEXT NOT NULL,
-    insight_id              TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE,
-    previous_status         TEXT,
-    new_status              TEXT,
-    previous_confidence     TEXT,
-    new_confidence          TEXT,
-    previous_statement      TEXT,
-    new_statement           TEXT,
-    reason                  TEXT NOT NULL,
-    understanding_ids       TEXT NOT NULL DEFAULT '',
-    initiative_ids          TEXT NOT NULL DEFAULT '',
-    knowledge_ids           TEXT NOT NULL DEFAULT '',
-    timestamp               TEXT NOT NULL
 );
 
 -- M9.0: Planning Engine. Write-only layer on TOP of Insights/Initiatives/
@@ -415,25 +339,6 @@ CREATE TABLE IF NOT EXISTS plan_history (
     estimated_complexity    TEXT NOT NULL DEFAULT '',
     estimated_effort        TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (generated_at, plan_id)
-);
-
--- Deterministic lifecycle (Planned->Refined->Approved->Superseded) and
--- supersession events derived from plan diffs. Append-only.
-CREATE TABLE IF NOT EXISTS plan_evolution (
-    id                      TEXT PRIMARY KEY,
-    generated_at            TEXT NOT NULL,
-    event_type              TEXT NOT NULL,
-    plan_id                 TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
-    previous_status         TEXT,
-    new_status              TEXT,
-    previous_confidence     TEXT,
-    new_confidence          TEXT,
-    reason                  TEXT NOT NULL,
-    affected_initiative_ids TEXT NOT NULL DEFAULT '',
-    affected_insight_ids    TEXT NOT NULL DEFAULT '',
-    affected_understanding_ids TEXT NOT NULL DEFAULT '',
-    affected_knowledge_ids  TEXT NOT NULL DEFAULT '',
-    timestamp               TEXT NOT NULL
 );
 
 -- M9.1: Task Graph Compiler. Write-only layer on TOP of the Planning Engine.
@@ -502,19 +407,6 @@ CREATE TABLE IF NOT EXISTS task_history (
     tasks_json             TEXT NOT NULL DEFAULT '',
     edges_json             TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (generated_at, graph_id)
-);
-
-CREATE TABLE IF NOT EXISTS task_evolution (
-    id                      TEXT PRIMARY KEY,
-    generated_at            TEXT NOT NULL,
-    event_type              TEXT NOT NULL,
-    graph_id                TEXT NOT NULL,
-    previous_status         TEXT,
-    new_status              TEXT,
-    reason                  TEXT NOT NULL,
-    task_count              INTEGER NOT NULL DEFAULT 0,
-    edge_count              INTEGER NOT NULL DEFAULT 0,
-    timestamp               TEXT NOT NULL
 );
 
 -- M9.2: Worker Registry. WRITE-ONLY layer on TOP of the Task Graph Compiler.
@@ -608,6 +500,24 @@ CREATE TABLE IF NOT EXISTS operator_preferences (
     set_at      TEXT NOT NULL,
     source      TEXT NOT NULL DEFAULT 'explicit' CHECK(source IN ('explicit', 'derived'))
 );
+
+-- Phase A: Conversation Log. Append-only log of every IdentityEngine exchange.
+-- Used by the daemon's downstream LLM extraction (Phase B) to learn operator
+-- identity and preferences without brittle regex patterns.
+CREATE TABLE IF NOT EXISTS conversation_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel         TEXT NOT NULL,
+    channel_id      TEXT NOT NULL,
+    routing         TEXT NOT NULL DEFAULT '',
+    user_message    TEXT NOT NULL,
+    friday_reply    TEXT NOT NULL,
+    conversation_at TEXT NOT NULL,
+    processed       INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_log_channel ON conversation_log(channel);
+CREATE INDEX IF NOT EXISTS idx_conversation_log_processed ON conversation_log(processed);
+CREATE INDEX IF NOT EXISTS idx_conversation_log_conversation_at ON conversation_log(conversation_at DESC);
 
 -- ===========================================================================
 -- M10.1 Observer Cursors (Law 18 — per-layer bookkeeping, NOT operator state)
@@ -853,6 +763,24 @@ CREATE TABLE IF NOT EXISTS runtime_evolution (
     PRIMARY KEY (evolved_at, task_id, from_state, to_state)
 );
 
+-- Generic append-only layer history for all entity types.
+-- Replaces the 6 dead evolution tables (evolution_events, understanding_evolution,
+-- initiative_evolution, insight_evolution, plan_evolution, task_evolution).
+-- Every row records one state transition for any entity type.
+CREATE TABLE IF NOT EXISTS layer_history (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type         TEXT NOT NULL,
+    entity_id           TEXT NOT NULL,
+    event_type          TEXT NOT NULL,
+    previous_state      TEXT,
+    new_state           TEXT,
+    reason              TEXT NOT NULL DEFAULT '',
+    metadata            TEXT NOT NULL DEFAULT '{}',
+    recorded_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_layer_history_entity ON layer_history(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_layer_history_recorded ON layer_history(recorded_at);
+
 -- ===========================================================================
 -- Indexes for hot-path WHERE clauses (FK columns, status filters, etc.)
 -- ===========================================================================
@@ -863,7 +791,6 @@ CREATE TABLE IF NOT EXISTS runtime_evolution (
 CREATE INDEX IF NOT EXISTS idx_tasks_graph_id ON tasks(graph_id);
 CREATE INDEX IF NOT EXISTS idx_task_edges_graph_id ON task_edges(graph_id);
 CREATE INDEX IF NOT EXISTS idx_task_history_graph_id ON task_history(graph_id);
-CREATE INDEX IF NOT EXISTS idx_task_evolution_graph_id ON task_evolution(graph_id);
 CREATE INDEX IF NOT EXISTS idx_task_graphs_status ON task_graphs(status);
 
 -- Resolver FK lookups
@@ -882,23 +809,18 @@ CREATE INDEX IF NOT EXISTS idx_worker_history_worker_id ON worker_history(worker
 CREATE INDEX IF NOT EXISTS idx_proposed_workers_status ON proposed_workers(status);
 -- Knowledge evolution FK lookups
 CREATE INDEX IF NOT EXISTS idx_knowledge_history_knowledge_id ON knowledge_history(knowledge_id);
-CREATE INDEX IF NOT EXISTS idx_evolution_events_knowledge_id ON evolution_events(knowledge_id);
 
 -- Understanding evolution FK lookups
 CREATE INDEX IF NOT EXISTS idx_understanding_history_understanding_id ON understanding_history(understanding_id);
-CREATE INDEX IF NOT EXISTS idx_understanding_evolution_understanding_id ON understanding_evolution(understanding_id);
 
 -- Initiative evolution FK lookups
 CREATE INDEX IF NOT EXISTS idx_initiative_history_initiative_id ON initiative_history(initiative_id);
-CREATE INDEX IF NOT EXISTS idx_initiative_evolution_initiative_id ON initiative_evolution(initiative_id);
 
 -- Insight evolution FK lookups
 CREATE INDEX IF NOT EXISTS idx_insight_history_insight_id ON insight_history(insight_id);
-CREATE INDEX IF NOT EXISTS idx_insight_evolution_insight_id ON insight_evolution(insight_id);
 
 -- Plan evolution FK lookups
 CREATE INDEX IF NOT EXISTS idx_plan_history_plan_id ON plan_history(plan_id);
-CREATE INDEX IF NOT EXISTS idx_plan_evolution_plan_id ON plan_evolution(plan_id);
 
 -- Relationship cross-reference lookups (OR filter on repo_a/repo_b)
 CREATE INDEX IF NOT EXISTS idx_relationships_repo_a ON relationships(repo_a);
@@ -997,345 +919,796 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
         conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA)
-    _migrate(conn)
+    # Schema is now applied through versioned migration files.
+    # The initial SCHEMA string is applied as sql_initial via
+    # _run_sql_migrations(), which reads files from migrations/
+    # and tracks them in _schema_versions. This replaces the old
+    # conn.executescript(SCHEMA) call, reducing per-connect overhead.
+    _run_sql_migrations(conn)
+    _run_pending_migrations(conn)
     return conn
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Apply additive schema changes idempotently (M2/M4 columns)."""
+
+# ── Versioned Schema Migrations ────────────────────────────────────
+# Each step is tracked in _schema_versions so it runs exactly once.
+# NEVER reorder, remove, or modify existing steps — only APPEND.
+
+_MIGRATIONS: list[tuple[str, str, Callable[..., None]]] = []
+
+
+def _register(version: str, description: str):
+    """Decorator to register a migration step."""
+    def deco(fn):
+        _MIGRATIONS.append((version, description, fn))
+        return fn
+    return deco
+
+
+@_register("001", "M2/M4 repository columns + evidence-strength model")
+def _mig_001(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(repositories)")}
-    for col, ctype in (
-        ("maturity", "TEXT"),
-        ("readme_quality", "TEXT"),
-        ("readme_completeness", "TEXT"),
-    ):
+    for col, ctype in (("maturity", "TEXT"), ("readme_quality", "TEXT"), ("readme_completeness", "TEXT")):
         if col not in cols:
             conn.execute(f"ALTER TABLE repositories ADD COLUMN {col} {ctype}")
-    # M4: evidence-strength model.
-    for table, col in (
-        ("relationships", "strength"),
-        ("components", "strength"),
-        ("architecture", "confidence"),
-    ):
+    for table, col in (("relationships", "strength"), ("components", "strength"), ("architecture", "confidence")):
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if col not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT NOT NULL DEFAULT 'Medium'")
-    # M8.1.5: static vs temporal knowledge marker.
+
+
+@_register("002", "M8.1.5 static knowledge marker")
+def _mig_002(conn):
     know_cols = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge)")}
     if "is_static" not in know_cols:
         conn.execute("ALTER TABLE knowledge ADD COLUMN is_static INTEGER NOT NULL DEFAULT 0")
-    # M9.2.5: observations must have a PRIMARY KEY so INSERT OR REPLACE dedupes.
-    # Existing databases created the table without one; rebuild it in place.
+
+
+@_register("003", "M9.2.5 observations PRIMARY KEY")
+def _mig_003(conn):
     _ensure_observations_pk(conn)
-    # M9.2.5: referential integrity. Rebuild FK-bearing tables that predate the
-    # FK schema so no orphan tasks/graphs/history/evolution rows can persist.
+
+
+@_register("004", "M9.2.5 FK-bearing tables")
+def _mig_004(conn):
     _ensure_fk_tables(conn)
-    # M9.2.5: contract versioning (Law 24). Add schema_version column where
-    # missing; existing rows are treated as the current version by the loader.
+
+
+@_register("005", "M9.2.5 schema_version columns")
+def _mig_005(conn):
     know_cols = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge)")}
     if "schema_version" not in know_cols:
-        conn.execute(
-            "ALTER TABLE knowledge ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
-    # M9.2.5: contract versioning (Law 24) for understanding/insight/initiative.
+        conn.execute("ALTER TABLE knowledge ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
     for table in ("understanding", "insights", "initiatives", "workers", "plans"):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if "schema_version" not in cols:
-            conn.execute(
-                f"ALTER TABLE {table} ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
-    # M9.3: resolver_history gained a surrogate AUTOINCREMENT PK so sub-millisecond
-    # re-resolutions append instead of colliding on (resolved_at, assignment_id).
-    # Rebuild in place for databases created before the change.
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN schema_version TEXT NOT NULL DEFAULT '1.0'")
+
+
+@_register("006", "M9.3 resolver_history surrogate PK")
+def _mig_006(conn):
     _ensure_resolver_history_pk(conn)
-    # M9.8: snapshots gains head_sha + manifest_hash to store the
-    # ingest-independent change signature used by `friday observe --changed`.
+
+
+@_register("007", "M9.8 snapshots signature columns")
+def _mig_007(conn):
     _ensure_snapshots_signature_cols(conn)
-    # M10: worker availability + manifest_ref columns for runtime install state.
-    # Additive; safe on DBs created before these columns existed in SCHEMA
-    # (CREATE IF NOT EXISTS does not backfill columns onto pre-existing tables).
+
+
+@_register("008", "M10 worker availability + manifest_ref + worker_kind")
+def _mig_008(conn):
     worker_cols = {r["name"] for r in conn.execute("PRAGMA table_info(workers)")}
     if "availability" not in worker_cols:
-        conn.execute(
-            "ALTER TABLE workers ADD COLUMN availability TEXT NOT NULL DEFAULT 'available'")
+        conn.execute("ALTER TABLE workers ADD COLUMN availability TEXT NOT NULL DEFAULT 'available'")
     if "manifest_ref" not in worker_cols:
         conn.execute("ALTER TABLE workers ADD COLUMN manifest_ref TEXT")
     if "worker_kind" not in worker_cols:
-        conn.execute(
-            "ALTER TABLE workers ADD COLUMN worker_kind TEXT NOT NULL DEFAULT 'function'")
-    # Pillar B Stage 4: exemplars column on mined_patterns for skill formation.
+        conn.execute("ALTER TABLE workers ADD COLUMN worker_kind TEXT NOT NULL DEFAULT 'function'")
+
+
+@_register("009", "Pillar B Stage 4 exemplars on mined_patterns")
+def _mig_009(conn):
     if "mined_patterns" in _existing_tables(conn):
         mp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mined_patterns)")}
         if "exemplars" not in mp_cols:
-            conn.execute(
-                "ALTER TABLE mined_patterns ADD COLUMN exemplars TEXT NOT NULL DEFAULT '{}'")
-    # Phase 3: symbolic task intent (planner emits engineering op, resolver
-    # enriches with repo info). Additive JSON column on tasks.
+            conn.execute("ALTER TABLE mined_patterns ADD COLUMN exemplars TEXT NOT NULL DEFAULT '{}'")
+
+
+@_register("010", "Phase 3 symbolic task intent")
+def _mig_010(conn):
     task_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "symbolic" not in task_cols:
-        conn.execute(
-            "ALTER TABLE tasks ADD COLUMN symbolic TEXT NOT NULL DEFAULT '{}'")
-    # Phase 1.5: execution-contract result (executor's own contract check,
-    # distinct from process exit code). Additive; backfilled as NULL.
+        conn.execute("ALTER TABLE tasks ADD COLUMN symbolic TEXT NOT NULL DEFAULT '{}'")
+
+
+@_register("011", "Phase 1.5+4 runtime_results verification columns")
+def _mig_011(conn):
     rr_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runtime_results)")}
     if "verification_passed" not in rr_cols:
-        conn.execute(
-            "ALTER TABLE runtime_results ADD COLUMN verification_passed INTEGER")
-    # Phase 4: structured verification evidence (test summary, git diff, symbol
-    # counts) proving the verdict. Additive JSON column.
+        conn.execute("ALTER TABLE runtime_results ADD COLUMN verification_passed INTEGER")
     if "verification_evidence" not in rr_cols:
-        conn.execute(
-            "ALTER TABLE runtime_results ADD COLUMN verification_evidence "
-            "TEXT NOT NULL DEFAULT '{}'")
+        conn.execute("ALTER TABLE runtime_results ADD COLUMN verification_evidence TEXT NOT NULL DEFAULT '{}'")
     if "payload" not in rr_cols:
-        conn.execute(
-            "ALTER TABLE runtime_results ADD COLUMN payload TEXT")
-    # Suggestion -> Graph Bridge: add source column to task_graphs.
+        conn.execute("ALTER TABLE runtime_results ADD COLUMN payload TEXT")
+
+
+@_register("012", "Suggestion -> Graph Bridge source column")
+def _mig_012(conn):
     tg_cols = {r["name"] for r in conn.execute("PRAGMA table_info(task_graphs)")}
     if "source" not in tg_cols:
-        conn.execute(
-            "ALTER TABLE task_graphs ADD COLUMN source TEXT")
+        conn.execute("ALTER TABLE task_graphs ADD COLUMN source TEXT")
 
-    # Phase 5: repair_proposals and repair_history tables (Law 16) + indexes.
+
+@_register("013", "Repair + profile_history + watch tables")
+def _mig_013(conn):
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS repair_proposals (
-            id                  TEXT PRIMARY KEY,
-            original_graph_id   TEXT NOT NULL,
-            original_task_id    TEXT NOT NULL,
-            failure_reason      TEXT NOT NULL,
-            capability          TEXT NOT NULL DEFAULT '',
-            repair_depth        INTEGER NOT NULL DEFAULT 0,
-            decision            TEXT NOT NULL,
-            evidence_ids        TEXT NOT NULL DEFAULT '[]',
-            proposed_goal       TEXT NOT NULL,
-            status              TEXT NOT NULL DEFAULT 'pending',
-            created_at          TEXT NOT NULL,
-            reviewed_at         TEXT,
-            schema_version      TEXT NOT NULL DEFAULT '1'
+            id TEXT PRIMARY KEY, original_graph_id TEXT NOT NULL, original_task_id TEXT NOT NULL,
+            failure_reason TEXT NOT NULL, capability TEXT NOT NULL DEFAULT '', repair_depth INTEGER NOT NULL DEFAULT 0,
+            decision TEXT NOT NULL, evidence_ids TEXT NOT NULL DEFAULT '[]', proposed_goal TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, reviewed_at TEXT,
+            schema_version TEXT NOT NULL DEFAULT '1'
         );
         CREATE TABLE IF NOT EXISTS repair_history (
-            proposal_id         TEXT NOT NULL REFERENCES repair_proposals(id) ON DELETE CASCADE,
-            event_type          TEXT NOT NULL,
-            detail              TEXT NOT NULL DEFAULT '',
-            recorded_at         TEXT NOT NULL,
+            proposal_id TEXT NOT NULL REFERENCES repair_proposals(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', recorded_at TEXT NOT NULL,
             PRIMARY KEY (proposal_id, recorded_at)
         );
         CREATE INDEX IF NOT EXISTS idx_repair_proposals_status ON repair_proposals(status);
         CREATE INDEX IF NOT EXISTS idx_repair_history_proposal_id ON repair_history(proposal_id);
-    """)
-
-    # Operator profile_history table (append-only audit log for preference changes).
-    conn.executescript("""
         CREATE TABLE IF NOT EXISTS profile_history (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            key         TEXT NOT NULL,
-            old_value   TEXT,
-            new_value   TEXT NOT NULL,
-            source      TEXT NOT NULL DEFAULT 'explicit',
-            changed_at  TEXT NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL,
+            old_value TEXT, new_value TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'explicit',
+            changed_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_profile_history_key ON profile_history(key);
     """)
+    conn.commit()
 
-    # Phase 4: watch_history table (created fresh each time).
+
+@_register("014", "Phase 4 watch + pending_initiatives tables")
+def _mig_014(conn):
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS watch_history (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            started_at  TEXT NOT NULL,
-            finished_at TEXT,
-            outcome     TEXT NOT NULL DEFAULT 'running',
-            repos_scanned INTEGER NOT NULL DEFAULT 0,
-            repos_changed INTEGER NOT NULL DEFAULT 0,
-            knowledge_updated INTEGER NOT NULL DEFAULT 0,
-            understanding_updated INTEGER NOT NULL DEFAULT 0,
-            initiatives_changed INTEGER NOT NULL DEFAULT 0,
-            insights_changed INTEGER NOT NULL DEFAULT 0,
-            new_pending_initiatives INTEGER NOT NULL DEFAULT 0,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL, finished_at TEXT,
+            outcome TEXT NOT NULL DEFAULT 'running', repos_scanned INTEGER NOT NULL DEFAULT 0,
+            repos_changed INTEGER NOT NULL DEFAULT 0, knowledge_updated INTEGER NOT NULL DEFAULT 0,
+            understanding_updated INTEGER NOT NULL DEFAULT 0, initiatives_changed INTEGER NOT NULL DEFAULT 0,
+            insights_changed INTEGER NOT NULL DEFAULT 0, new_pending_initiatives INTEGER NOT NULL DEFAULT 0,
             error_detail TEXT
         );
         CREATE TABLE IF NOT EXISTS pending_initiatives (
-            id               TEXT PRIMARY KEY,
-            title            TEXT NOT NULL,
-            statement        TEXT NOT NULL,
-            initiative_type  TEXT NOT NULL,
-            confidence       TEXT NOT NULL,
-            understanding_ids TEXT NOT NULL DEFAULT '',
-            knowledge_ids    TEXT NOT NULL DEFAULT '',
-            detected_at      TEXT NOT NULL,
-            watch_run_id     INTEGER NOT NULL REFERENCES watch_history(id),
-            reviewed         INTEGER NOT NULL DEFAULT 0,
-            reviewed_at      TEXT,
-            dismissed_at     TEXT,
-            action_taken     TEXT
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, statement TEXT NOT NULL,
+            initiative_type TEXT NOT NULL, confidence TEXT NOT NULL,
+            understanding_ids TEXT NOT NULL DEFAULT '', knowledge_ids TEXT NOT NULL DEFAULT '',
+            detected_at TEXT NOT NULL, watch_run_id INTEGER NOT NULL REFERENCES watch_history(id),
+            reviewed INTEGER NOT NULL DEFAULT 0, reviewed_at TEXT, dismissed_at TEXT, action_taken TEXT
         );
     """)
     conn.commit()
 
-    # Phase 7: Self-Improvement (Meta-Engine) tables.
+
+@_register("015", "Phase 7 meta-engine tables")
+def _mig_015(conn):
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS capability_gaps (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            description     TEXT NOT NULL,
-            evidence_refs   TEXT NOT NULL DEFAULT '[]',
-            frequency       INTEGER NOT NULL DEFAULT 0,
-            score           REAL NOT NULL DEFAULT 0.0,
-            status          TEXT NOT NULL DEFAULT 'open',
-            attempt_count   INTEGER NOT NULL DEFAULT 0,
-            created_at      TEXT NOT NULL,
-            updated_at      TEXT NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT NOT NULL,
+            evidence_refs TEXT NOT NULL DEFAULT '[]', frequency INTEGER NOT NULL DEFAULT 0,
+            score REAL NOT NULL DEFAULT 0.0, status TEXT NOT NULL DEFAULT 'open',
+            attempt_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_capability_gaps_status ON capability_gaps(status);
         CREATE INDEX IF NOT EXISTS idx_capability_gaps_score ON capability_gaps(score);
         CREATE TABLE IF NOT EXISTS self_improvement_runs (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            gap_id              INTEGER NOT NULL REFERENCES capability_gaps(id),
-            plan_id             TEXT NOT NULL DEFAULT '',
-            sandbox_path        TEXT NOT NULL DEFAULT '',
-            diff_path           TEXT NOT NULL DEFAULT '',
-            verification_result TEXT NOT NULL DEFAULT '{}',
-            verification_log    TEXT NOT NULL DEFAULT '',
-            deployed            INTEGER NOT NULL DEFAULT 0,
-            human_approved      INTEGER NOT NULL DEFAULT 0,
-            human_reviewed_at   TEXT,
-            created_at          TEXT NOT NULL,
-            updated_at          TEXT NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT, gap_id INTEGER NOT NULL REFERENCES capability_gaps(id),
+            plan_id TEXT NOT NULL DEFAULT '', sandbox_path TEXT NOT NULL DEFAULT '',
+            diff_path TEXT NOT NULL DEFAULT '', verification_result TEXT NOT NULL DEFAULT '{}',
+            verification_log TEXT NOT NULL DEFAULT '', deployed INTEGER NOT NULL DEFAULT 0,
+            human_approved INTEGER NOT NULL DEFAULT 0, human_reviewed_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_si_runs_gap_id ON self_improvement_runs(gap_id);
     """)
     conn.commit()
 
-    # Pillar B: Action Log table (append-only event log for user + Friday actions).
-    # Used by sequence mining (Stage 2) to detect repeated patterns. Each row
-    # is one action event with context for enrichment.
+
+@_register("016", "Pillar B action log + pattern pipeline")
+def _mig_016(conn):
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS actions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            source          TEXT NOT NULL,
-            action_type     TEXT NOT NULL,
-            target          TEXT NOT NULL DEFAULT '',
-            detail          TEXT NOT NULL DEFAULT '{}',
-            workspace_id    TEXT,
-            project         TEXT,
-            session_id      TEXT,
-            confidence      TEXT NOT NULL DEFAULT 'observed',
-            observed_at     TEXT NOT NULL,
-            recorded_at     TEXT NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL,
+            action_type TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '{}',
+            workspace_id TEXT, project TEXT, session_id TEXT,
+            confidence TEXT NOT NULL DEFAULT 'observed', observed_at TEXT NOT NULL, recorded_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_actions_source ON actions(source);
         CREATE INDEX IF NOT EXISTS idx_actions_action_type ON actions(action_type);
         CREATE INDEX IF NOT EXISTS idx_actions_observed_at ON actions(observed_at);
         CREATE INDEX IF NOT EXISTS idx_actions_project ON actions(project);
-    """)
-    conn.commit()
-
-    # Pillar B Stage 2: Mined patterns table (persisted sequence-mining results).
-    # Each row is one discovered pattern: a repeated action subsequence with
-    # frequency count and context metadata. Deterministic, LLM-free.
-    conn.executescript("""
         CREATE TABLE IF NOT EXISTS mined_patterns (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            sequence_json   TEXT NOT NULL,
-            count           INTEGER NOT NULL DEFAULT 0,
-            distinct_sessions INTEGER NOT NULL DEFAULT 0,
-            first_seen      TEXT NOT NULL DEFAULT '',
-            last_seen       TEXT NOT NULL DEFAULT '',
-            common_workspace TEXT NOT NULL DEFAULT '',
-            common_project  TEXT NOT NULL DEFAULT '',
-            confidence      TEXT NOT NULL DEFAULT 'derived',
-            mined_at        TEXT NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sequence_json TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0, distinct_sessions INTEGER NOT NULL DEFAULT 0,
+            first_seen TEXT NOT NULL DEFAULT '', last_seen TEXT NOT NULL DEFAULT '',
+            common_workspace TEXT NOT NULL DEFAULT '', common_project TEXT NOT NULL DEFAULT '',
+            confidence TEXT NOT NULL DEFAULT 'derived', mined_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_mined_patterns_count ON mined_patterns(count);
-    """)
-    conn.commit()
-
-    # Pillar B Stage 3: Workflow intents table (LLM-labeled workflow descriptions
-    # derived from mined action patterns). Each row is one labeled intent with
-    # the LLM's description, steps, and confidence. FK to mined_patterns so
-    # intents cascade-delete when patterns are cleared.
-    conn.executescript("""
         CREATE TABLE IF NOT EXISTS workflow_intents (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            pattern_id          INTEGER NOT NULL REFERENCES mined_patterns(id) ON DELETE CASCADE,
-            intent_label        TEXT NOT NULL,
-            intent_description  TEXT NOT NULL DEFAULT '',
-            steps_text          TEXT NOT NULL DEFAULT '[]',
-            confidence          TEXT NOT NULL DEFAULT 'low',
-            pattern_summary     TEXT NOT NULL DEFAULT '',
-            labeled_at          TEXT NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern_id INTEGER NOT NULL REFERENCES mined_patterns(id) ON DELETE CASCADE,
+            intent_label TEXT NOT NULL, intent_description TEXT NOT NULL DEFAULT '',
+            steps_text TEXT NOT NULL DEFAULT '[]', confidence TEXT NOT NULL DEFAULT 'low',
+            pattern_summary TEXT NOT NULL DEFAULT '', labeled_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_workflow_intents_pattern_id ON workflow_intents(pattern_id);
         CREATE INDEX IF NOT EXISTS idx_workflow_intents_confidence ON workflow_intents(confidence);
-    """)
-    conn.commit()
-
-    # Pillar B Stage 4: Formed skills table (deployable replay workflows derived
-    # from labeled intents).
-    conn.executescript("""
         CREATE TABLE IF NOT EXISTS formed_skills (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             workflow_intent_id INTEGER NOT NULL REFERENCES workflow_intents(id) ON DELETE CASCADE,
-            task_graph      TEXT NOT NULL,
-            exemplars       TEXT NOT NULL DEFAULT '{}',
-            invocation_count INTEGER NOT NULL DEFAULT 0,
-            last_invoked_at TEXT,
-            created_at      TEXT NOT NULL,
-            updated_at      TEXT NOT NULL
+            task_graph TEXT NOT NULL, exemplars TEXT NOT NULL DEFAULT '{}',
+            invocation_count INTEGER NOT NULL DEFAULT 0, last_invoked_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_formed_skills_wfi ON formed_skills(workflow_intent_id);
     """)
     conn.commit()
 
-    # Cross-project correlation: project docs table (PRDs, design docs, architecture).
+
+@_register("017", "Cross-project docs + correlation results")
+def _mig_017(conn):
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS project_docs (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            repo_id     INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            path        TEXT NOT NULL,
-            title       TEXT NOT NULL DEFAULT '',
-            content     TEXT NOT NULL,
-            doc_type    TEXT NOT NULL DEFAULT 'design',
-            ingested_at TEXT NOT NULL,
-            checksum    TEXT NOT NULL DEFAULT '',
-            UNIQUE(repo_id, path)
+            id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            path TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL,
+            doc_type TEXT NOT NULL DEFAULT 'design', ingested_at TEXT NOT NULL,
+            checksum TEXT NOT NULL DEFAULT '', UNIQUE(repo_id, path)
         );
         CREATE INDEX IF NOT EXISTS idx_project_docs_repo ON project_docs(repo_id);
         CREATE INDEX IF NOT EXISTS idx_project_docs_type ON project_docs(doc_type);
-    """)
-    conn.commit()
-
-    # Cross-project correlation: per-pair results (append-only, resumable).
-    conn.executescript("""
         CREATE TABLE IF NOT EXISTS correlation_results (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            repo_a_id    INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            repo_b_id    INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            structural_score REAL NOT NULL DEFAULT 0.0,
-            semantic_score    REAL,
-            semantic_reason   TEXT,
-            semantic_label    TEXT,
-            semantic_confidence TEXT,
-            volatility         REAL NOT NULL DEFAULT 0.0,
-            run_at         TEXT NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_a_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            repo_b_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            structural_score REAL NOT NULL DEFAULT 0.0, semantic_score REAL,
+            semantic_reason TEXT, semantic_label TEXT, semantic_confidence TEXT,
+            volatility REAL NOT NULL DEFAULT 0.0, run_at TEXT NOT NULL,
             UNIQUE(repo_a_id, repo_b_id, run_at)
         );
         CREATE INDEX IF NOT EXISTS idx_correlation_scores ON correlation_results(structural_score DESC);
     """)
     conn.commit()
 
-    # Graduated Autonomy: autonomy_permissions table (Gap #7).
+
+@_register("018", "Autonomy permissions table")
+def _mig_018(conn):
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS autonomy_permissions (
-            action_type          TEXT NOT NULL PRIMARY KEY,
-            default_level        TEXT NOT NULL,
-            override_level       TEXT,
-            auto_downgraded      TEXT,
-            consecutive_failures    INTEGER NOT NULL DEFAULT 0,
-            consecutive_successes   INTEGER NOT NULL DEFAULT 0,
-            updated_at              TEXT NOT NULL
+            action_type TEXT NOT NULL PRIMARY KEY, default_level TEXT NOT NULL,
+            override_level TEXT, auto_downgraded TEXT,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            consecutive_successes INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
         );
     """)
     conn.commit()
 
 
+@_register("019", "Phase 1 ambient event feed")
+def _mig_019(conn):
+    if "ambient_feed" in _existing_tables(conn):
+        af_cols = {r["name"] for r in conn.execute("PRAGMA table_info(ambient_feed)")}
+        if "project" not in af_cols:
+            conn.execute("ALTER TABLE ambient_feed ADD COLUMN project TEXT NOT NULL DEFAULT ''")
+        if "payload" not in af_cols:
+            conn.execute("ALTER TABLE ambient_feed ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
+        if "confidence" not in af_cols:
+            conn.execute("ALTER TABLE ambient_feed ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+        if "salience" not in af_cols:
+            conn.execute("ALTER TABLE ambient_feed ADD COLUMN salience REAL NOT NULL DEFAULT 0.0")
+        conn.commit()
+    from .ambient import AMBIENT_FEED_SCHEMA
+    conn.executescript(AMBIENT_FEED_SCHEMA)
+    conn.commit()
+
+
+@_register("020", "Memory layer + working memory tables")
+def _mig_020(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS knowledge_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, value TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'general', source TEXT NOT NULL DEFAULT 'conversation',
+            channel TEXT, channel_id TEXT, context TEXT,
+            confidence REAL NOT NULL DEFAULT 1.0, recency_score REAL NOT NULL DEFAULT 1.0,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_key ON knowledge_memory(key);
+        CREATE INDEX IF NOT EXISTS idx_memory_category ON knowledge_memory(category);
+        CREATE INDEX IF NOT EXISTS idx_memory_active ON knowledge_memory(is_active);
+    """)
+    conn.commit()
+    if "knowledge_memory" in _existing_tables(conn):
+        try:
+            mem_cols = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge_memory)")}
+            if "recency_score" not in mem_cols:
+                conn.execute("ALTER TABLE knowledge_memory ADD COLUMN recency_score REAL NOT NULL DEFAULT 1.0")
+                conn.commit()
+        except Exception:
+            pass
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS working_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, context_key TEXT NOT NULL, value TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'working', source TEXT NOT NULL DEFAULT 'system',
+            context TEXT, priority INTEGER NOT NULL DEFAULT 0,
+            ttl_seconds INTEGER NOT NULL DEFAULT 3600, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_working_memory_key ON working_memory(context_key);
+        CREATE INDEX IF NOT EXISTS idx_working_memory_expires ON working_memory(expires_at);
+    """)
+    conn.commit()
+
+
+@_register("021", "Shadow mode runs table")
+def _mig_021(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS shadow_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            skill_id INTEGER NOT NULL REFERENCES formed_skills(id) ON DELETE CASCADE,
+            run_at TEXT NOT NULL, step_count INTEGER NOT NULL DEFAULT 0,
+            steps_matched INTEGER NOT NULL DEFAULT 0, steps_mismatched INTEGER NOT NULL DEFAULT 0,
+            exemplar_comparison TEXT NOT NULL DEFAULT '{}', overall_match_score REAL NOT NULL DEFAULT 0.0,
+            outcome TEXT NOT NULL DEFAULT 'matched', promoted INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_shadow_runs_skill_id ON shadow_runs(skill_id);
+        CREATE INDEX IF NOT EXISTS idx_shadow_runs_outcome ON shadow_runs(outcome);
+    """)
+    conn.commit()
+
+
+@_register("022", "Drop dead evolution tables")
+def _mig_022(conn):
+    for _dead_table in (
+        "evolution_events", "understanding_evolution", "initiative_evolution",
+        "insight_evolution", "plan_evolution", "task_evolution",
+    ):
+        conn.execute(f"DROP TABLE IF EXISTS {_dead_table}")
+    conn.commit()
+
+
+@_register("024", "Presence & Attention: deferred_interrupts table")
+def _mig_024(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS deferred_interrupts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL DEFAULT '',
+            state_at_creation TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            delivered_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_deferred_interrupts_delivered
+            ON deferred_interrupts(delivered_at);
+        CREATE INDEX IF NOT EXISTS idx_deferred_interrupts_priority
+            ON deferred_interrupts(priority DESC);
+    """)
+    conn.commit()
+
+
+@_register("026", "Sandbox & Safety: simulation_log, rollback_snapshots")
+def _mig_026(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS simulation_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            action          TEXT NOT NULL,
+            action_type     TEXT NOT NULL DEFAULT '',
+            sandbox_type    TEXT NOT NULL DEFAULT 'tempdir',
+            success         INTEGER NOT NULL DEFAULT 0,
+            outcome_summary TEXT NOT NULL DEFAULT '',
+            duration_ms     INTEGER NOT NULL DEFAULT 0,
+            files_changed   INTEGER NOT NULL DEFAULT 0,
+            has_diff        INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_simulation_log_created
+            ON simulation_log(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_simulation_log_action_type
+            ON simulation_log(action_type);
+        CREATE TABLE IF NOT EXISTS rollback_snapshots (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_id       TEXT NOT NULL DEFAULT '',
+            action_type     TEXT NOT NULL DEFAULT '',
+            action_desc     TEXT NOT NULL DEFAULT '',
+            snapshot_path   TEXT NOT NULL DEFAULT '',
+            snapshot_type   TEXT NOT NULL DEFAULT 'file',
+            head_sha        TEXT,
+            file_count      INTEGER NOT NULL DEFAULT 0,
+            reversible      INTEGER NOT NULL DEFAULT 1,
+            restored_at     TEXT,
+            created_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_rollback_snapshots_created
+            ON rollback_snapshots(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_rollback_snapshots_action_id
+            ON rollback_snapshots(action_id);
+    """)
+    conn.commit()
+
+
+@_register("025", "System Intelligence: telemetry, process baseline, build history")
+def _mig_025(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS telemetry_snapshots (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT NOT NULL,
+            cpu_percent     REAL NOT NULL DEFAULT 0,
+            cpu_count       INTEGER NOT NULL DEFAULT 0,
+            memory_percent  REAL NOT NULL DEFAULT 0,
+            memory_total    INTEGER NOT NULL DEFAULT 0,
+            disk_percent    REAL NOT NULL DEFAULT 0,
+            disk_total      INTEGER NOT NULL DEFAULT 0,
+            swap_percent    REAL NOT NULL DEFAULT 0,
+            processes       INTEGER NOT NULL DEFAULT 0,
+            load_1m         REAL NOT NULL DEFAULT 0,
+            health          TEXT NOT NULL DEFAULT 'green',
+            per_cpu_json    TEXT NOT NULL DEFAULT '[]',
+            per_disk_json   TEXT NOT NULL DEFAULT '{}',
+            per_net_json    TEXT NOT NULL DEFAULT '{}',
+            top_cpu_json    TEXT NOT NULL DEFAULT '[]',
+            top_mem_json    TEXT NOT NULL DEFAULT '[]',
+            gpu_json        TEXT,
+            system_uptime   REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_telemetry_timestamp
+            ON telemetry_snapshots(timestamp DESC);
+        CREATE TABLE IF NOT EXISTS process_baseline (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL,
+            cmdline         TEXT NOT NULL DEFAULT '',
+            first_seen      TEXT NOT NULL,
+            last_seen       TEXT NOT NULL,
+            seen_count      INTEGER NOT NULL DEFAULT 1,
+            known           INTEGER NOT NULL DEFAULT 0,
+            user_label      TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_process_baseline_name
+            ON process_baseline(name);
+        CREATE INDEX IF NOT EXISTS idx_process_baseline_known
+            ON process_baseline(known);
+        CREATE TABLE IF NOT EXISTS build_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT NOT NULL,
+            project         TEXT NOT NULL DEFAULT '',
+            command         TEXT NOT NULL DEFAULT '',
+            success         INTEGER NOT NULL DEFAULT 0,
+            exit_code       INTEGER,
+            duration_ms     INTEGER NOT NULL DEFAULT 0,
+            error_count     INTEGER NOT NULL DEFAULT 0,
+            warning_count   INTEGER NOT NULL DEFAULT 0,
+            slow_test_count INTEGER NOT NULL DEFAULT 0,
+            output_text     TEXT NOT NULL DEFAULT '',
+            created_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_build_history_timestamp
+            ON build_history(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_build_history_project
+            ON build_history(project);
+        CREATE INDEX IF NOT EXISTS idx_build_history_success
+            ON build_history(success);
+    """)
+    conn.commit()
+
+
+@_register("023", "Autonomous actions table")
+def _mig_023(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS autonomous_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL, source TEXT NOT NULL, source_id TEXT NOT NULL DEFAULT '',
+            source_summary TEXT NOT NULL DEFAULT '', action_type TEXT NOT NULL,
+            target TEXT NOT NULL DEFAULT '', worker_id TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL DEFAULT '', motivation TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending', auto_level TEXT NOT NULL DEFAULT 'auto',
+            session_id TEXT, result_json TEXT, executed_at TEXT, updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_auto_actions_status ON autonomous_actions(status);
+        CREATE INDEX IF NOT EXISTS idx_auto_actions_source ON autonomous_actions(source);
+        CREATE INDEX IF NOT EXISTS idx_auto_actions_created ON autonomous_actions(created_at);
+    """)
+    conn.commit()
+
+
+@_register("027", "Relationship & Personalization: sentiment, tone, relationship metrics")
+def _mig_027(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS sentiment_observations (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT NOT NULL,
+            channel         TEXT NOT NULL DEFAULT '',
+            message_hash    TEXT NOT NULL,
+            tone            TEXT NOT NULL,
+            confidence      REAL NOT NULL,
+            signal          TEXT NOT NULL DEFAULT '',
+            conversation_id TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_sentiment_timestamp
+            ON sentiment_observations(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_sentiment_conversation
+            ON sentiment_observations(conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_sentiment_tone
+            ON sentiment_observations(tone);
+
+        CREATE TABLE IF NOT EXISTS tone_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL DEFAULT '',
+            depth_at_time   INTEGER NOT NULL DEFAULT 0,
+            tone_used       TEXT NOT NULL DEFAULT 'neutral',
+            user_sentiment_avg REAL NOT NULL DEFAULT 0.0,
+            recorded_at     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tone_history_conversation
+            ON tone_history(conversation_id);
+
+        CREATE TABLE IF NOT EXISTS relationship_metrics (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric_key      TEXT NOT NULL,
+            metric_value    TEXT NOT NULL,
+            computed_at     TEXT NOT NULL,
+            window_days     INTEGER NOT NULL DEFAULT 7
+        );
+        CREATE INDEX IF NOT EXISTS idx_rel_metrics_key
+            ON relationship_metrics(metric_key);
+        CREATE INDEX IF NOT EXISTS idx_rel_metrics_computed
+            ON relationship_metrics(computed_at DESC);
+    """)
+    conn.commit()
+
+
+@_register("032", "Collaboration External: PR review cache table")
+def _mig_032(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS pr_reviews (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo            TEXT NOT NULL,
+            pr_number       INTEGER NOT NULL,
+            pr_title        TEXT NOT NULL DEFAULT '',
+            pr_author       TEXT NOT NULL DEFAULT '',
+            base_branch     TEXT NOT NULL DEFAULT '',
+            head_branch     TEXT NOT NULL DEFAULT '',
+            diff_summary    TEXT NOT NULL DEFAULT '',
+            concerns        TEXT NOT NULL DEFAULT '',
+            suggestions      TEXT NOT NULL DEFAULT '',
+            severity         TEXT NOT NULL DEFAULT 'info',
+            auto_posted      INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL,
+            UNIQUE(repo, pr_number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo
+            ON pr_reviews(repo);
+        CREATE INDEX IF NOT EXISTS idx_pr_reviews_created
+            ON pr_reviews(created_at DESC);
+    """)
+    conn.commit()
+
+
+@_register("033", "Self-Evolution Engine: capability_flags table")
+def _mig_033(conn):
+    """Create the capability_flags table for self-evolution capability lifecycle."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS capability_flags (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL UNIQUE,
+            description     TEXT NOT NULL DEFAULT '',
+            enabled         INTEGER NOT NULL DEFAULT 0,
+            installed       INTEGER NOT NULL DEFAULT 0,
+            deps_installed  INTEGER NOT NULL DEFAULT 0,
+            plan_json       TEXT NOT NULL DEFAULT '{}',
+            added_at        TEXT NOT NULL,
+            enabled_at      TEXT,
+            rollback_commit TEXT,
+            last_used_at    TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_capability_flags_name
+            ON capability_flags(name);
+        CREATE INDEX IF NOT EXISTS idx_capability_flags_enabled
+            ON capability_flags(enabled);
+        CREATE INDEX IF NOT EXISTS idx_capability_flags_added
+            ON capability_flags(added_at DESC);
+    """)
+    conn.commit()
+
+
+@_register("031", "Collaboration External: guide_sessions + translation_cache tables")
+def _mig_031(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS guide_sessions (
+            id              TEXT PRIMARY KEY,
+            protocol_name   TEXT NOT NULL,
+            title           TEXT NOT NULL DEFAULT '',
+            current_step    INTEGER NOT NULL DEFAULT 0,
+            total_steps     INTEGER NOT NULL DEFAULT 0,
+            status          TEXT NOT NULL DEFAULT 'running',
+            channel         TEXT NOT NULL DEFAULT 'cli',
+            steps_json      TEXT NOT NULL DEFAULT '[]',
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_guide_sessions_status
+            ON guide_sessions(status);
+        CREATE INDEX IF NOT EXISTS idx_guide_sessions_created
+            ON guide_sessions(created_at DESC);
+        CREATE TABLE IF NOT EXISTS translation_cache (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            text_hash       TEXT NOT NULL,
+            source_lang     TEXT NOT NULL,
+            target_lang     TEXT NOT NULL,
+            translated_text TEXT NOT NULL,
+            created_at      TEXT NOT NULL,
+            UNIQUE(text_hash, source_lang, target_lang)
+        );
+        CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup
+            ON translation_cache(text_hash, source_lang, target_lang);
+    """)
+    conn.commit()
+
+
+@_register("030", "Analysis & Insight: code_dependencies import graph table")
+def _mig_030(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS code_dependencies (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id         INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            file_path       TEXT NOT NULL,
+            symbol          TEXT NOT NULL,
+            dep_type        TEXT NOT NULL,
+            resolved_path   TEXT NOT NULL DEFAULT '',
+            resolved_repo   TEXT NOT NULL DEFAULT '',
+            line_number     INTEGER NOT NULL DEFAULT 0,
+            built_at        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_code_deps_repo
+            ON code_dependencies(repo_id);
+        CREATE INDEX IF NOT EXISTS idx_code_deps_file
+            ON code_dependencies(file_path);
+        CREATE INDEX IF NOT EXISTS idx_code_deps_symbol
+            ON code_dependencies(symbol);
+        CREATE INDEX IF NOT EXISTS idx_code_deps_dep_type
+            ON code_dependencies(dep_type);
+        CREATE TABLE IF NOT EXISTS code_imports (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id         INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+            source_file     TEXT NOT NULL,
+            imported_module TEXT NOT NULL,
+            import_type     TEXT NOT NULL DEFAULT 'direct',
+            line_number     INTEGER NOT NULL DEFAULT 0,
+            built_at        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_code_imports_source
+            ON code_imports(source_file);
+        CREATE INDEX IF NOT EXISTS idx_code_imports_module
+            ON code_imports(imported_module);
+        CREATE INDEX IF NOT EXISTS idx_code_imports_repo
+            ON code_imports(repo_id);
+    """)
+    conn.commit()
+
+
+@_register("029", "Daily Operations: daily_summaries + briefing_log tables")
+def _mig_029(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS daily_summaries (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            date            TEXT NOT NULL,
+            summary_type    TEXT NOT NULL DEFAULT 'morning',
+            content         TEXT NOT NULL,
+            headline        TEXT NOT NULL DEFAULT '',
+            event_count     INTEGER NOT NULL DEFAULT 0,
+            commit_count    INTEGER NOT NULL DEFAULT 0,
+            repo_count      INTEGER NOT NULL DEFAULT 0,
+            has_blockers    INTEGER NOT NULL DEFAULT 0,
+            generated_at    TEXT NOT NULL,
+            delivered       INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(date, summary_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_summaries_date
+            ON daily_summaries(date DESC);
+        CREATE INDEX IF NOT EXISTS idx_daily_summaries_type
+            ON daily_summaries(summary_type);
+        CREATE TABLE IF NOT EXISTS briefing_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            date            TEXT NOT NULL,
+            briefing_type   TEXT NOT NULL DEFAULT 'morning',
+            source          TEXT NOT NULL DEFAULT 'daemon',
+            headline        TEXT NOT NULL DEFAULT '',
+            summary         TEXT NOT NULL DEFAULT '',
+            generated_at    TEXT NOT NULL,
+            delivered_to    TEXT NOT NULL DEFAULT '',
+            UNIQUE(date, briefing_type, source)
+        );
+        CREATE INDEX IF NOT EXISTS idx_briefing_log_date
+            ON briefing_log(date DESC);
+    """)
+    conn.commit()
+
+
+@_register("028", "Agentic Action Layer: agent_sessions table")
+def _mig_028(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            id              TEXT PRIMARY KEY,
+            task            TEXT NOT NULL,
+            workspace       TEXT NOT NULL DEFAULT '.',
+            created_at      TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'running',
+            summary         TEXT NOT NULL DEFAULT '',
+            duration_ms     INTEGER NOT NULL DEFAULT 0,
+            adapted         INTEGER NOT NULL DEFAULT 0,
+            steps_json      TEXT NOT NULL DEFAULT '[]',
+            updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_sessions_status
+            ON agent_sessions(status);
+        CREATE INDEX IF NOT EXISTS idx_agent_sessions_created
+            ON agent_sessions(created_at DESC);
+    """)
+    conn.commit()
+
+
+def _run_sql_migrations(conn: sqlite3.Connection) -> None:
+    """Apply SQL schema migrations from files in src/friday/migrations/.
+
+    Each ``.sql`` file is a migration step that runs exactly once, tracked
+    in ``_schema_versions`` with version = filename (e.g. ``sql001_core_tables``).
+    Files are applied in lexicographic order (``sql001_*`` → ``sql002_*`` → …).
+
+    Replaces the old ``conn.executescript(SCHEMA)`` on every connect().
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _schema_versions ("
+        "version TEXT PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)")
+    applied = {r["version"] for r in conn.execute("SELECT version FROM _schema_versions")}
+
+    migrations_dir = Path(__file__).resolve().parent / "migrations"
+    if not migrations_dir.is_dir():
+        return  # No migrations directory — nothing to apply
+
+    for sql_path in sorted(migrations_dir.glob("*.sql")):
+        version = sql_path.stem  # e.g. "sql001_core_tables"
+        if version in applied:
+            continue
+        try:
+            sql = sql_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        conn.executescript(sql)
+        conn.execute(
+            "INSERT INTO _schema_versions (version, name, applied_at) VALUES (?, ?, ?)",
+            (version, str(sql_path.name), now_iso()))
+        conn.commit()
+
+
+def _run_pending_migrations(conn: sqlite3.Connection) -> None:
+    """Apply only unapplied schema migrations.
+
+    Each migration step runs exactly once (tracked in _schema_versions).
+    New migrations APPEND to _MIGRATIONS — never reorder or modify existing.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _schema_versions ("
+        "version TEXT PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)")
+    applied = {r["version"] for r in conn.execute("SELECT version FROM _schema_versions")}
+    for version, name, fn in _MIGRATIONS:
+        if version not in applied:
+            fn(conn)
+            conn.execute(
+                "INSERT INTO _schema_versions (version, name, applied_at) VALUES (?, ?, ?)",
+                (version, name, now_iso()))
+            conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Legacy wrapper — applies SQL + Python migrations."""
+    _run_sql_migrations(conn)
+    _run_pending_migrations(conn)
 def _ensure_snapshots_signature_cols(conn: sqlite3.Connection) -> None:
     """Add head_sha / manifest_hash to snapshots if absent (idempotent)."""
     if "snapshots" not in _existing_tables(conn):
@@ -1508,42 +1881,6 @@ _FK_TABLE_DDL = {
         "verification TEXT NOT NULL DEFAULT '', rollback TEXT NOT NULL DEFAULT '', "
         "estimated_complexity TEXT NOT NULL DEFAULT '', estimated_effort TEXT NOT NULL DEFAULT '')"
     ),
-    "understanding_evolution": (
-        "CREATE TABLE understanding_evolution_new ("
-        "id TEXT PRIMARY KEY, build_at TEXT NOT NULL, event_type TEXT NOT NULL, "
-        "understanding_id TEXT NOT NULL REFERENCES understanding(id) ON DELETE CASCADE, "
-        "previous_confidence TEXT, new_confidence TEXT, previous_status TEXT, new_status TEXT, "
-        "previous_statement TEXT, new_statement TEXT, reason TEXT NOT NULL, "
-        "knowledge_ids TEXT NOT NULL DEFAULT '')"
-    ),
-    "initiative_evolution": (
-        "CREATE TABLE initiative_evolution_new ("
-        "id TEXT PRIMARY KEY, build_at TEXT NOT NULL, event_type TEXT NOT NULL, "
-        "initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE, "
-        "parent_ids TEXT NOT NULL DEFAULT '', child_ids TEXT NOT NULL DEFAULT '', "
-        "previous_status TEXT, new_status TEXT, previous_confidence TEXT, new_confidence TEXT, "
-        "previous_title TEXT, new_title TEXT, reason TEXT NOT NULL, "
-        "understanding_ids TEXT NOT NULL DEFAULT '', knowledge_ids TEXT NOT NULL DEFAULT '')"
-    ),
-    "insight_evolution": (
-        "CREATE TABLE insight_evolution_new ("
-        "id TEXT PRIMARY KEY, build_at TEXT NOT NULL, event_type TEXT NOT NULL, "
-        "insight_id TEXT NOT NULL REFERENCES insights(id) ON DELETE CASCADE, "
-        "previous_status TEXT, new_status TEXT, previous_confidence TEXT, new_confidence TEXT, "
-        "previous_statement TEXT, new_statement TEXT, reason TEXT NOT NULL, "
-        "understanding_ids TEXT NOT NULL DEFAULT '', initiative_ids TEXT NOT NULL DEFAULT '', "
-        "knowledge_ids TEXT NOT NULL DEFAULT '')"
-    ),
-    "plan_evolution": (
-        "CREATE TABLE plan_evolution_new ("
-        "id TEXT PRIMARY KEY, generated_at TEXT NOT NULL, event_type TEXT NOT NULL, "
-        "plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE, "
-        "previous_status TEXT, new_status TEXT, previous_confidence TEXT, new_confidence TEXT, "
-        "reason TEXT NOT NULL, affected_initiative_ids TEXT NOT NULL DEFAULT '', "
-        "affected_insight_ids TEXT NOT NULL DEFAULT '', "
-        "affected_understanding_ids TEXT NOT NULL DEFAULT '', "
-        "affected_knowledge_ids TEXT NOT NULL DEFAULT '')"
-    ),
     "worker_history": (
         "CREATE TABLE worker_history_new ("
         "registered_at TEXT NOT NULL, "
@@ -1606,6 +1943,40 @@ def commit_if_top(conn: sqlite3.Connection) -> None:
     """
     if not conn.in_transaction:
         conn.commit()
+
+
+def insert_layer_history(
+    conn: sqlite3.Connection,
+    entity_type: str,
+    entity_id: str,
+    event_type: str,
+    previous_state: Optional[str] = None,
+    new_state: Optional[str] = None,
+    reason: str = "",
+    metadata: Optional[Union[str, Dict]] = None,
+) -> None:
+    """Append one state transition to layer_history.
+
+    Generic evolution record for any entity type. Replaces the 6 dead
+    evolution tables (understanding_evolution, initiative_evolution, etc.).
+    ``metadata`` can be a JSON string or a dict (which will be serialized).
+    """
+    meta_str: str
+    if metadata is None:
+        meta_str = "{}"
+    elif isinstance(metadata, dict):
+        meta_str = json.dumps(metadata, separators=(",", ":"), default=str)
+    else:
+        meta_str = metadata
+    conn.execute(
+        "INSERT INTO layer_history "
+        "(entity_type, entity_id, event_type, previous_state, new_state, "
+        "reason, metadata, recorded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (entity_type, entity_id, event_type, previous_state, new_state,
+         reason, meta_str, now_iso()),
+    )
+    commit_if_top(conn)
 
 
 class atomic:
@@ -2337,7 +2708,6 @@ def update_knowledge_status(conn: sqlite3.Connection, knowledge_id: str, status:
 # ---------------------------------------------------------------------------
 # Knowledge Evolution storage (Milestone 8.2) — append-only history + events.
 # Nothing here is ever mutated. The Brain reads `knowledge` (unchanged);
-# evolution layers derive change records on top.
 # ---------------------------------------------------------------------------
 
 
@@ -2358,25 +2728,6 @@ class KnowledgeHistoryRow:
     verification_count: int
     is_static: int = 0
 
-
-@dataclass
-class EvolutionEventRow:
-    """One deterministic evolution event derived from a history diff."""
-
-    id: str
-    build_at: str
-    event_type: str
-    knowledge_id: str
-    previous_confidence: Optional[str]
-    new_confidence: Optional[str]
-    previous_status: Optional[str]
-    new_status: Optional[str]
-    previous_statement: Optional[str]
-    new_statement: Optional[str]
-    reason: str
-    evidence_ids: str
-    related_ids: str
-    timestamp: str
 
 
 def insert_knowledge_history(conn: sqlite3.Connection, rows: List[KnowledgeHistoryRow]) -> None:
@@ -2420,46 +2771,6 @@ def knowledge_history_for(conn: sqlite3.Connection, knowledge_id: str) -> List[K
         (knowledge_id,),
     ).fetchall()
     return [_row_to_history(r) for r in rows]
-
-
-def insert_evolution_events(conn: sqlite3.Connection, rows: List[EvolutionEventRow]) -> None:
-    """Append evolution events. Idempotent on id; never updates old rows."""
-    for r in rows:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO evolution_events
-                (id, build_at, event_type, knowledge_id, previous_confidence,
-                 new_confidence, previous_status, new_status, previous_statement,
-                 new_statement, reason, evidence_ids, related_ids, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                r.id, r.build_at, r.event_type, r.knowledge_id,
-                r.previous_confidence, r.new_confidence, r.previous_status,
-                r.new_status, r.previous_statement, r.new_statement, r.reason,
-                r.evidence_ids, r.related_ids, r.timestamp,
-            ),
-        )
-    conn.commit()
-
-
-def evolution_events_all(conn: sqlite3.Connection) -> List[EvolutionEventRow]:
-    """Every evolution event, newest first."""
-    rows = conn.execute(
-        "SELECT * FROM evolution_events ORDER BY timestamp DESC, id DESC"
-    ).fetchall()
-    return [_row_to_event(r) for r in rows]
-
-
-def evolution_events_for(conn: sqlite3.Connection, knowledge_id: str) -> List[EvolutionEventRow]:
-    """Evolution events touching one knowledge entry, oldest first."""
-    rows = conn.execute(
-        "SELECT * FROM evolution_events WHERE knowledge_id = ? ORDER BY timestamp, id",
-        (knowledge_id,),
-    ).fetchall()
-    return [_row_to_event(r) for r in rows]
-
-
 def _row_to_history(r) -> KnowledgeHistoryRow:
     return KnowledgeHistoryRow(
         build_at=r["build_at"],
@@ -2474,25 +2785,6 @@ def _row_to_history(r) -> KnowledgeHistoryRow:
         updated_at=r["updated_at"],
         verification_count=r["verification_count"] or 0,
         is_static=bool(r["is_static"]),
-    )
-
-
-def _row_to_event(r) -> EvolutionEventRow:
-    return EvolutionEventRow(
-        id=r["id"],
-        build_at=r["build_at"],
-        event_type=r["event_type"],
-        knowledge_id=r["knowledge_id"],
-        previous_confidence=r["previous_confidence"],
-        new_confidence=r["new_confidence"],
-        previous_status=r["previous_status"],
-        new_status=r["new_status"],
-        previous_statement=r["previous_statement"],
-        new_statement=r["new_statement"],
-        reason=r["reason"],
-        evidence_ids=r["evidence_ids"] or "",
-        related_ids=r["related_ids"] or "",
-        timestamp=r["timestamp"],
     )
 
 
@@ -2537,23 +2829,6 @@ class UnderstandingHistoryRow:
     reinforced_count: int = 0
 
 
-@dataclass
-class UnderstandingEvolutionRow:
-    """One deterministic understanding evolution event."""
-
-    id: str
-    build_at: str
-    event_type: str
-    understanding_id: str
-    previous_confidence: Optional[str]
-    new_confidence: Optional[str]
-    previous_status: Optional[str]
-    new_status: Optional[str]
-    previous_statement: Optional[str]
-    new_statement: Optional[str]
-    reason: str
-    knowledge_ids: str
-    timestamp: str
 
 
 def insert_understanding(conn: sqlite3.Connection, rows: List[UnderstandingRow]) -> None:
@@ -2666,46 +2941,6 @@ def understanding_history_for(conn: sqlite3.Connection, uid: str) -> List[Unders
         (uid,),
     ).fetchall()
     return [_row_to_understanding_history(r) for r in rows]
-
-
-def insert_understanding_evolution(conn: sqlite3.Connection, rows: List[UnderstandingEvolutionRow]) -> None:
-    """Append understanding evolution events. Idempotent on id."""
-    for r in rows:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO understanding_evolution
-                (id, build_at, event_type, understanding_id, previous_confidence,
-                 new_confidence, previous_status, new_status, previous_statement,
-                 new_statement, reason, knowledge_ids, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                r.id, r.build_at, r.event_type, r.understanding_id,
-                r.previous_confidence, r.new_confidence, r.previous_status,
-                r.new_status, r.previous_statement, r.new_statement, r.reason,
-                r.knowledge_ids, r.timestamp,
-            ),
-        )
-    commit_if_top(conn)
-
-
-def understanding_evolution_all(conn: sqlite3.Connection) -> List[UnderstandingEvolutionRow]:
-    """Every understanding evolution event, newest first."""
-    rows = conn.execute(
-        "SELECT * FROM understanding_evolution ORDER BY timestamp DESC, id DESC"
-    ).fetchall()
-    return [_row_to_understanding_evolution(r) for r in rows]
-
-
-def understanding_evolution_for(conn: sqlite3.Connection, uid: str) -> List[UnderstandingEvolutionRow]:
-    """Evolution events touching one understanding, oldest first."""
-    rows = conn.execute(
-        "SELECT * FROM understanding_evolution WHERE understanding_id = ? ORDER BY timestamp, id",
-        (uid,),
-    ).fetchall()
-    return [_row_to_understanding_evolution(r) for r in rows]
-
-
 def _row_to_understanding(r) -> UnderstandingRow:
     return UnderstandingRow(
         id=r["id"],
@@ -2736,26 +2971,6 @@ def _row_to_understanding_history(r) -> UnderstandingHistoryRow:
         updated_at=r["updated_at"],
         reinforced_count=r["reinforced_count"] or 0,
     )
-
-
-def _row_to_understanding_evolution(r) -> UnderstandingEvolutionRow:
-    return UnderstandingEvolutionRow(
-        id=r["id"],
-        build_at=r["build_at"],
-        event_type=r["event_type"],
-        understanding_id=r["understanding_id"],
-        previous_confidence=r["previous_confidence"],
-        new_confidence=r["new_confidence"],
-        previous_status=r["previous_status"],
-        new_status=r["new_status"],
-        previous_statement=r["previous_statement"],
-        new_statement=r["new_statement"],
-        reason=r["reason"],
-        knowledge_ids=r["knowledge_ids"] or "",
-        timestamp=r["timestamp"],
-    )
-
-
 # ===========================================================================
 # Initiative Engine storage (Milestone 8.4) — write-only layer over
 # Understanding. Append-only. The Brain reads `initiatives` (new); every
@@ -2799,28 +3014,7 @@ class InitiativeHistoryRow:
     knowledge_ids: str = ""
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
-
-
-@dataclass
-class InitiativeEvolutionRow:
-    """One deterministic initiative lifecycle / merge / split event."""
-
-    id: str
-    build_at: str
-    event_type: str
-    initiative_id: str
-    previous_status: Optional[str]
-    new_status: Optional[str]
-    previous_confidence: Optional[str]
-    new_confidence: Optional[str]
-    previous_title: Optional[str]
-    new_title: Optional[str]
-    reason: str
-    parent_ids: str = ""
-    child_ids: str = ""
-    understanding_ids: str = ""
-    knowledge_ids: str = ""
-    timestamp: str = ""
+    created_at: str = ""
 
 
 @dataclass
@@ -2969,55 +3163,6 @@ def initiative_history_for(
         (iid,),
     ).fetchall()
     return [_row_to_initiative_history(r) for r in rows]
-
-
-def insert_initiative_evolution(
-    conn: sqlite3.Connection, rows: List[InitiativeEvolutionRow]
-) -> None:
-    """Append initiative evolution events. Idempotent on id."""
-    for r in rows:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO initiative_evolution
-                (id, build_at, event_type, initiative_id, parent_ids, child_ids,
-                 previous_status, new_status, previous_confidence,
-                 new_confidence, previous_title, new_title, reason,
-                 understanding_ids, knowledge_ids, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                r.id, r.build_at, r.event_type, r.initiative_id, r.parent_ids,
-                r.child_ids, r.previous_status, r.new_status,
-                r.previous_confidence, r.new_confidence, r.previous_title,
-                r.new_title, r.reason, r.understanding_ids, r.knowledge_ids,
-                r.timestamp,
-            ),
-        )
-    commit_if_top(conn)
-
-
-def initiative_evolution_all(
-    conn: sqlite3.Connection,
-) -> List[InitiativeEvolutionRow]:
-    """Every initiative evolution event, newest first."""
-    rows = conn.execute(
-        "SELECT * FROM initiative_evolution ORDER BY timestamp DESC, id DESC"
-    ).fetchall()
-    return [_row_to_initiative_evolution(r) for r in rows]
-
-
-def initiative_evolution_for(
-    conn: sqlite3.Connection, iid: str
-) -> List[InitiativeEvolutionRow]:
-    """Evolution events touching one initiative, oldest first."""
-    rows = conn.execute(
-        "SELECT * FROM initiative_evolution WHERE initiative_id = ? "
-        "ORDER BY timestamp, id",
-        (iid,),
-    ).fetchall()
-    return [_row_to_initiative_evolution(r) for r in rows]
-
-
 def insert_initiative_relationships(
     conn: sqlite3.Connection, rows: List[InitiativeRelationshipRow]
 ) -> None:
@@ -3080,29 +3225,6 @@ def _row_to_initiative_history(r) -> InitiativeHistoryRow:
         started_at=r["started_at"],
         completed_at=r["completed_at"],
     )
-
-
-def _row_to_initiative_evolution(r) -> InitiativeEvolutionRow:
-    return InitiativeEvolutionRow(
-        id=r["id"],
-        build_at=r["build_at"],
-        event_type=r["event_type"],
-        initiative_id=r["initiative_id"],
-        previous_status=r["previous_status"],
-        new_status=r["new_status"],
-        previous_confidence=r["previous_confidence"],
-        new_confidence=r["new_confidence"],
-        previous_title=r["previous_title"],
-        new_title=r["new_title"],
-        reason=r["reason"],
-        parent_ids=r["parent_ids"] or "",
-        child_ids=r["child_ids"] or "",
-        understanding_ids=r["understanding_ids"] or "",
-        knowledge_ids=r["knowledge_ids"] or "",
-        timestamp=r["timestamp"],
-    )
-
-
 def _row_to_initiative_relationship(r) -> InitiativeRelationshipRow:
     return InitiativeRelationshipRow(
         id=r["id"],
@@ -3158,27 +3280,8 @@ class InsightHistoryRow:
     understanding_ids: str = ""
     initiative_ids: str = ""
     knowledge_ids: str = ""
-
-
-@dataclass
-class InsightEvolutionRow:
-    """One deterministic insight lifecycle / retirement event."""
-
-    id: str
-    build_at: str
-    event_type: str
-    insight_id: str
-    previous_status: Optional[str]
-    new_status: Optional[str]
-    previous_confidence: Optional[str]
-    new_confidence: Optional[str]
-    previous_statement: Optional[str]
-    new_statement: Optional[str]
-    reason: str
-    understanding_ids: str = ""
-    initiative_ids: str = ""
-    knowledge_ids: str = ""
-    timestamp: str = ""
+    created_at: str = ""
+    schema_version: str = "1.0"
 
 
 def insert_insight(conn: sqlite3.Connection, rows: List[InsightRow]) -> None:
@@ -3311,55 +3414,6 @@ def insight_history_for(
         (iid,),
     ).fetchall()
     return [_row_to_insight_history(r) for r in rows]
-
-
-def insert_insight_evolution(
-    conn: sqlite3.Connection, rows: List[InsightEvolutionRow]
-) -> None:
-    """Append insight evolution events. Idempotent on id."""
-    for r in rows:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO insight_evolution
-                (id, build_at, event_type, insight_id, previous_status,
-                 new_status, previous_confidence, new_confidence,
-                 previous_statement, new_statement, reason, understanding_ids,
-                 initiative_ids, knowledge_ids, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                r.id, r.build_at, r.event_type, r.insight_id, r.previous_status,
-                r.new_status, r.previous_confidence, r.new_confidence,
-                r.previous_statement, r.new_statement, r.reason,
-                r.understanding_ids, r.initiative_ids, r.knowledge_ids,
-                r.timestamp,
-            ),
-        )
-    commit_if_top(conn)
-
-
-def insight_evolution_all(
-    conn: sqlite3.Connection,
-) -> List[InsightEvolutionRow]:
-    """Every insight evolution event, newest first."""
-    rows = conn.execute(
-        "SELECT * FROM insight_evolution ORDER BY timestamp DESC, id DESC"
-    ).fetchall()
-    return [_row_to_insight_evolution(r) for r in rows]
-
-
-def insight_evolution_for(
-    conn: sqlite3.Connection, iid: str
-) -> List[InsightEvolutionRow]:
-    """Evolution events touching one insight, oldest first."""
-    rows = conn.execute(
-        "SELECT * FROM insight_evolution WHERE insight_id = ? "
-        "ORDER BY timestamp, id",
-        (iid,),
-    ).fetchall()
-    return [_row_to_insight_evolution(r) for r in rows]
-
-
 def _row_to_insight(r) -> InsightRow:
     return InsightRow(
         id=r["id"],
@@ -3392,30 +3446,6 @@ def _row_to_insight_history(r) -> InsightHistoryRow:
         initiative_ids=r["initiative_ids"] or "",
         knowledge_ids=r["knowledge_ids"] or "",
     )
-
-
-def _row_to_insight_evolution(r) -> InsightEvolutionRow:
-    return InsightEvolutionRow(
-        id=r["id"],
-        build_at=r["build_at"],
-        event_type=r["event_type"],
-        insight_id=r["insight_id"],
-        previous_status=r["previous_status"],
-        new_status=r["new_status"],
-        previous_confidence=r["previous_confidence"],
-        new_confidence=r["new_confidence"],
-        previous_statement=r["previous_statement"],
-        new_statement=r["new_statement"],
-        reason=r["reason"],
-        understanding_ids=r["understanding_ids"] or "",
-        initiative_ids=r["initiative_ids"] or "",
-        knowledge_ids=r["knowledge_ids"] or "",
-        timestamp=r["timestamp"],
-    )
-
-
-
-
 # ===========================================================================
 # Planning Engine storage (Milestone 9.0) — write-only layer on top of
 # Insights/Initiatives/Understanding/Knowledge. Append-only. The Brain reads
@@ -3472,24 +3502,6 @@ class PlanHistoryRow:
     affected_knowledge_ids: str = ""
 
 
-@dataclass
-class PlanEvolutionRow:
-    """One deterministic plan lifecycle / supersession event."""
-
-    id: str
-    generated_at: str
-    event_type: str
-    plan_id: str
-    previous_status: Optional[str]
-    new_status: Optional[str]
-    previous_confidence: Optional[str]
-    new_confidence: Optional[str]
-    reason: str
-    timestamp: str
-    affected_initiative_ids: str = ""
-    affected_insight_ids: str = ""
-    affected_understanding_ids: str = ""
-    affected_knowledge_ids: str = ""
 
 
 def insert_plan(conn: sqlite3.Connection, rows: List[PlanRow]) -> None:
@@ -3608,48 +3620,6 @@ def plan_history_for(conn: sqlite3.Connection, pid: str) -> List[PlanHistoryRow]
         (pid,),
     ).fetchall()
     return [_row_to_plan_history(r) for r in rows]
-
-
-def insert_plan_evolution(conn: sqlite3.Connection, rows: List[PlanEvolutionRow]) -> None:
-    """Append plan evolution events. Idempotent on id."""
-    for r in rows:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO plan_evolution
-                (id, generated_at, event_type, plan_id, previous_status,
-                 new_status, previous_confidence, new_confidence, reason,
-                 affected_initiative_ids, affected_insight_ids,
-                 affected_understanding_ids, affected_knowledge_ids, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                r.id, r.generated_at, r.event_type, r.plan_id, r.previous_status,
-                r.new_status, r.previous_confidence, r.new_confidence, r.reason,
-                r.affected_initiative_ids, r.affected_insight_ids,
-                r.affected_understanding_ids, r.affected_knowledge_ids,
-                r.timestamp,
-            ),
-        )
-    commit_if_top(conn)
-
-
-def plan_evolution_all(conn: sqlite3.Connection) -> List[PlanEvolutionRow]:
-    """Every plan evolution event, newest first."""
-    rows = conn.execute(
-        "SELECT * FROM plan_evolution ORDER BY timestamp DESC, id DESC"
-    ).fetchall()
-    return [_row_to_plan_evolution(r) for r in rows]
-
-
-def plan_evolution_for(conn: sqlite3.Connection, pid: str) -> List[PlanEvolutionRow]:
-    """Evolution events touching one plan, oldest first."""
-    rows = conn.execute(
-        "SELECT * FROM plan_evolution WHERE plan_id = ? ORDER BY timestamp, id",
-        (pid,),
-    ).fetchall()
-    return [_row_to_plan_evolution(r) for r in rows]
-
-
 # ===========================================================================
 # Task Graph Compiler storage (Milestone 9.1) — write-only layer on top of
 # the Planning Engine. Append-only. The Brain reads `task_graphs` (new); every
@@ -3729,20 +3699,6 @@ class TaskHistoryRow:
     edges_json: str
 
 
-@dataclass
-class TaskEvolutionRow:
-    """One deterministic task-graph evolution event (append-only)."""
-
-    id: str
-    generated_at: str
-    event_type: str
-    graph_id: str
-    previous_status: Optional[str]
-    new_status: Optional[str]
-    reason: str
-    task_count: int
-    edge_count: int
-    timestamp: str
 
 
 def insert_task_graph(conn: sqlite3.Connection, graphs: List[TaskGraphRow],
@@ -3904,38 +3860,6 @@ def task_history_for(conn: sqlite3.Connection, gid: str) -> List[TaskHistoryRow]
         "SELECT * FROM task_history WHERE graph_id = ? ORDER BY generated_at",
         (gid,)).fetchall()
     return [_row_to_task_history(r) for r in rows]
-
-
-def insert_task_evolution(conn: sqlite3.Connection,
-                          rows: List[TaskEvolutionRow]) -> None:
-    for r in rows:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO task_evolution
-                (id, generated_at, event_type, graph_id, previous_status,
-                 new_status, reason, task_count, edge_count, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (r.id, r.generated_at, r.event_type, r.graph_id, r.previous_status,
-             r.new_status, r.reason, r.task_count, r.edge_count, r.timestamp),
-        )
-    conn.commit()
-
-
-def task_evolution_all(conn: sqlite3.Connection) -> List[TaskEvolutionRow]:
-    rows = conn.execute(
-        "SELECT * FROM task_evolution ORDER BY timestamp DESC, id DESC"
-    ).fetchall()
-    return [_row_to_task_evolution(r) for r in rows]
-
-
-def task_evolution_for(conn: sqlite3.Connection, gid: str) -> List[TaskEvolutionRow]:
-    rows = conn.execute(
-        "SELECT * FROM task_evolution WHERE graph_id = ? ORDER BY timestamp, id",
-        (gid,)).fetchall()
-    return [_row_to_task_evolution(r) for r in rows]
-
-
 def _row_to_task_graph(r) -> TaskGraphRow:
     source = r["source"] if "source" in r.keys() else None
     return TaskGraphRow(
@@ -3979,16 +3903,6 @@ def _row_to_task_history(r) -> TaskHistoryRow:
         critical_path_length=r["critical_path_length"],
         parallel_groups=r["parallel_groups"], tasks_json=r["tasks_json"],
         edges_json=r["edges_json"],
-    )
-
-
-def _row_to_task_evolution(r) -> TaskEvolutionRow:
-    return TaskEvolutionRow(
-        id=r["id"], generated_at=r["generated_at"], event_type=r["event_type"],
-        graph_id=r["graph_id"], previous_status=r["previous_status"],
-        new_status=r["new_status"], reason=r["reason"],
-        task_count=r["task_count"], edge_count=r["edge_count"],
-        timestamp=r["timestamp"],
     )
 
 
@@ -4036,27 +3950,6 @@ def _row_to_plan_history(r) -> PlanHistoryRow:
         affected_understanding_ids=r["affected_understanding_ids"] or "",
         affected_knowledge_ids=r["affected_knowledge_ids"] or "",
     )
-
-
-def _row_to_plan_evolution(r) -> PlanEvolutionRow:
-    return PlanEvolutionRow(
-        id=r["id"],
-        generated_at=r["generated_at"],
-        event_type=r["event_type"],
-        plan_id=r["plan_id"],
-        previous_status=r["previous_status"],
-        new_status=r["new_status"],
-        previous_confidence=r["previous_confidence"],
-        new_confidence=r["new_confidence"],
-        reason=r["reason"],
-        timestamp=r["timestamp"],
-        affected_initiative_ids=r["affected_initiative_ids"] or "",
-        affected_insight_ids=r["affected_insight_ids"] or "",
-        affected_understanding_ids=r["affected_understanding_ids"] or "",
-        affected_knowledge_ids=r["affected_knowledge_ids"] or "",
-    )
-
-
 # ===========================================================================
 # Worker Registry storage (Milestone 9.2) — write-only layer describing workers.
 # Append-only history + version log. Every lower layer unchanged. No execution.
@@ -4495,6 +4388,97 @@ def unset_operator_preference(conn: sqlite3.Connection, key: str) -> bool:
     )
     commit_if_top(conn)
     return cur.rowcount > 0
+
+
+# ===========================================================================
+# Phase A: Conversation Log — append-only IdentityEngine exchange log.
+# ===========================================================================
+
+
+@dataclass
+class ConversationLogRow:
+    id: int
+    channel: str
+    channel_id: str
+    routing: str
+    user_message: str
+    friday_reply: str
+    conversation_at: str
+    processed: int
+
+
+def log_exchange(
+    conn: sqlite3.Connection,
+    channel: str,
+    channel_id: str,
+    user_message: str,
+    friday_reply: str,
+    routing: str = "",
+) -> int:
+    """Append one exchange to the conversation_log.
+
+    Returns the row id of the newly inserted row.
+    """
+    import datetime as dt
+
+    cur = conn.execute(
+        """INSERT INTO conversation_log
+           (channel, channel_id, routing, user_message, friday_reply, conversation_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (channel, channel_id, routing, user_message, friday_reply,
+         dt.datetime.now(dt.timezone.utc).isoformat()),
+    )
+    commit_if_top(conn)
+    return cur.lastrowid or 0
+
+
+def get_conversation_history(
+    conn: sqlite3.Connection,
+    limit: int = 50,
+    channel: str | None = None,
+    unprocessed_only: bool = False,
+) -> list[ConversationLogRow]:
+    """Fetch recent conversation log entries, newest first.
+
+    Args:
+        limit: Max rows to return.
+        channel: Optional channel filter ("telegram", "slack", "cli", etc.).
+        unprocessed_only: If True, only return entries where processed=0.
+    """
+    clauses = []
+    params = []
+    if channel:
+        clauses.append("channel = ?")
+        params.append(channel)
+    if unprocessed_only:
+        clauses.append("processed = 0")
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    rows = conn.execute(
+        f"""SELECT id, channel, channel_id, routing, user_message, friday_reply,
+                  conversation_at, processed
+           FROM conversation_log
+           {where}
+           ORDER BY conversation_at DESC
+           LIMIT ?""",
+        (*params, limit),
+    ).fetchall()
+    return [ConversationLogRow(**r) for r in rows]
+
+
+def get_unprocessed_conversations(
+    conn: sqlite3.Connection, limit: int = 100
+) -> list[ConversationLogRow]:
+    """Fetch conversation_log entries that haven't been LLM-extracted yet."""
+    return get_conversation_history(conn, limit=limit, unprocessed_only=True)
+
+
+def mark_conversation_processed(conn: sqlite3.Connection, log_id: int) -> None:
+    """Mark a conversation_log entry as processed by the LLM extraction."""
+    conn.execute(
+        "UPDATE conversation_log SET processed = 1 WHERE id = ?",
+        (log_id,),
+    )
+    commit_if_top(conn)
 
 
 def worker_history_for(
@@ -5394,6 +5378,84 @@ def delete_formed_skill(conn, skill_id: int) -> None:
     """Delete a formed skill by id."""
     conn.execute("DELETE FROM formed_skills WHERE id = ?", (skill_id,))
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Shadow Mode — track proposed skill shadow runs for the improvement loop
+# ---------------------------------------------------------------------------
+
+
+def insert_shadow_run(conn, row: dict) -> int:
+    """Record one shadow execution run.
+
+    Args:
+        conn: Open SQLite connection.
+        row: Dict with keys: skill_id, run_at, step_count, steps_matched,
+             steps_mismatched, exemplar_comparison (JSON str),
+             overall_match_score, outcome, promoted.
+
+    Returns:
+        The new shadow_runs row id.
+    """
+    cur = conn.execute(
+        """INSERT INTO shadow_runs
+           (skill_id, run_at, step_count, steps_matched, steps_mismatched,
+            exemplar_comparison, overall_match_score, outcome, promoted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row["skill_id"], row["run_at"], row.get("step_count", 0),
+         row.get("steps_matched", 0), row.get("steps_mismatched", 0),
+         row.get("exemplar_comparison", "{}"),
+         row.get("overall_match_score", 0.0),
+         row.get("outcome", "matched"),
+         row.get("promoted", 0))
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def count_recent_shadow_runs(conn, skill_id: int, limit: int = 5) -> int:
+    """Count the most recent shadow runs for a skill that were clean matches.
+
+    Returns the count of consecutive 'matched' shadow runs (from newest
+    backwards, stopping at the first non-matched outcome).
+    """
+    rows = conn.execute(
+        "SELECT outcome FROM shadow_runs WHERE skill_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (skill_id, limit)
+    ).fetchall()
+    count = 0
+    for r in rows:
+        if r["outcome"] == "matched":
+            count += 1
+        else:
+            break
+    return count
+
+
+def get_shadow_runs_for_skill(conn, skill_id: int, limit: int = 20) -> list[dict]:
+    """Return recent shadow runs for a skill, newest first."""
+    rows = conn.execute(
+        "SELECT * FROM shadow_runs WHERE skill_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (skill_id, limit)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_shadow_runs_summary(conn) -> list[dict]:
+    """Return per-skill shadow run summary (agg over shadow_runs)."""
+    rows = conn.execute(
+        """SELECT sr.skill_id,
+                  COUNT(*) AS total_runs,
+                  SUM(CASE WHEN sr.outcome = 'matched' THEN 1 ELSE 0 END) AS matched_runs,
+                  AVG(sr.overall_match_score) AS avg_match_score,
+                  SUM(sr.promoted) AS promoted_count
+           FROM shadow_runs sr
+           GROUP BY sr.skill_id
+           ORDER BY total_runs DESC"""
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ===========================================================================

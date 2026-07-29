@@ -12,7 +12,6 @@ Results are surfaced as Insights (type=OPPORTUNITY) in the existing engine.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -387,30 +386,23 @@ _SEMANTIC_SYSTEM_PROMPT = (
 def _call_llm_semantic(a_summary: str, b_summary: str) -> Optional[dict]:
     """Call the LLM for semantic analysis of two repos."""
     try:
-        from .services.llm import _call as _llm_call
+        from .services.llm import _call_structured
 
         user = (
             f"Project A:\n{a_summary}\n\n"
             f"Project B:\n{b_summary}\n\n"
             "Are these projects conceptually related? Output JSON only."
         )
-        raw = _llm_call(_SEMANTIC_SYSTEM_PROMPT, user)
-        if not raw:
-            return None
-
-        # Parse JSON from LLM output.
-        raw = raw.strip()
-        if raw.startswith("```"):
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start != -1 and end != -1:
-                raw = raw[start:end + 1]
-        obj = json.loads(raw)
-        if "score" in obj:
-            return obj
+        data = _call_structured(
+            _SEMANTIC_SYSTEM_PROMPT,
+            user,
+            required_keys=["score"],
+        )
+        if isinstance(data, dict) and "score" in data:
+            return data
+        return None
     except Exception:
-        pass
-    return None
+        return None
 
 
 # ---------------------------------------------------------------------------

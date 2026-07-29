@@ -149,6 +149,34 @@ def _post_message(
     try:
         result = client.chat_postMessage(channel=channel, text=text)
         if result.get("ok"):
+            return True, result.get("ts", "")
+        return False, result.get("error", "unknown error")
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _edit_message(
+    config: SlackConfig,
+    channel: str,
+    ts: str,
+    text: str,
+) -> tuple[bool, str]:
+    """Edit an existing Slack message in-place via ``chat_update``.
+
+    Returns (success, error_message).
+
+    Args:
+        config: Slack bot configuration.
+        channel: Channel ID.
+        ts: Timestamp of the message to edit (returned by ``_post_message``).
+        text: New message text.
+    """
+    client = _get_client(config)
+    if client is None:
+        return False, "Slack not configured"
+    try:
+        result = client.chat_update(channel=channel, ts=ts, text=text)
+        if result.get("ok"):
             return True, ""
         return False, result.get("error", "unknown error")
     except Exception as e:

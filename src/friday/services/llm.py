@@ -377,3 +377,136 @@ def _strip_sse_trailer(raw: str) -> str:
         if head.startswith("{"):
             raw = head
     return raw
+
+
+# ---------------------------------------------------------------------------
+# Structured output — call the LLM and parse JSON from the response
+# ---------------------------------------------------------------------------
+
+
+def _parse_json_response(
+    raw: str,
+    required_keys: Optional[list[str]] = None,
+) -> Optional[Any]:
+    """Parse JSON from an LLM text response.
+
+    Handles the common LLM output quirks that every caller was independently
+    implementing:
+
+    - Markdown code fence stripping (`````json ... `````, ````` ... `````)
+    - JSON object extraction from surrounding prose (finds ``{...}``)
+    - JSON array extraction (finds ``[...]``)
+    - Optional required-key validation for dict results
+
+    Args:
+        raw: The raw LLM response text.
+        required_keys: If provided and the result is a dict, all these keys
+            must be present or the parse is considered failed.
+
+    Returns:
+        Parsed JSON data (``dict`` or ``list``), or ``None`` if no valid
+        JSON could be extracted.
+    """
+    content = raw.strip()
+    if not content:
+        return None
+
+    # Strip markdown code fences (```json ... ``` or just ``` ... ```).
+    if "```" in content:
+        start = content.find("```")
+        end = content.rfind("```")
+        if start != end:
+            inner = content[start + 3:end].strip()
+            if inner.startswith("json"):
+                inner = inner[4:].strip()
+            content = inner
+
+    # Try direct parse first (fast path for well-formed responses).
+    try:
+        data = json.loads(content)
+        _validate_required_keys(data, required_keys)
+        return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try to find a JSON object ``{...}`` within the text.
+    brace_start = content.find("{")
+    if brace_start != -1:
+        brace_end = content.rfind("}")
+        if brace_end > brace_start:
+            candidate = content[brace_start:brace_end + 1]
+            try:
+                data = json.loads(candidate)
+                _validate_required_keys(data, required_keys)
+                return data
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    # Try to find a JSON array ``[...]`` within the text.
+    bracket_start = content.find("[")
+    if bracket_start != -1:
+        bracket_end = content.rfind("]")
+        if bracket_end > bracket_start:
+            try:
+                return json.loads(content[bracket_start:bracket_end + 1])
+            except json.JSONDecodeError:
+                pass
+
+    return None
+
+
+def _validate_required_keys(data: Any, required_keys: Optional[list[str]]) -> None:
+    """Validate that all required keys exist in the parsed data.
+
+    Only applies when ``data`` is a ``dict`` and ``required_keys`` is set.
+    Raises ``ValueError`` with the list of missing keys.
+    """
+    if required_keys is None:
+        return
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected dict, got {type(data).__name__}")
+    missing = [k for k in required_keys if k not in data]
+    if missing:
+        raise ValueError(f"Missing required keys: {missing}")
+
+
+def _call_structured(
+    system: str,
+    user: str,
+    system_suffix: str = "",
+    required_keys: Optional[list[str]] = None,
+) -> Optional[Any]:
+    """Call the LLM and return parsed structured JSON output.
+
+    Wraps ``_call()`` with:
+    1. A JSON-mode instruction appended to the system prompt
+       (unless a custom ``system_suffix`` is provided)
+    2. ``_parse_json_response()`` to handle markdown fences, prose-wrapped
+       JSON, and optional key validation
+
+    This eliminates the duplicated ``json.loads()`` + fence-stripping logic
+    that every structured-output caller was independently implementing.
+
+    Args:
+        system: System prompt (JSON-mode instruction is appended).
+        user: User message.
+        system_suffix: Optional suffix appended to ``system``. Defaults to
+            ``"\\n\\nRespond with ONLY valid JSON. No markdown, no explanation."``
+        required_keys: If provided, the parsed dict must contain all these
+            keys or ``None`` is returned.
+
+    Returns:
+        Parsed JSON (``dict`` or ``list``), or ``None`` on any failure.
+        Never raises.
+    """
+    if not system_suffix:
+        system_suffix = "\n\nRespond with ONLY valid JSON. No markdown, no explanation."
+
+    raw = _call(system + system_suffix, user)
+    if not raw:
+        return None
+
+    try:
+        return _parse_json_response(raw, required_keys=required_keys)
+    except Exception:
+        return None

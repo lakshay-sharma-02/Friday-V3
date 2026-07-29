@@ -190,7 +190,6 @@ class FixtureProvider:
             return f"fixture: {self._source}"
         return f"fixture: {len(self._source)} event(s)"
 
-
 class ICSProvider:
     """Parses an .ics export (opt-in). Stdlib only; metadata only.
 
@@ -270,6 +269,32 @@ def _ics_date(value: str) -> Optional[str]:
     return f"{y}-{mo}-{d}T{hh}:{mm}:{ss}+00:00"
 
 
+
+# --- Google Calendar API v3 constants ---------------------------------------
+
+_GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
+_GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+# Env vars for Google Calendar provider.
+GOOGLE_CAL_API_KEY_ENV = "FRIDAY_GOOGLE_CAL_API_KEY"
+GOOGLE_CAL_TOKEN_ENV = "FRIDAY_GOOGLE_CAL_TOKEN"
+
+# Env vars for CalDAV provider.
+CALDAV_URL_ENV = "FRIDAY_CALDAV_URL"
+CALDAV_USERNAME_ENV = "FRIDAY_CALDAV_USERNAME"
+CALDAV_PASSWORD_ENV = "FRIDAY_CALDAV_PASSWORD"
+
+
+def _past_iso(days: int = 7) -> str:
+    """ISO 8601 timestamp for ``days`` ago."""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+def _future_iso(days: int = 90) -> str:
+    """ISO 8601 timestamp ``days`` from now."""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+
 def _configured_ics() -> Optional[Path]:
     raw = os.environ.get(CALENDAR_ICS_ENV)
     return Path(raw).expanduser() if raw else None
@@ -297,7 +322,383 @@ def _read_text(path: Path) -> str:
         return ""
 
 
+class GoogleCalendarProvider:
+    """Fetches events from Google Calendar API v3 via REST.
+
+    Two auth modes (mutually exclusive):
+
+    1. **API key** (public calendars only):
+       Set ``FRIDAY_GOOGLE_CAL_API_KEY`` to your API key.
+
+    2. **OAuth token** (private calendars):
+       Set ``FRIDAY_GOOGLE_CAL_TOKEN`` to the path of a JSON file containing
+       ``{"access_token": "...", "refresh_token": "...",
+        "client_id": "...", "client_secret": "...", "expires_at": 1234567890}``.
+       The token is refreshed automatically when expired.
+
+    To obtain an OAuth token file, use the one-time setup script:
+        https://developers.google.com/calendar/api/quickstart/python
+    (or use ``friday calendar auth`` if that CLI subcommand exists).
+
+    Only metadata fields (summary, start, end, location, status, recurrence)
+    are read. Description, attendees, and attachments are ignored.
+
+    Note: recurring events are expanded into individual instances via
+    ``singleEvents=true`` (Google Calendar) or returned as a single master
+    event with RRULE (CalDAV).
+    """
+
+    def __init__(self, api_key: Optional[str] = None,
+                 token_path: Optional[Path] = None) -> None:
+        self._api_key = api_key
+        self._token_path = token_path
+        self._token: Optional[dict] = None
+
+    def fetch(self) -> list[dict]:
+        # Proactively refresh token if we know it's expired.
+        token = self._load_token()
+        if token and self._token_path is not None:
+            expires_at = token.get("expires_at")
+            if expires_at is not None:
+                import time as _time
+                if _time.time() >= expires_at:
+                    self._refresh_token()
+
+        headers, params = self._auth()
+        params["timeMin"] = _past_iso()
+        params["timeMax"] = _future_iso(days=90)
+        params["orderBy"] = "startTime"
+        params["singleEvents"] = "true"
+        params["maxResults"] = "250"
+
+        import requests as _req
+
+        try:
+            resp = _req.get(
+                f"{_GOOGLE_CALENDAR_API_BASE}/calendars/primary/events",
+                headers=headers, params=params, timeout=30)
+        except Exception:
+            return []
+        if resp.status_code == 401 and self._token_path is not None:
+            # Token expired — retry after refreshing once.
+            self._refresh_token()
+            headers, params = self._auth()
+            try:
+                resp = _req.get(
+                    f"{_GOOGLE_CALENDAR_API_BASE}/calendars/primary/events",
+                    headers=headers, params=params, timeout=30)
+            except Exception:
+                return []
+        if resp.status_code not in (200,):
+            return []
+        try:
+            data = resp.json()
+        except Exception:
+            return []
+        return [_google_event_to_dict(item) for item in data.get("items", [])
+                if item.get("id")]
+
+    def describe(self) -> str:
+        if self._api_key:
+            return "google calendar (api key)"
+        return "google calendar (oauth)"
+
+    # --- auth internals ------------------------------------------------------
+
+    def _auth(self) -> tuple[dict, dict]:
+        """Return (headers, params) for the Google Calendar API request."""
+        if self._api_key:
+            return {}, {"key": self._api_key}
+        token = self._load_token()
+        access = (token or {}).get("access_token", "")
+        return {"Authorization": f"Bearer {access}"}, {}
+
+    def _load_token(self) -> Optional[dict]:
+        if self._token is not None:
+            return self._token
+        if self._token_path is None:
+            return None
+        try:
+            self._token = json.loads(
+                self._token_path.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, ValueError):
+            self._token = {}
+        return self._token
+
+    def _refresh_token(self) -> bool:
+        """Refresh the OAuth access token. Returns True on success."""
+        token = self._load_token()
+        if not token:
+            return False
+        client_id = token.get("client_id")
+        client_secret = token.get("client_secret")
+        refresh = token.get("refresh_token")
+        if not (client_id and client_secret and refresh):
+            return False
+
+        import requests as _req
+
+        try:
+            resp = _req.post(_GOOGLE_OAUTH_TOKEN_URL, data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh,
+                "grant_type": "refresh_token",
+            }, timeout=30)
+        except Exception:
+            return False
+        if resp.status_code != 200:
+            return False
+        try:
+            new = resp.json()
+        except Exception:
+            return False
+        new_access = new.get("access_token")
+        if not new_access:
+            return False
+        token["access_token"] = new_access
+        if new.get("expires_in"):
+            import time as _time
+            token["expires_at"] = _time.time() + int(new["expires_in"])
+        self._token = token
+        # Persist updated token.
+        try:
+            if self._token_path is not None:
+                self._token_path.write_text(
+                    json.dumps(token, indent=2, default=str), encoding="utf-8")
+        except OSError:
+            pass
+        return True
+
+
+class CalDAVProvider:
+    """Fetches events from a CalDAV server via HTTP REPORT requests.
+
+    Configure via env vars:
+        FRIDAY_CALDAV_URL       — base URL of the CalDAV server
+        FRIDAY_CALDAV_USERNAME  — basic auth username
+        FRIDAY_CALDAV_PASSWORD  — basic auth password
+
+    Discovers the user's calendar home set via PROPFIND, then sends a
+    calendar-query REPORT with a 90-day time range. Parses the returned
+    .ics data using the same privacy-preserving path as ICSProvider.
+    """
+
+    def __init__(self, url: str, username: str, password: str) -> None:
+        self._url = url.rstrip("/")
+        self._auth = (username, password)
+
+    def fetch(self) -> list[dict]:
+        import requests as _req
+        try:
+            calendar_urls = self._discover_calendars()
+            events: list[dict] = []
+            for cal_url in calendar_urls:
+                raw_ics = self._query_calendar(cal_url)
+                if raw_ics:
+                    for e in _split_ics_events(raw_ics):
+                        if e.get("UID") or e.get("SUMMARY"):
+                            events.append(_ics_event_to_dict(e))
+            return events
+        except Exception:
+            return []
+
+    def describe(self) -> str:
+        return f"caldav: {self._url}"
+
+    # --- CalDAV internals ----------------------------------------------------
+
+    def _request(self, method: str, url: str, body: Optional[str] = None,
+                 depth: str = "0") -> Optional[str]:
+        import requests as _req
+
+        headers = {
+            "Content-Type": "application/xml; charset=utf-8",
+            "Depth": depth,
+            "User-Agent": "Friday/1.0",
+        }
+        try:
+            resp = _req.request(
+                method, url, headers=headers, data=body,
+                auth=self._auth, timeout=30)
+        except Exception:
+            return None
+        if resp.status_code not in (200, 207):
+            return None
+        return resp.text
+
+    def _discover_calendars(self) -> list[str]:
+        """Discover calendar URLs via CalDAV PROPFIND."""
+        # Step 1: Get principal URL from well-known endpoint.
+        principal_url = self._url
+        wk = self._request("PROPFIND", f"{self._url}/.well-known/caldav",
+                           depth="0")
+        if wk:
+            # Parse principal URL from response.
+            pu = _extract_href(
+                wk, "{DAV:}current-user-principal")
+            if pu:
+                principal_url = _absolute_url(self._url, pu)
+
+        # Step 2: Get calendar home set from principal.
+        calendar_home = self._url
+        prop = _propfind_xml("{DAV:}current-user-principal",
+                             "{urn:ietf:params:xml:ns:caldav}calendar-home-set")
+        pr = self._request("PROPFIND", principal_url, body=prop, depth="0")
+        if pr:
+            ch = _extract_href(
+                pr, "{urn:ietf:params:xml:ns:caldav}calendar-home-set")
+            if ch:
+                calendar_home = _absolute_url(principal_url, ch)
+
+        # Step 3: List all calendars under calendar home.
+        calendars: list[str] = []
+        list_body = _propfind_xml(
+            "{DAV:}resourcetype",
+            "{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set")
+        lr = self._request("PROPFIND", calendar_home,
+                           body=list_body, depth="1")
+        if lr:
+            cals = _extract_calendar_urls(lr)
+            if cals:
+                calendars = cals
+        if not calendars:
+            # Fallback: use the configured URL as a single calendar.
+            calendars = [self._url]
+        return calendars
+
+    def _query_calendar(self, url: str) -> Optional[str]:
+        """Send a calendar-query REPORT for events in the next 90 days."""
+        import time as _time
+        now = _time.time()
+        start_iso = datetime.fromtimestamp(now - 86400 * 7, tz=timezone.utc).strftime(
+            "%Y%m%dT%H%M%SZ")
+        end_iso = datetime.fromtimestamp(now + 86400 * 90, tz=timezone.utc).strftime(
+            "%Y%m%dT%H%M%SZ")
+        report_body = (
+            '<?xml version="1.0" encoding="utf-8" ?>'
+            '<C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav">'
+            '<D:prop xmlns:D="DAV:"><D:getetag/><C:calendar-data/></D:prop>'
+            '<C:filter><C:comp-filter name="VCALENDAR">'
+            '<C:comp-filter name="VEVENT">'
+            f'<C:time-range start="{start_iso}" end="{end_iso}"/>'
+            '</C:comp-filter></C:comp-filter></C:filter>'
+            '</C:calendar-query>'
+        )
+        return self._request("REPORT", url, body=report_body, depth="1")
+
+
+def _propfind_xml(*props: str) -> str:
+    """Build a PROPFIND XML body requesting the given properties."""
+    prop_inner = "".join(f"<{p}/>" for p in props)
+    return (
+        '<?xml version="1.0" encoding="utf-8" ?>'
+        f'<D:propfind xmlns:D="DAV:"><D:prop>{prop_inner}</D:prop></D:propfind>'
+    )
+
+
+def _extract_href(xml: str, prop: str) -> Optional[str]:
+    """Extract the first <D:href> text inside a <{prop}> block."""
+    tag_start = xml.find(f"<{prop}>")
+    if tag_start == -1:
+        tag_start = xml.find(f"<{prop} ")
+    if tag_start == -1:
+        return None
+    href_start = xml.find("<D:href>", tag_start)
+    href_end = xml.find("</D:href>", tag_start)
+    if href_start == -1 or href_end == -1:
+        href_start = xml.find("<d:href>", tag_start)
+        href_end = xml.find("</d:href>", tag_start)
+        if href_start == -1 or href_end == -1:
+            return None
+        start = href_start + len("<d:href>")
+    else:
+        start = href_start + len("<D:href>")
+    return xml[start:href_end].strip()
+
+
+def _extract_calendar_urls(xml: str) -> list[str]:
+    """Extract calendar URLs from a PROPFIND response, filtering out non-calendar resources."""
+    urls: list[str] = []
+    caldav_calendar = "{urn:ietf:params:xml:ns:caldav}calendar"
+    for block in xml.split("<D:response>"):
+        if caldav_calendar in block and "</D:response>" in block:
+            href = _extract_href(block, "{DAV:}href")
+            if href is not None and href not in urls:
+                urls.append(href)
+    return urls
+
+
+def _absolute_url(base: str, path: str) -> str:
+    """Resolve a potentially relative href against a base URL using urllib.parse."""
+    from urllib.parse import urljoin
+    return urljoin(base, path)
+
+
+# --- Google Calendar API response mapping -----------------------------------
+
+
+def _google_event_to_dict(item: dict) -> dict:
+    """Map a Google Calendar API v3 event item to the canonical event dict.
+
+    Only metadata fields are mapped. Description, attendees, attachments,
+    and notes are explicitly excluded.
+    """
+    start_info = item.get("start", {}) or {}
+    end_info = item.get("end", {}) or {}
+    return {
+        "uid": item.get("id", ""),
+        "title": item.get("summary", "") or "",
+        "start": start_info.get("dateTime") or start_info.get("date"),
+        "end": end_info.get("dateTime") or end_info.get("date"),
+        "location": (item.get("location") or "") or None,
+        "recurring": bool(item.get("recurrence")),
+        "cancelled": (item.get("status") or "").lower() == "cancelled",
+        "deadline": "deadline" in (item.get("summary", "") or "").lower()
+        or "due" in (item.get("summary", "") or "").lower(),
+        "category": None,
+        "project": None,
+    }
+
+
+def _configured_google_provider() -> Optional[CalendarProvider]:
+    """Build a GoogleCalendarProvider from env vars, if configured."""
+    api_key = os.environ.get(GOOGLE_CAL_API_KEY_ENV)
+    if api_key:
+        return GoogleCalendarProvider(api_key=api_key)
+    token_raw = os.environ.get(GOOGLE_CAL_TOKEN_ENV)
+    if token_raw:
+        token_path = Path(token_raw).expanduser()
+        if token_path.exists():
+            return GoogleCalendarProvider(token_path=token_path)
+    return None
+
+
+def _configured_caldav_provider() -> Optional[CalendarProvider]:
+    """Build a CalDAVProvider from env vars, if configured."""
+    url = os.environ.get(CALDAV_URL_ENV)
+    username = os.environ.get(CALDAV_USERNAME_ENV)
+    password = os.environ.get(CALDAV_PASSWORD_ENV)
+    if url and username and password is not None:
+        return CalDAVProvider(url, username, password)
+    return None
+
+
 def default_provider() -> CalendarProvider:
+    """Choose the best available calendar provider.
+
+    Resolution order (first wins):
+      1. Google Calendar (API key or OAuth token)
+      2. CalDAV server (URL + credentials)
+      3. ICS file export
+      4. Empty fixture (nothing configured — healthy, no-op)
+    """
+    google = _configured_google_provider()
+    if google:
+        return google
+    caldav = _configured_caldav_provider()
+    if caldav:
+        return caldav
     ics = _configured_ics()
     if ics:
         return ICSProvider(ics)

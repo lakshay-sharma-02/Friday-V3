@@ -19,15 +19,13 @@ from typing import List, Optional, Tuple
 
 from ..db import (
     atomic,
-    PlanEvolutionRow,
     PlanHistoryRow,
     get_all_plans,
     get_plan_by_id,
+    insert_layer_history,
     insert_plan,
-    insert_plan_evolution,
     insert_plan_history,
     latest_plan_snapshot,
-    plan_evolution_for,
     update_plan_status,
 )
 from ..initiative import InitiativeEngine
@@ -92,9 +90,13 @@ class PlanEngine:
             return None, [], [], [], []
         return (p, p.milestones, p.dependencies, p.risks, p.verification)
 
-    def evolution(self) -> List[PlanEvolutionRow]:
-        from ..db import plan_evolution_all
-        return plan_evolution_all(self.conn)
+    def evolution(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'plan' "
+            "ORDER BY recorded_at DESC LIMIT 100"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # --- WRITE ----------------------------------------------------------------
 
@@ -189,61 +191,51 @@ class PlanEngine:
     def _record_evolution(
         self, generated_at: str, p: Plan, prev: Optional[Plan]
     ) -> int:
-        events: List[PlanEvolutionRow] = []
         pid = p.id or p._generate_id()
+        meta = {
+            "plan_type": p.plan_type.value,
+            "goal": p.goal,
+        }
         if prev is None:
-            events.append(self._event(
-                generated_at, "Created", pid, None, p.status.value, None,
-                p.confidence.value, f"Plan created for goal: {p.goal}",
-                p.affected_initiative_ids, p.affected_insight_ids,
-                p.affected_understanding_ids, p.affected_knowledge_ids))
-            insert_plan_evolution(self.conn, events)
-            return len(events)
+            insert_layer_history(
+                self.conn, "plan", pid, "Created",
+                new_state=p.status.value,
+                reason=f"Plan created for goal: {p.goal}",
+                metadata=meta,
+            )
+            return 1
 
         prev_conf = prev.confidence.value
         if _order(p.confidence) > _order(prev.confidence):
-            events.append(self._event(
-                generated_at, "Strengthened", pid, prev.status.value,
-                p.status.value, prev_conf, p.confidence.value,
-                f"Confidence {prev_conf}->{p.confidence.value}.",
-                p.affected_initiative_ids, p.affected_insight_ids,
-                p.affected_understanding_ids, p.affected_knowledge_ids))
+            insert_layer_history(
+                self.conn, "plan", pid, "Strengthened",
+                previous_state=prev.status.value,
+                new_state=p.status.value,
+                reason=f"Confidence {prev_conf}->{p.confidence.value}.",
+                metadata=meta,
+            )
         if _status_rank(p.status) > _status_rank(prev.status):
             et = ("Approved" if p.status == PlanStatus.APPROVED
                   else "Refined" if p.status == PlanStatus.REFINED else "Advanced")
-            events.append(self._event(
-                generated_at, et, pid, prev.status.value, p.status.value,
-                prev_conf, p.confidence.value,
-                f"Lifecycle {prev.status.value}->{p.status.value}.",
-                p.affected_initiative_ids, p.affected_insight_ids,
-                p.affected_understanding_ids, p.affected_knowledge_ids))
+            insert_layer_history(
+                self.conn, "plan", pid, et,
+                previous_state=prev.status.value,
+                new_state=p.status.value,
+                reason=f"Lifecycle {prev.status.value}->{p.status.value}.",
+                metadata=meta,
+            )
         if (set(p.affected_insight_ids) != set(prev.affected_insight_ids)
                 or set(p.affected_initiative_ids) != set(prev.affected_initiative_ids)
                 or set(p.affected_understanding_ids) != set(prev.affected_understanding_ids)
                 or set(p.affected_knowledge_ids) != set(prev.affected_knowledge_ids)):
-            events.append(self._event(
-                generated_at, "Re-evidenced", pid, prev.status.value,
-                p.status.value, prev_conf, p.confidence.value,
-                "Evidence set changed on regeneration.",
-                p.affected_initiative_ids, p.affected_insight_ids,
-                p.affected_understanding_ids, p.affected_knowledge_ids))
-        insert_plan_evolution(self.conn, events)
-        return len(events)
-
-    @staticmethod
-    def _event(gen_at, etype, pid, prev_status, new_status, prev_conf,
-               new_conf, reason, iids, ins_ids, uids, k_ids):
-        return PlanEvolutionRow(
-            id=f"{gen_at}:{etype}:{pid}",
-            generated_at=gen_at, event_type=etype, plan_id=pid,
-            previous_status=prev_status, new_status=new_status,
-            previous_confidence=prev_conf, new_confidence=new_conf,
-            reason=reason, timestamp=gen_at,
-            affected_initiative_ids=",".join(iids),
-            affected_insight_ids=",".join(ins_ids),
-            affected_understanding_ids=",".join(uids),
-            affected_knowledge_ids=",".join(k_ids),
-        )
+            insert_layer_history(
+                self.conn, "plan", pid, "Re-evidenced",
+                previous_state=prev.status.value,
+                new_state=p.status.value,
+                reason="Evidence set changed on regeneration.",
+                metadata=meta,
+            )
+        return 1
 
 
 def _order(c: PlanConfidence) -> int:

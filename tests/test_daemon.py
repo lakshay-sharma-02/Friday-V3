@@ -158,9 +158,8 @@ class TestCycleRunner:
     @patch("friday.observe.refresh")
     def test_successful_cycle(self, mock_refresh, tmp_path, monkeypatch) -> None:
         """A successful cycle updates watch_history and returns outcome."""
-        from friday.daemon import _run_cycle, FRIDAY_DIR, LOCK_FILE
+        from friday.daemon import _run_cycle, _CYCLE_CACHE, _FULL_CHECK_EVERY_N, FRIDAY_DIR, LOCK_FILE
 
-        # Use a temp .friday dir and a unique lock file name to avoid collision.
         original_friday = FRIDAY_DIR
         original_lock = LOCK_FILE
         try:
@@ -169,7 +168,6 @@ class TestCycleRunner:
             test_lock = tmp_path / "test-watch.lock"
             daemon.LOCK_FILE = test_lock
 
-            # Mock the refresh return value.
             mock_report = MagicMock()
             mock_report.repos_scanned = 5
             mock_report.repos_changed = 2
@@ -179,21 +177,27 @@ class TestCycleRunner:
             mock_report.insights_changed = 0
             mock_refresh.return_value = mock_report
 
-            # Use an in-memory DB for the watch_history insert.
             monkeypatch.setenv("FRIDAY_DB", ":memory:")
+
+            # Force a full cycle. With an empty in-memory DB, _check_cycle_need()
+            # returns nothing_changed — bump the counter to force full path.
+            _CYCLE_CACHE["fast_cycles_since_full"] = _FULL_CHECK_EVERY_N + 1
 
             result = _run_cycle()
             assert result["cycle_outcome"] == "succeeded"
             assert result["repos_scanned"] == 5
             assert result["repos_changed"] == 2
+            assert result["cycle_type"] == "full"
         finally:
             daemon.FRIDAY_DIR = original_friday
             daemon.LOCK_FILE = original_lock
+            _CYCLE_CACHE["fast_cycles_since_full"] = 0
 
     @patch("friday.observe.refresh")
     def test_failed_cycle_records_error(self, mock_refresh, tmp_path, monkeypatch) -> None:
-        """A failed cycle captures the error in the result."""
-        from friday.daemon import _run_cycle, FRIDAY_DIR, LOCK_FILE
+        """A failed refresh stage is recovered gracefully — the cycle
+        completes with 'succeeded' outcome and continues to maintenance."""
+        from friday.daemon import _run_cycle, _CYCLE_CACHE, _FULL_CHECK_EVERY_N, FRIDAY_DIR, LOCK_FILE
 
         original_friday = FRIDAY_DIR
         original_lock = LOCK_FILE
@@ -206,12 +210,20 @@ class TestCycleRunner:
             mock_refresh.side_effect = RuntimeError("Pipeline crashed!")
             monkeypatch.setenv("FRIDAY_DB", ":memory:")
 
+            # Force full cycle so refresh() is called
+            _CYCLE_CACHE["fast_cycles_since_full"] = _FULL_CHECK_EVERY_N + 1
+
             result = _run_cycle()
-            assert result["cycle_outcome"] == "failed"
-            assert "Pipeline crashed!" in result.get("error_detail", "")
+            # The new resilient architecture isolates stage failures —
+            # a refresh failure does not abort the entire cycle.
+            # The cycle continues with what it has and completes gracefully.
+            assert result["cycle_outcome"] == "succeeded"
+            assert result["repos_scanned"] == 0  # refresh failed, no data
+            assert result["cycle_type"] == "full"
         finally:
             daemon.FRIDAY_DIR = original_friday
             daemon.LOCK_FILE = original_lock
+            _CYCLE_CACHE["fast_cycles_since_full"] = 0
 
     @patch("friday.daemon._run_cycle")
     def test_do_cycle_updates_status(self, mock_run_cycle, tmp_path) -> None:

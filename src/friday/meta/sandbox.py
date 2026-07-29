@@ -3,6 +3,15 @@
 Self-modifying code never touches the live Friday process or main branch
 directly. Reuses the existing wave-based executor but points it at a sandbox
 checkout of Friday's own repo.
+
+Upgraded for multi-file capabilities (Self-Evolution Engine):
+  - install_deps() — pip install packages inside the sandbox
+  - read_file() — read a file from the sandbox checkout
+  - file_exists() — check if a file exists in the sandbox
+  - test_file() — run a specific test file
+  - snapshot() — capture a git commit hash for rollback
+  - rollback() — revert sandbox to a previous snapshot
+  - dry_run() — simulate changes without modifying the sandbox
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ class Sandbox:
         self._label = label
         self._sandbox_path: Optional[str] = None
         self._diff_path: Optional[str] = None
+        self._base_commit: Optional[str] = None  # snapshot point for rollback
 
     @property
     def sandbox_path(self) -> Optional[str]:
@@ -41,12 +51,17 @@ class Sandbox:
     def diff_path(self) -> Optional[str]:
         return self._diff_path
 
+    @property
+    def base_commit(self) -> Optional[str]:
+        return self._base_commit
+
     def create(self) -> str:
         """Create the sandbox. Returns the sandbox root path.
 
         Prefers a git worktree for diff-ability; falls back to a temp dir
         copy when the working tree is dirty (worktree won't accept dirty
-        HEAD)."""
+        HEAD). Records the base commit for rollback.
+        """
         self._cleanup()
 
         root = Path(self._friday_root).resolve()
@@ -96,6 +111,9 @@ class Sandbox:
 
         self._sandbox_path = sandbox_path
 
+        # Record the base commit so we can snapshot/rollback.
+        self._base_commit = self._git("rev-parse", "HEAD")
+
         # Install project deps so the regression suite can run.
         try:
             subprocess.run(
@@ -108,6 +126,16 @@ class Sandbox:
             print(f"  warning: pip install error: {e}")
 
         return sandbox_path
+
+    def _git(self, *args: str) -> str:
+        """Run a git command in the sandbox. Returns stdout."""
+        if not self._sandbox_path:
+            return ""
+        result = subprocess.run(
+            ["git"] + list(args),
+            cwd=self._sandbox_path, capture_output=True, text=True, timeout=30,
+        )
+        return result.stdout.strip()
 
     def apply_patch(self, patch_content: str) -> None:
         """Apply a patch to the sandbox."""
@@ -166,6 +194,190 @@ class Sandbox:
             "output": (result.stdout or "") + "\n" + (result.stderr or ""),
             "duration_ms": dur,
         }
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Self-Evolution Engine upgrades
+    # ──────────────────────────────────────────────────────────────────────
+
+    def install_deps(self, deps: list[str]) -> dict:
+        """Install pip packages inside the sandbox.
+
+        Args:
+            deps: List of package names (e.g. ["edge-tts", "faster-whisper"])
+
+        Returns:
+            {success, output, failed_packages}
+        """
+        if not deps:
+            return {"success": True, "output": "No deps to install", "failed_packages": []}
+        if not self._sandbox_path:
+            return {"success": False, "output": "Sandbox not created", "failed_packages": deps}
+
+        failed: list[str] = []
+        output_parts: list[str] = []
+
+        for dep in deps:
+            try:
+                result = subprocess.run(
+                    ["pip", "install", dep],
+                    cwd=self._sandbox_path, capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    output_parts.append(f"  ✓ {dep}")
+                else:
+                    failed.append(dep)
+                    output_parts.append(f"  ✗ {dep}: {result.stderr[:100]}")
+            except Exception as e:
+                failed.append(dep)
+                output_parts.append(f"  ✗ {dep}: {e}")
+
+        success = len(failed) == 0
+        return {
+            "success": success,
+            "output": "\n".join(output_parts),
+            "failed_packages": failed,
+        }
+
+    def read_file(self, relative_path: str) -> str:
+        """Read a file from the sandbox checkout.
+
+        Args:
+            relative_path: Path relative to sandbox root (e.g. "src/friday/cli.py")
+
+        Returns:
+            File contents as string, or empty string if file doesn't exist.
+        """
+        if not self._sandbox_path:
+            return ""
+        full = Path(self._sandbox_path) / relative_path
+        try:
+            return full.read_text(encoding="utf-8")
+        except (OSError, IOError):
+            return ""
+
+    def file_exists(self, relative_path: str) -> bool:
+        """Check if a file exists in the sandbox checkout."""
+        if not self._sandbox_path:
+            return False
+        return (Path(self._sandbox_path) / relative_path).exists()
+
+    def write_file(self, relative_path: str, content: str) -> bool:
+        """Write a file to the sandbox checkout, creating directories.
+
+        Args:
+            relative_path: Path relative to sandbox root.
+            content: File content to write.
+
+        Returns:
+            True on success.
+        """
+        if not self._sandbox_path:
+            return False
+        full = Path(self._sandbox_path) / relative_path
+        try:
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content, encoding="utf-8")
+            return True
+        except (OSError, IOError):
+            return False
+
+    def test_file(self, test_path: str) -> dict:
+        """Run a specific test file and return {passed, output, duration_ms}.
+
+        Args:
+            test_path: Path relative to sandbox root (e.g. "tests/test_voice.py")
+
+        Returns:
+            {passed, output, duration_ms}
+        """
+        return self.run_tests([
+            "python", "-m", "pytest", test_path, "-x", "--tb=short", "-v",
+        ])
+
+    def snapshot(self) -> Optional[str]:
+        """Capture a git commit hash for rollback.
+
+        Stages all changes and creates a snapshot commit. Returns the commit hash.
+        """
+        if not self._sandbox_path:
+            return None
+        self._git("add", "-A")
+        # Check if there are changes to commit.
+        status = self._git("status", "--porcelain")
+        if status.strip():
+            self._git("commit", "-m", f"snapshot before capability deploy ({now_iso()})")
+        self._base_commit = self._git("rev-parse", "HEAD")
+        return self._base_commit
+
+    def rollback(self, commit_hash: Optional[str] = None) -> bool:
+        """Revert sandbox to a previous snapshot.
+
+        Args:
+            commit_hash: Commit to reset to. If None, uses the base commit
+                         (before any capability changes).
+
+        Returns:
+            True on success.
+        """
+        target = commit_hash or self._base_commit
+        if not target or not self._sandbox_path:
+            return False
+        try:
+            # Reset all tracked files to the target commit.
+            subprocess.run(
+                ["git", "reset", "--hard", target],
+                cwd=self._sandbox_path, check=True, capture_output=True, text=True, timeout=30,
+            )
+            # Clean untracked files that the capability may have created.
+            subprocess.run(
+                ["git", "clean", "-fd"],
+                cwd=self._sandbox_path, capture_output=True, text=True, timeout=15,
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    def dry_run(self, changes: list[dict]) -> dict:
+        """Simulate changes without actually modifying the sandbox.
+
+        Analyzes what WOULD change: files created, files modified, deps added.
+        Useful for "what if I add voice support?" queries.
+
+        Args:
+            changes: List of change dicts, each with keys:
+                - type: "new_file" | "modified_file" | "dependency" | "config_change"
+                - path: file path (for files)
+                - name: dependency name (for deps)
+                - content_summary: brief description of content (optional)
+
+        Returns:
+            {created: [...], modified: [...], deps: [...], config_changes: [...]}
+        """
+        result: dict = {
+            "created": [],
+            "modified": [],
+            "deps": [],
+            "config_changes": [],
+        }
+
+        for c in changes:
+            ctype = c.get("type", "")
+            if ctype == "new_file":
+                path = c.get("path", "?")
+                summ = c.get("content_summary", "")
+                result["created"].append(f"{path} ({summ})" if summ else path)
+            elif ctype == "modified_file":
+                path = c.get("path", "?")
+                summ = c.get("content_summary", "")
+                result["modified"].append(f"{path} ({summ})" if summ else path)
+            elif ctype == "dependency":
+                name = c.get("name", "?")
+                result["deps"].append(name)
+            elif ctype == "config_change":
+                entry = c.get("name", c.get("path", "?"))
+                result["config_changes"].append(entry)
+
+        return result
 
     def capture_diff(self) -> str:
         """Capture the diff between the sandbox and base, return it as text.
@@ -261,28 +473,21 @@ def _apply_diff_files(sandbox_root: str, diff_content: str) -> None:
 
             # Peek: detect empty new files (no ``--- /dev/null``/``+++ b/``
             # section follows — git omits them for 0-byte files).
-            # Format: diff --git, new file mode, index, [next diff --git]
             _empty_path = ""
-            # Extract the ``b/path`` from ``diff --git a/path b/path`` as
-            # fallback when ``+++ b/`` is absent (empty files).
             _diff_parts = line.split()
             if len(_diff_parts) >= 4 and _diff_parts[3].startswith("b/"):
                 _empty_path = _diff_parts[3][2:]
             _peek_limit = min(i + 4, len(lines))
             for _pi in range(i, _peek_limit):
                 if lines[_pi].startswith("--- /dev/null"):
-                    # Normal new file — clear the fallback path since the
-                    # normal ---/+++ handler will process it.
                     _empty_path = ""
                     break
                 if lines[_pi].startswith("diff --git "):
-                    # New section started without --- /dev/null — empty file.
                     if _empty_path:
                         _write_new_file(root, _empty_path, [])
                     break
                 if lines[_pi].startswith("+++ b/"):
                     _empty_path = lines[_pi][6:]
-
             i += 1
             continue
 
@@ -293,21 +498,15 @@ def _apply_diff_files(sandbox_root: str, diff_content: str) -> None:
                 content_lines = []
             current_path = None
             in_hunk = False
-            # Next line should be "+++ b/<path>"
             if i + 1 < len(lines) and lines[i + 1].startswith("+++ b/"):
-                current_path = lines[i + 1][6:]  # strip "+++ b/"
+                current_path = lines[i + 1][6:]
                 i += 2
-                # Skip to the @@ hunk header.
-                # If we hit a ``diff --git`` before ``@@``, the file is
-                # empty (no hunk). Write it and re-process the next
-                # diff --git line on the next outer loop iteration.
                 while i < len(lines):
                     if lines[i].startswith("@@"):
                         in_hunk = True
                         i += 1
                         break
                     if lines[i].startswith("diff --git "):
-                        # Empty file — write it now.
                         if current_path:
                             _write_new_file(root, current_path, content_lines)
                         current_path = None
@@ -318,30 +517,24 @@ def _apply_diff_files(sandbox_root: str, diff_content: str) -> None:
                 continue
         if in_hunk and current_path:
             if line.startswith("@@"):
-                # New hunk in same file — flush previous, continue.
                 i += 1
                 continue
             if line.startswith("+") and not line.startswith("+++"):
-                content_lines.append(line[1:])  # strip leading +
+                content_lines.append(line[1:])
             elif line.startswith("-"):
-                pass  # skip removed lines
+                pass
             elif line.startswith("\\ "):
-                # Git diff meta-line like "\ No newline at end of file".
                 pass
             else:
-                # Context line — part of the diff but not added content.
-                # For new files this shouldn't happen, but include it.
                 content_lines.append(line)
         i += 1
 
-    # Flush last file (even if empty — trailing __init__.py, etc.).
     if current_path:
         _write_new_file(root, current_path, content_lines)
 
 
 def _write_new_file(root: Path, path: str, lines: list[str]) -> None:
     """Write content lines to a file under root, creating directories."""
-    # Strip trailing empty lines.
     while lines and not lines[-1].strip():
         lines.pop()
     full = root / path

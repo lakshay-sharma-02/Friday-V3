@@ -177,14 +177,211 @@ def _try_rich_import() -> bool:
         return False
 
 
+def cmd_execute_pending(args: argparse.Namespace, conn=None) -> int:
+    """Find all pending compiled/approved task graphs and execute them.
+
+    Mirrors the daemon's ``_stage_execution_pipeline()`` but with CLI output
+    formatting. Useful for running queued graphs manually without waiting for
+    the next daemon full cycle.
+    """
+    from .presentation.cli_format import header, green, yellow, red, gray, blue
+
+    pending = getattr(args, "pending", False)
+    dry_run = getattr(args, "dry_run", False)
+    yes = getattr(args, "yes", False)
+    workspace = getattr(args, "workspace", None) or "."
+    conn = conn or connect()
+    import time as _time
+
+    try:
+        # Find compiled/approved graphs that haven't been scheduled yet.
+        # Gracefully handle the case where scheduler_runs table doesn't exist
+        # (first ever execution on fresh DB).
+        try:
+            graphs = conn.execute(
+                "SELECT id, goal, status FROM task_graphs "
+                "WHERE status IN ('compiled', 'approved') "
+                "AND id NOT IN ("
+                "  SELECT graph_id FROM scheduler_runs WHERE status IN "
+                "  ('scheduled', 'running', 'completed')"
+                ")"
+                "ORDER BY created_at DESC"
+            ).fetchall()
+        except Exception:
+            # scheduler_runs table doesn't exist yet — no schedules have been
+            # created, so all compiled/approved graphs are pending.
+            graphs = conn.execute(
+                "SELECT id, goal, status FROM task_graphs "
+                "WHERE status IN ('compiled', 'approved') "
+                "ORDER BY created_at DESC"
+            ).fetchall()
+
+        if not graphs:
+            print(header("Pending Execution", "no graphs pending"))
+            print(gray("  No compiled/approved task graphs are pending execution."))
+            print(gray("  Compile one: `friday graph \"<goal>\"`"))
+            conn.close()
+            return 0
+
+        label = "pending" if not dry_run else "dry-run"
+        print(header("Pending Execution",
+                      f"{len(graphs)} graph(s) pending, mode={label}"))
+        print()
+
+        for g in graphs:
+            gid = g["id"]
+            goal = g.get("goal", "") or ""
+            short_id = gid.split(":")[-1][:20] if ":" in gid else gid[:20]
+            print(f"  {green('●')} {goal[:60]}")
+            print(f"     id={short_id}, status={g['status']}")
+        print()
+
+        if not graphs:
+            return 0
+
+        goal_list = [g.get("goal", "") or "no goal" for g in graphs]
+        print(f"  Friday will execute {len(graphs)} pending graph(s):")
+        for gg in goal_list:
+            print(f"    • {gg[:60]}")
+
+        if dry_run:
+            print()
+            print("=" * 60)
+            print("  DRY RUN — no changes made")
+            print("=" * 60)
+            return 0
+
+        if not yes:
+            try:
+                response = input(f"\nProceed with execution? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                response = "n"
+            if response != "y":
+                print("Execution cancelled.")
+                conn.close()
+                return 0
+
+        # Bootstrap worker registry.
+        try:
+            from .worker.engine import ensure_runtime_bootstrapped
+            ensure_runtime_bootstrapped(conn)
+        except Exception:
+            pass
+
+        # Run the pipeline for each pending graph.
+        import time as _time
+        t0 = _time.monotonic()
+        resolved = 0
+        scheduled = 0
+        executed = 0
+        sessions = []
+
+        for g in graphs:
+            graph_id: str = g["id"]
+            goal: str = g.get("goal", "") or ""
+            short_id = graph_id.split(":")[-1][:24] if ":" in graph_id else graph_id[:24]
+
+            print(f"\n  {green('→')} {goal[:60]}")
+
+            try:
+                # Resolve capabilities if not already assigned.
+                resolver = CapabilityResolver(conn)
+                existing = resolver.assignments(graph_id)
+                if not existing:
+                    rr = resolver.resolve_graph(graph_id, workspace=workspace)
+                    if rr.unresolved > 0:
+                        print(f"    {yellow('⚠')} {rr.unresolved} task(s) unresolved — skipping.")
+                        continue
+                    resolved += 1
+                    print(f"    {gray('resolve:')} {rr.assigned} task(s) assigned to workers")
+                else:
+                    print(f"    {gray('resolve:')} already assigned")
+
+                # Schedule.
+                scheduler = TaskScheduler(conn)
+                sched_result = scheduler.schedule_graph(graph_id)
+                scheduled += 1
+                wc = sched_result.schedule.wave_count
+                tc = len(sched_result.schedule.tasks)
+                print(f"    {gray('schedule:')} {tc} tasks in {wc} wave(s)")
+
+                # Execute.
+                def _resolve(wid: str):
+                    return resolve_executor(wid, workspace)
+                engine = RuntimeEngine(conn, worker_resolver=_resolve,
+                                       workspace=workspace, fallback=True)
+                report = engine.run(sched_result.schedule)
+                executed += 1
+                sessions.append(report.session_id)
+
+                status = green("✓") if report.failed == 0 else red("✗")
+                print(f"    {gray('execute:')} {status} "
+                      f"{report.succeeded} succeeded, {report.failed} failed, "
+                      f"{report.cancelled} cancelled "
+                      f"({report.duration_ms}ms)")
+
+                # Build mission journal.
+                try:
+                    from .runtime.journal import build_journal, write_journal, \
+                        collect_metrics, format_metrics
+                    sched_tasks = sched_result.schedule.tasks
+                    executor_assignments = [
+                        {"task_id": t.task_id, "worker_id": t.worker_id or ""}
+                        for t in sched_tasks]
+                    graph = {
+                        "nodes": [t.task_id for t in sched_tasks],
+                        "edges": [],
+                    }
+                    journal = build_journal(
+                        report.session_id, conn, report, goal=goal,
+                        graph_id=graph_id,
+                        planner_time_ms=0,
+                        verification_time_ms=report.verification_time_ms,
+                        graph=graph,
+                        executor_assignments=executor_assignments,
+                        stopped_at=report.stopped_at,
+                        stop_reason=report.stop_reason)
+                    journal_path = write_journal(
+                        journal,
+                        Path(workspace) / f"mission_journal_{report.session_id}.json")
+                    print(f"    {gray('journal:')} {journal_path}")
+                except Exception as exc:
+                    print(f"    {gray('journal:')} skipped ({exc})")
+
+            except Exception as exc:
+                print(f"    {red('✗')} failed: {str(exc)[:200]}")
+
+        elapsed = _time.monotonic() - t0
+        print()
+        print("=" * 60)
+        print(f"  Complete: {executed} executed, {elapsed:.1f}s")
+        print(f"  Resolved: {resolved}, Scheduled: {scheduled}")
+        print(f"  Sessions: {', '.join(s[:12] for s in sessions)}")
+        print("=" * 60)
+
+        return 0 if executed > 0 and all(sessions) else 1
+
+    finally:
+        conn.close()
+
+
 def cmd_execute(args: argparse.Namespace, conn=None) -> int:
-    """Plan a goal, resolve workers, schedule, and run it end-to-end."""
+    """Plan a goal, resolve workers, schedule, and run it end-to-end.
+
+    With ``--pending`` or without a goal, runs all pending compiled/approved
+    task graphs that haven't been scheduled yet (same logic as the daemon's
+    ``_stage_execution_pipeline``).
+    """
+    # Route to pending mode when --pending or no goal.
+    pending = getattr(args, "pending", False)
     raw = getattr(args, "goal", None)
     goal = " ".join(raw) if isinstance(raw, (list, tuple)) else (raw or "")
-    if not goal.strip():
-        print('error: a goal is required: friday execute "<goal>"',
-              file=sys.stderr)
-        return 2
+
+    if pending or not goal.strip():
+        return cmd_execute_pending(args, conn=conn)
+
+    workspace = getattr(args, "workspace", None) or "."
 
     workspace = getattr(args, "workspace", None) or "."
     conn = conn or connect()

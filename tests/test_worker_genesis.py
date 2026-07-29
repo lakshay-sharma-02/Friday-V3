@@ -24,6 +24,7 @@ from friday.worker.genesis import (
     draft_manifest,
     propose_worker,
     register_approved_proposal,
+    auto_approve_proposals,
     _tool_name_from_capability,
     _check_path_for_tool,
 )
@@ -467,6 +468,163 @@ def test_draft_manifest_deterministic_structure():
 # ===================================================================
 # 8. Resolver integration — no regression
 # ===================================================================
+
+# ===================================================================
+# 9. Auto-approve
+# ===================================================================
+
+def test_auto_approve_path_based_proposal(tmp_path):
+    """A PATH-based deterministic proposal gets auto-approved."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    initial_count = reg.count()
+
+    from friday.db import insert_proposed_worker
+    # Deterministic PATH-based proposal for 'git operations' -> 'git'.
+    manifest_json = json.dumps({
+        "name": "GitHelper", "implementation": "cli", "provider": "local",
+        "origin": "generated",
+        "capabilities": ["Git Operations"],
+        "requirements": ["git"],
+        "supported_task_types": ["infrastructure", "configuration"],
+        "supported_plan_types": ["infrastructure"],
+        "description": "Local git tool", "estimated_speed": "fast",
+        "estimated_cost": "low", "confidence": "medium",
+    })
+    row = ProposedWorkerRow(
+        id="proposal:git:auto",
+        detected_from_goal="Test",
+        capability_gap="Git Operations",
+        draft_manifest_json=manifest_json,
+        status="pending",
+        created_at=now_iso(),
+        reviewed_at=None,
+    )
+    insert_proposed_worker(conn, row)
+
+    approved = auto_approve_proposals(conn, reg)
+    assert approved == 1, "PATH-based proposal should be auto-approved"
+    assert reg.count() == initial_count + 1
+    conn.close()
+
+
+def test_auto_approve_skips_low_confidence(tmp_path):
+    """Low-confidence proposals are NOT auto-approved."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    initial_count = reg.count()
+
+    from friday.db import insert_proposed_worker
+    # Low confidence deterministic proposal.
+    manifest_json = json.dumps({
+        "name": "LowConf", "implementation": "cli", "provider": "local",
+        "origin": "generated",
+        "capabilities": ["Git Operations"],
+        "requirements": ["git"],
+        "supported_task_types": ["infrastructure"],
+        "supported_plan_types": ["infrastructure"],
+        "description": "Low confidence", "estimated_speed": "fast",
+        "estimated_cost": "low", "confidence": "low",
+    })
+    row = ProposedWorkerRow(
+        id="proposal:low:auto",
+        detected_from_goal="Test",
+        capability_gap="Git Operations",
+        draft_manifest_json=manifest_json,
+        status="pending",
+        created_at=now_iso(),
+        reviewed_at=None,
+    )
+    insert_proposed_worker(conn, row)
+
+    approved = auto_approve_proposals(conn, reg)
+    assert approved == 0, "Low confidence proposal should NOT be auto-approved"
+    assert reg.count() == initial_count
+    conn.close()
+
+
+def test_auto_approve_skips_llm_generated(tmp_path):
+    """LLM-generated proposals (no PATH tool) are NOT auto-approved."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    initial_count = reg.count()
+
+    from friday.db import insert_proposed_worker
+    # LLM-style proposal: no requirements referencing PATH tools.
+    manifest_json = json.dumps({
+        "name": "LLMWorker", "implementation": "api", "provider": "openai",
+        "origin": "generated",
+        "capabilities": ["Python"],
+        "requirements": [],  # No PATH tool
+        "supported_task_types": ["implementation"],
+        "supported_plan_types": ["feature"],
+        "description": "LLM-generated worker", "estimated_speed": "medium",
+        "estimated_cost": "medium", "confidence": "medium",
+    })
+    row = ProposedWorkerRow(
+        id="proposal:llm:auto",
+        detected_from_goal="Test",
+        capability_gap="Python",
+        draft_manifest_json=manifest_json,
+        status="pending",
+        created_at=now_iso(),
+        reviewed_at=None,
+    )
+    insert_proposed_worker(conn, row)
+
+    approved = auto_approve_proposals(conn, reg)
+    assert approved == 0, "LLM-generated proposal should NOT be auto-approved"
+    assert reg.count() == initial_count
+    conn.close()
+
+
+def test_auto_approve_skips_invalid_capabilities(tmp_path):
+    """Proposals with capabilities outside the closed vocabulary are rejected."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    initial_count = reg.count()
+
+    from friday.db import insert_proposed_worker
+    manifest_json = json.dumps({
+        "name": "FakeTool", "implementation": "cli", "provider": "local",
+        "origin": "generated",
+        "capabilities": ["SuperIntelligence"],
+        "requirements": ["git"],
+        "supported_task_types": ["implementation"],
+        "supported_plan_types": ["feature"],
+        "description": "Bad worker", "estimated_speed": "fast",
+        "estimated_cost": "low", "confidence": "medium",
+    })
+    row = ProposedWorkerRow(
+        id="proposal:fake:auto",
+        detected_from_goal="Test",
+        capability_gap="Unknown",
+        draft_manifest_json=manifest_json,
+        status="pending",
+        created_at=now_iso(),
+        reviewed_at=None,
+    )
+    insert_proposed_worker(conn, row)
+
+    approved = auto_approve_proposals(conn, reg)
+    assert approved == 0, "Invalid capability proposal should NOT be auto-approved"
+    assert reg.count() == initial_count
+
+    # Proposal should be marked as rejected.
+    from friday.db import get_proposed_worker
+    row = get_proposed_worker(conn, "proposal:fake:auto")
+    assert row.status == "rejected"
+    conn.close()
+
+
+def test_auto_approve_no_proposals(tmp_path):
+    """No pending proposals = zero approvals, no errors."""
+    conn = _db(tmp_path)
+    reg = _register_builtins(conn)
+    approved = auto_approve_proposals(conn, reg)
+    assert approved == 0
+    conn.close()
+
 
 def test_resolver_regression_suite_passes():
     """The existing test_resolver.py suite passes unmodified.

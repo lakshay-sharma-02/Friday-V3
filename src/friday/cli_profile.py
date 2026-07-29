@@ -224,6 +224,111 @@ def cmd_profile_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profile_depth(args: argparse.Namespace) -> int:
+    """Show Friday's relationship depth with the operator."""
+    conn = connect()
+    try:
+        from .operator.depth import compute_relationship_depth
+        depth = compute_relationship_depth(conn)
+        print(f"Relationship Depth: Level {depth.level} — {depth.label}")
+        print(f"  {depth.description}")
+        print(f"  Total conversations: {depth.total_conversations}")
+        print(f"  Preferences known:   {depth.preferences_known}")
+        print(f"  Name known:          {'Yes' if depth.name_known else 'No'}")
+        print(f"  Positivity ratio:    {depth.positive_sentiment_ratio:.1%}")
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_profile_relationship(args: argparse.Namespace) -> int:
+    """Show the long-term relationship graph summary."""
+    conn = connect()
+    try:
+        # Read relationship metrics.
+        rows = conn.execute(
+            "SELECT metric_key, metric_value, computed_at, window_days "
+            "FROM relationship_metrics ORDER BY computed_at DESC LIMIT 20"
+        ).fetchall()
+
+        from .operator.depth import compute_relationship_depth
+        depth = compute_relationship_depth(conn)
+
+        print(f"Relationship with Friday — Level {depth.level} ({depth.label})")
+        print()
+
+        if rows:
+            print("Relationship Metrics:")
+            for r in rows:
+                key = r["metric_key"]
+                val = r["metric_value"]
+                days = r["window_days"]
+                print(f"  {key}: {val} (window: {days}d)")
+        else:
+            print("No relationship metrics yet. These are computed during daemon cycles.")
+
+        print()
+        print("Conversation Overview:")
+        conv_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM conversation_log"
+        ).fetchone()["cnt"]
+        print(f"  Total exchanges: {conv_count}")
+
+        # Channel breakdown.
+        channels = conn.execute(
+            "SELECT channel, COUNT(*) AS cnt FROM conversation_log "
+            "GROUP BY channel ORDER BY cnt DESC"
+        ).fetchall()
+        if channels:
+            print("  By channel:")
+            for c in channels:
+                print(f"    {c['channel']}: {c['cnt']}")
+
+        # Sentiment breakdown.
+        try:
+            sent_rows = conn.execute(
+                "SELECT tone, COUNT(*) AS cnt FROM sentiment_observations "
+                "GROUP BY tone ORDER BY cnt DESC"
+            ).fetchall()
+            if sent_rows:
+                print("  Sentiment breakdown:")
+                for s in sent_rows:
+                    print(f"    {s['tone']}: {s['cnt']}")
+        except Exception:
+            pass
+
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_profile_sentiment(args: argparse.Namespace) -> int:
+    """Show sentiment analysis summary for recent interactions."""
+    conn = connect()
+    try:
+        from .sentiment import compute_trend_summary
+        trend = compute_trend_summary(conn, lookback_hours=48)
+
+        print("Sentiment Summary (last 48 hours)")
+        print()
+        print(f"  Total observations:  {trend['total_observations']}")
+        print(f"  Most common tone:    {trend['most_common_tone']}")
+        print(f"  Rolling tone:        {trend['rolling_tone']}")
+        print(f"  Trend:               {trend['trend']}")
+
+        if trend.get("tone_breakdown"):
+            print()
+            print("  Breakdown:")
+            for tone, info in trend["tone_breakdown"].items():
+                bar_len = max(1, int(info["percentage"] / 5))
+                bar = "█" * bar_len
+                print(f"    {tone:15s} {info['count']:4d} ({info['percentage']:5.1f}%) {bar}")
+
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     """Dispatch friday profile subcommands."""
     action = getattr(args, "action", "show")
@@ -240,7 +345,14 @@ def cmd_profile(args: argparse.Namespace) -> int:
         return cmd_profile_derive(args)
     elif action == "stats":
         return cmd_profile_stats(args)
+    elif action == "depth":
+        return cmd_profile_depth(args)
+    elif action == "relationship":
+        return cmd_profile_relationship(args)
+    elif action == "sentiment":
+        return cmd_profile_sentiment(args)
     else:
         print(f"error: unknown action: {action}", file=sys.stderr)
-        print("usage: friday profile <show|set|unset|history|derive|stats>", file=sys.stderr)
+        print("usage: friday profile <show|set|unset|history|derive|stats|depth|relationship|sentiment>",
+              file=sys.stderr)
         return 2

@@ -74,6 +74,40 @@ def _list() -> int:
             else:
                 invoked_str = "never"
             print(f"    Invoked:    {invoked_str}")
+
+            # Show shadow run status for proposed skills.
+            if status == "proposed":
+                try:
+                    from .db import count_recent_shadow_runs
+                    shadow_clean = count_recent_shadow_runs(conn, r["id"], 5)
+                    if shadow_clean > 0:
+                        from .db import get_shadow_runs_for_skill
+                        shadow_rows = get_shadow_runs_for_skill(conn, r["id"], 1)
+                        if shadow_rows:
+                            last_score = shadow_rows[0]["overall_match_score"]
+                            print(f"    Shadow:     {shadow_clean} clean run(s), "
+                                  f"last score {last_score:.0%}")
+                        else:
+                            print(f"    Shadow:     {shadow_clean} clean run(s)")
+                    else:
+                        print(f"    Shadow:     waiting for first run")
+                except Exception:
+                    pass
+
+            # Show canary promotion progress for beta skills.
+            if status == "beta":
+                try:
+                    inv = r["invocation_count"] or 0
+                    from .skill_formation import _CANARY_PROMOTION_THRESHOLD
+                    progress = min(inv, _CANARY_PROMOTION_THRESHOLD)
+                    needed = max(0, _CANARY_PROMOTION_THRESHOLD - inv)
+                    if needed > 0:
+                        print(f"    Promo:      {progress}/{_CANARY_PROMOTION_THRESHOLD} execs")
+                    else:
+                        print(f"    Promo:      {progress}/{_CANARY_PROMOTION_THRESHOLD} execs ✓")
+                except Exception:
+                    pass
+
             print()
 
         print("Actions:")
@@ -131,6 +165,13 @@ def _run(args: argparse.Namespace) -> int:
 
         wid = worker.id
         manifest_ref = worker.manifest_ref or ""
+
+        # Proposed skills should warn that they're in shadow mode.
+        if worker.status == "proposed":
+            print(f"⚠  Skill '{name}' has status 'proposed' and is running in shadow mode.")
+            print("   Shadow mode simulates execution without side effects.")
+            print("   Run `friday skills` to check shadow run progress.")
+            print()
 
         # Confirm gate: show skill details and ask to proceed.
         print(f"Skill:    {name}")

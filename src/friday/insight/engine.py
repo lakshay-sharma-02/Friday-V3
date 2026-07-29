@@ -23,16 +23,13 @@ from typing import Dict, List, Optional, Tuple
 
 from ..db import (
     atomic,
-    InsightEvolutionRow,
     InsightHistoryRow,
     get_all_insights,
     get_all_understanding,
     get_insight_by_id,
     insert_insight,
-    insert_insight_evolution,
     insert_insight_history,
-    insight_evolution_all,
-    insight_evolution_for,
+    insert_layer_history,
     latest_insight_snapshot,
     update_insight_status,
 )
@@ -221,26 +218,32 @@ class InsightEngine:
         initiatives = {ix.id: ix for ix in InitiativeEngine(self.conn).all_initiatives()}
         contributors = self._build_contributors(i, understanding, initiatives, knowledge)
         score, breakdown = explain_score(contributors, [])
-        evo = insight_evolution_for(self.conn, iid)
+        evo = list(self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'insight' AND entity_id = ? "
+            "ORDER BY recorded_at ASC", (iid,)).fetchall())
         return (i, breakdown,
                 i.understanding_ids, i.initiative_ids, i.knowledge_ids, evo)
 
-    def evolution(self) -> List[InsightEvolutionRow]:
-        return insight_evolution_all(self.conn)
+    def evolution(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'insight' "
+            "ORDER BY recorded_at DESC LIMIT 100"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # --- internals ------------------------------------------------------------
 
     def _retire(self, prev: Insight, build_at: str) -> None:
         update_insight_status(self.conn, prev.id or prev._generate_id(),
                               InsightStatus.RETIRED.value, build_at)
-        ev = InsightEngine._event(
-            build_at, "Retired", prev.id or prev._generate_id(), prev.status.value,
-            InsightStatus.RETIRED.value, prev.confidence.value, prev.confidence.value,
-            prev.statement, prev.statement,
-            "Triggering conditions no longer hold; insight retired (ephemeral).",
-            [], [], [],
+        insert_layer_history(
+            self.conn, "insight", prev.id or prev._generate_id(), "Retired",
+            previous_state=prev.status.value,
+            new_state=InsightStatus.RETIRED.value,
+            reason="Triggering conditions no longer hold; insight retired (ephemeral).",
         )
-        insert_insight_evolution(self.conn, [ev])
 
     def _merge_candidates(self, candidates: List[Candidate]) -> Dict[tuple, Candidate]:
         out: Dict[tuple, Candidate] = {}
@@ -342,54 +345,50 @@ class InsightEngine:
             for i in to_persist
         ])
 
-        events: List[InsightEvolutionRow] = []
         for i in to_persist:
             iid = i.id or i._generate_id()
             prev_h = prev.get(iid)
+            meta = {
+                "insight_type": i.type.value,
+                "understanding_count": len(i.understanding_ids),
+                "initiative_count": len(i.initiative_ids),
+                "knowledge_count": len(i.knowledge_ids),
+            }
             if prev_h is None:
-                events.append(InsightEngine._event(
-                    build_at, "Started", iid, None, i.status.value, None,
-                    i.confidence.value, None, i.title,
-                    f"Insight emerged with {i.understanding_count} understanding, "
-                    f"{i.initiative_count} initiative, {i.knowledge_count} knowledge.",
-                    i.understanding_ids, i.initiative_ids, i.knowledge_ids))
+                insert_layer_history(
+                    self.conn, "insight", iid, "Started",
+                    new_state=i.status.value,
+                    reason=f"Insight emerged with {len(i.understanding_ids)} understanding, "
+                    f"{len(i.initiative_ids)} initiative, {len(i.knowledge_ids)} knowledge.",
+                    metadata=meta,
+                )
                 continue
             prev_conf = InsightConfidence.from_str(prev_h.confidence)
             if self._conf_order(i.confidence) > self._conf_order(prev_conf):
-                events.append(InsightEngine._event(
-                    build_at, "Strengthened", iid, prev_h.status, i.status.value,
-                    prev_h.confidence, i.confidence.value, prev_h.title, i.title,
-                    f"Confidence grew {prev_conf.value}->{i.confidence.value}.",
-                    i.understanding_ids, i.initiative_ids, i.knowledge_ids))
+                insert_layer_history(
+                    self.conn, "insight", iid, "Strengthened",
+                    previous_state=prev_h.status, new_state=i.status.value,
+                    reason=f"Confidence grew {prev_conf.value}->{i.confidence.value}.",
+                    metadata=meta,
+                )
             if self._status_rank(i.status) > self._status_rank(
                     InsightStatus.from_str(prev_h.status)):
                 et = "Stable" if i.status == InsightStatus.STABLE else (
                     "Verified" if i.status == InsightStatus.VERIFIED else "Advanced")
-                events.append(InsightEngine._event(
-                    build_at, et, iid, prev_h.status, i.status.value,
-                    prev_h.confidence, i.confidence.value, prev_h.title, i.title,
-                    f"Lifecycle advanced {prev_h.status}->{i.status.value}.",
-                    i.understanding_ids, i.initiative_ids, i.knowledge_ids))
+                insert_layer_history(
+                    self.conn, "insight", iid, et,
+                    previous_state=prev_h.status, new_state=i.status.value,
+                    reason=f"Lifecycle advanced {prev_h.status}->{i.status.value}.",
+                    metadata=meta,
+                )
             if i.title != prev_h.title and prev_conf == i.confidence:
-                events.append(InsightEngine._event(
-                    build_at, "Renamed", iid, prev_h.status, i.status.value,
-                    prev_h.confidence, i.confidence.value, prev_h.title, i.title,
-                    "Title refined; prior wording retained.",
-                    i.understanding_ids, i.initiative_ids, i.knowledge_ids))
-        insert_insight_evolution(self.conn, events)
-        return len(events)
-
-    @staticmethod
-    def _event(build_at, etype, iid, prev_status, new_status, prev_conf,
-                new_conf, prev_title, new_title, reason, uids, iids, kids):
-        return InsightEvolutionRow(
-            id=f"{build_at}:{etype}:{iid}",
-            build_at=build_at, event_type=etype, insight_id=iid,
-            previous_status=prev_status, new_status=new_status,
-            previous_confidence=prev_conf, new_confidence=new_conf,
-            previous_statement=prev_title, new_statement=new_title, reason=reason,
-            understanding_ids=",".join(uids), initiative_ids=",".join(iids),
-            knowledge_ids=",".join(kids), timestamp=build_at)
+                insert_layer_history(
+                    self.conn, "insight", iid, "Renamed",
+                    previous_state=prev_h.status, new_state=i.status.value,
+                    reason="Title refined; prior wording retained.",
+                    metadata=meta,
+                )
+        return len(to_persist)
 
     @staticmethod
     def _conf_order(c: InsightConfidence) -> int:

@@ -38,34 +38,41 @@ class TestActionLevelClassification:
         assert get_action_level("binds") == ActionLevel.AUTO
         assert get_action_level("devices") == ActionLevel.AUTO
 
-    def test_state_changing_are_confirm(self):
-        assert get_action_level("workspace") == ActionLevel.CONFIRM
-        assert get_action_level("exec") == ActionLevel.CONFIRM
-        assert get_action_level("focuswindow") == ActionLevel.CONFIRM
-        assert get_action_level("movetoworkspace") == ActionLevel.CONFIRM
-        assert get_action_level("movetoworkspacesilent") == ActionLevel.CONFIRM
-        assert get_action_level("movewindow") == ActionLevel.CONFIRM
-        assert get_action_level("resizewindow") == ActionLevel.CONFIRM
-        assert get_action_level("fullscreen") == ActionLevel.CONFIRM
-        assert get_action_level("togglefloating") == ActionLevel.CONFIRM
-        assert get_action_level("pin") == ActionLevel.CONFIRM
-        assert get_action_level("focusmonitor") == ActionLevel.CONFIRM
-        assert get_action_level("movecursortocorner") == ActionLevel.CONFIRM
+    def test_state_changing_are_notify(self):
+        """State-changing reversible actions with medium blast → NOTIFY."""
+        assert get_action_level("workspace") == ActionLevel.NOTIFY
+        assert get_action_level("exec") == ActionLevel.NOTIFY
+        assert get_action_level("focuswindow") == ActionLevel.NOTIFY
+        assert get_action_level("movetoworkspace") == ActionLevel.NOTIFY
+        assert get_action_level("movetoworkspacesilent") == ActionLevel.NOTIFY
+        assert get_action_level("movewindow") == ActionLevel.NOTIFY
+        assert get_action_level("resizewindow") == ActionLevel.NOTIFY
+        assert get_action_level("fullscreen") == ActionLevel.NOTIFY
+        assert get_action_level("togglefloating") == ActionLevel.NOTIFY
+        assert get_action_level("pin") == ActionLevel.NOTIFY
+        assert get_action_level("focusmonitor") == ActionLevel.NOTIFY
+        assert get_action_level("movecursortocorner") == ActionLevel.NOTIFY
 
-    def test_destructive_are_double_confirm(self):
-        assert get_action_level("closewindow") == ActionLevel.DOUBLE_CONFIRM
+    def test_destructive_confirm_and_double(self):
+        """Irreversible actions classified by blast radius.
+
+        - closewindow: (IRREVERSIBLE, NARROW) → CONFIRM
+        - kill: (IRREVERSIBLE, WIDE) → DOUBLE_CONFIRM
+        - exit: (IRREVERSIBLE, CRITICAL) → DOUBLE_CONFIRM
+        """
+        assert get_action_level("closewindow") == ActionLevel.CONFIRM
         assert get_action_level("kill") == ActionLevel.DOUBLE_CONFIRM
         assert get_action_level("exit") == ActionLevel.DOUBLE_CONFIRM
 
     def test_unknown_action_defaults_to_confirm(self):
-        """Unknown = state-changing is safer than unknown = auto."""
+        """Unknown = (IRREVERSIBLE, MEDIUM) → CONFIRM."""
         assert get_action_level("nonexistent") == ActionLevel.CONFIRM
         assert get_action_level("") == ActionLevel.CONFIRM
 
     def test_case_insensitive(self):
-        assert get_action_level("WORKSPACE") == ActionLevel.CONFIRM
+        assert get_action_level("WORKSPACE") == ActionLevel.NOTIFY
         assert get_action_level("Query") == ActionLevel.AUTO
-        assert get_action_level("CLOSEWINDOW") == ActionLevel.DOUBLE_CONFIRM
+        assert get_action_level("CLOSEWINDOW") == ActionLevel.CONFIRM
 
 
 class TestIsActionWorker:
@@ -106,40 +113,49 @@ class TestPromptConfirm:
 
     def test_skip_prompt_confirms_anything(self):
         """--yes mode overrides even destructive actions."""
-        assert prompt_confirm("closewindow", "firefox", "worker:hyprctl",
+        assert prompt_confirm("kill", "all", "worker:hyprctl",
                               skip_prompt=True) is True
+
+    def test_notify_returns_true_without_prompt(self):
+        """NOTIFY actions execute immediately without prompting."""
+        # workspace is now NOTIFY — it prints an info line and returns True
+        assert prompt_confirm("workspace", "3", "worker:hyprctl") is True
 
     def test_confirm_yes_proceeds(self):
         """User says y -> action proceeds."""
+        # Use closewindow which is now (IRREVERSIBLE, NARROW) → CONFIRM
         with patch("sys.stdin", StringIO("y\n")):
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is True
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is True
 
     def test_confirm_no_rejected(self):
         """User says n -> action is rejected."""
         with patch("sys.stdin", StringIO("n\n")):
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is False
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is False
 
     def test_confirm_default_no(self):
         """Empty input defaults to no (n/N is default)."""
         with patch("sys.stdin", StringIO("\n")):
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is False
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is False
 
     def test_double_confirm_both_yes(self):
         """Both prompts y -> proceeds."""
         with patch("sys.stdin", StringIO("y\ny\n")):
-            assert prompt_confirm("closewindow", "kitty",
+            assert prompt_confirm("kill", "all",
                                   "worker:hyprctl") is True
 
     def test_double_confirm_first_no(self):
         """First prompt n -> rejected immediately."""
         with patch("sys.stdin", StringIO("n\n")):
-            assert prompt_confirm("closewindow", "kitty",
+            assert prompt_confirm("kill", "all",
                                   "worker:hyprctl") is False
 
     def test_double_confirm_second_no(self):
         """First y, second n -> rejected."""
         with patch("sys.stdin", StringIO("y\nn\n")):
-            assert prompt_confirm("closewindow", "kitty",
+            assert prompt_confirm("kill", "all",
                                   "worker:hyprctl") is False
 
     def test_eof_returns_false(self):
@@ -148,7 +164,8 @@ class TestPromptConfirm:
             with pytest.raises(EOFError):
                 input()
             # The function catches EOFError internally
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is False
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is False
 
     def test_keyboard_interrupt_returns_false(self):
         """Ctrl-C -> reject safely, not crash."""
@@ -158,7 +175,8 @@ class TestPromptConfirm:
                 raise KeyboardInterrupt
         sys.stdin = InterruptInput()  # type: ignore
         try:
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is False
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is False
         finally:
             sys.stdin = original
 
@@ -170,25 +188,29 @@ class TestRaceCondition:
     def test_repeated_call_still_gated(self):
         """Two consecutive calls with same params both hit the gate."""
         with patch("sys.stdin", StringIO("y\n")):
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is True
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is True
         with patch("sys.stdin", StringIO("y\n")):
             # Second call is independent — still gated, still requires input
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is True
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is True
 
     def test_rejected_then_retry_must_confirm_again(self):
         """First reject, second approve — second must still go through gate."""
         with patch("sys.stdin", StringIO("n\n")):
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is False
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is False
         with patch("sys.stdin", StringIO("y\n")):
             # The gate does not cache rejections — user can change their mind
-            assert prompt_confirm("workspace", "3", "worker:hyprctl") is True
+            assert prompt_confirm("closewindow", "firefox",
+                                  "worker:hyprctl") is True
 
     def test_no_cache_between_calls(self):
         """Each call is independent — no shared mutable state."""
         results = []
         for _ in range(3):
             with patch("sys.stdin", StringIO("y\n")):
-                results.append(prompt_confirm("workspace", "3",
+                results.append(prompt_confirm("closewindow", "firefox",
                                               "worker:hyprctl"))
         assert results == [True, True, True]
 

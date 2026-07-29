@@ -16,16 +16,12 @@ from typing import Dict, List, Optional, Tuple
 
 from ..db import (
     atomic,
-    UnderstandingEvolutionRow,
     UnderstandingHistoryRow,
-    evolution_events_all,
     get_all_understanding,
+    insert_layer_history,
     insert_understanding,
-    insert_understanding_evolution,
     insert_understanding_history,
     latest_understanding_snapshot,
-    understanding_evolution_all,
-    understanding_evolution_for,
     understanding_history_for,
     update_understanding_status,
 )
@@ -97,13 +93,13 @@ class UnderstandingEngine:
             build_at = now_iso()
 
         knowledge = get_all_knowledge(self.conn)
-        evo_events = evolution_events_all(self.conn)
 
         # Confirm every understanding references valid knowledge ids (no dangling
         # citations; the Brain's confidence in understanding rests on this).
         valid_ids = {k.id for k in knowledge if k.id}
 
-        candidates = detect(knowledge, evo_events)
+        # evolution_events table removed (was dead code). detect() receives empty list.
+        candidates = detect(knowledge, [])
         merged = self._merge_candidates(candidates)
 
         # When no LLM is configured and there's knowledge, note it.
@@ -232,11 +228,19 @@ class UnderstandingEngine:
         ]
         score, breakdown = explain_score(contributors)
         hist = understanding_history_for(self.conn, uid)
-        evo = understanding_evolution_for(self.conn, uid)
-        return u, breakdown, hist, evo
+        evo = list(self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'understanding' AND entity_id = ? "
+            "ORDER BY recorded_at ASC", (uid,)).fetchall())
+        return u, breakdown, hist, [dict(r) for r in evo]
 
-    def evolution_timeline(self) -> List[UnderstandingEvolutionRow]:
-        return understanding_evolution_all(self.conn)
+    def evolution_timeline(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'understanding' "
+            "ORDER BY recorded_at DESC LIMIT 100"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def history_timeline(self, uid: str) -> List[UnderstandingHistoryRow]:
         return understanding_history_for(self.conn, uid)
@@ -312,77 +316,59 @@ class UnderstandingEngine:
             for u in to_persist
         ])
 
-        events: List[UnderstandingEvolutionRow] = []
         for u in to_persist:
             uid = u.id or u._generate_id()
             ev_ids = set(u.knowledge_ids)
             prev_h = prev.get(uid)
 
+            meta = {
+                "knowledge_ids": ",".join(sorted(ev_ids)),
+                "confidence": u.confidence.value,
+                "status": u.status.value,
+            }
+
             if prev_h is None:
-                events.append(self._event(
-                    build_at, "Strengthened", uid, None, u.confidence.value,
-                    None, u.status.value, None, u.statement,
-                    f"Understanding emerged with {len(ev_ids)} supporting knowledge "
+                insert_layer_history(
+                    self.conn, "understanding", uid, "Emerged",
+                    new_state=u.status.value,
+                    reason=f"Understanding emerged with {len(ev_ids)} supporting knowledge "
                     f"(status {u.status.value}).",
-                    ",".join(sorted(ev_ids)),
-                ))
+                    metadata=meta,
+                )
                 continue
 
             prev_conf = UnderstandingConfidence.from_str(prev_h.confidence)
             if self._conf_order(u.confidence) > self._conf_order(prev_conf):
                 added = ev_ids - set(prev_h.knowledge_ids.split(","))
-                events.append(self._event(
-                    build_at, "Strengthened", uid, prev_h.confidence, u.confidence.value,
-                    prev_h.status, u.status.value, prev_h.statement, u.statement,
-                    f"Confidence grew {prev_conf.value}->{u.confidence.value} as "
-                    f"supporting knowledge rose "
-                    f"{len(prev_h.knowledge_ids.split(',')) if prev_h.knowledge_ids else 0}"
-                    f"->{len(ev_ids)}.",
-                    ",".join(sorted(added)),
-                ))
+                insert_layer_history(
+                    self.conn, "understanding", uid, "Strengthened",
+                    previous_state=prev_h.status,
+                    new_state=u.status.value,
+                    reason=f"Confidence grew {prev_conf.value}->{u.confidence.value}.",
+                    metadata=meta,
+                )
 
             if self._status_rank(u.status) > self._status_rank(
                 UnderstandingStatus.from_str(prev_h.status)
             ):
-                events.append(self._event(
-                    build_at, "Stabilized" if u.status == UnderstandingStatus.STABLE
-                    else "Verified", uid, prev_h.confidence, u.confidence.value,
-                    prev_h.status, u.status.value, prev_h.statement, u.statement,
-                    f"Lifecycle advanced {prev_h.status}->{u.status.value}.",
-                    ",".join(sorted(ev_ids)),
-                ))
+                et = "Stabilized" if u.status == UnderstandingStatus.STABLE else "Verified"
+                insert_layer_history(
+                    self.conn, "understanding", uid, et,
+                    previous_state=prev_h.status,
+                    new_state=u.status.value,
+                    reason=f"Lifecycle advanced {prev_h.status}->{u.status.value}.",
+                    metadata=meta,
+                )
 
             if u.statement != prev_h.statement and u.confidence == prev_conf:
-                events.append(self._event(
-                    build_at, "Superseded", uid, prev_h.confidence, u.confidence.value,
-                    prev_h.status, u.status.value, prev_h.statement, u.statement,
-                    "Statement refined by newer knowledge; prior wording retained.",
-                    ",".join(sorted(ev_ids)),
-                ))
-
-        insert_understanding_evolution(self.conn, events)
-        return len(events)
-
-    @staticmethod
-    def _event(
-        build_at, etype, uid, prev_conf, new_conf, prev_status, new_status,
-        prev_stmt, new_stmt, reason, knowledge_ids,
-    ) -> UnderstandingEvolutionRow:
-        return UnderstandingEvolutionRow(
-            id=f"{build_at}:{etype}:{uid}",
-            build_at=build_at,
-            event_type=etype,
-            understanding_id=uid,
-            previous_confidence=prev_conf,
-            new_confidence=new_conf,
-            previous_status=prev_status,
-            new_status=new_status,
-            previous_statement=prev_stmt,
-            new_statement=new_stmt,
-            reason=reason,
-            knowledge_ids=knowledge_ids,
-            timestamp=build_at,
-        )
+                insert_layer_history(
+                    self.conn, "understanding", uid, "Superseded",
+                    previous_state=prev_h.status,
+                    new_state=u.status.value,
+                    reason="Statement refined by newer knowledge; prior wording retained.",
+                    metadata=meta,
+                )
+        return len(to_persist)
 
     @staticmethod
     def _conf_order(c: UnderstandingConfidence) -> int:

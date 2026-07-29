@@ -56,14 +56,27 @@ from .cli_suggest import cmd_suggest
 from .cli_repair import cmd_repair
 from .cli_integration import cmd_integrate
 from .cli_daemon import cmd_daemon
+from .cli_dashboard import cmd_dashboard
 from .cli_patterns import cmd_patterns
 from .cli_actions import cmd_actions
 from .cli_skills import cmd_skills
 from .cli_autonomy import cmd_autonomy
+from .cli_status import cmd_status, cmd_focus
+from .cli_protocol import cmd_protocol
+from .cli_wait import cmd_wait
+from .cli_agent import cmd_agent
+from .cli_presentation import cmd_hud, cmd_viz, cmd_web, cmd_report
+from .autonomous_planner import (
+    get_pending_plans,
+    get_plan_history,
+    ActionPlan,
+    dispatch_plan,
+)
 from .cli_email import cmd_email
 from .cli_slack import cmd_slack
 from .cli_discord import cmd_discord
 from .cli_telegram import cmd_telegram
+from .cli_calendar import cmd_calendar
 from .cli_nl import cmd_do
 from .project_session import (
     ProjectSession,
@@ -1044,6 +1057,714 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_feed(args: argparse.Namespace) -> int:
+    """Show the ambient event feed — what Friday has noticed.
+
+    Displays recent events from the ambient feed in reverse chronological order.
+    Events are color-coded by priority and category.
+    """
+    from .presentation.cli_format import header, green, yellow, red, gray, blue, cyan
+
+    conn = connect()
+    try:
+        from .ambient import get_feed, get_unread_count, dismiss_event, dismiss_all, summarize_recent
+
+        if args.action == "dismiss-all":
+            n = dismiss_all(conn)
+            print(f"Dismissed {n} event(s).")
+            return 0
+
+        if args.action == "dismiss":
+            dismiss_event(conn, args.id)
+            print(f"Dismissed event #{args.id}.")
+            return 0
+
+        if args.action == "prune":
+            from .ambient import prune_feed
+            n = prune_feed(conn)
+            print(f"Pruned {n} old event(s) from the feed.")
+            return 0
+
+        if args.action == "summary":
+            summary = summarize_recent(conn, hours=args.hours)
+            print(header("Feed Summary", f"{summary['total_events']} events, {summary['unread']} unread"))
+            print()
+            print(f"  Recent events:   {summary['total_events']}")
+            print(f"  High priority:   {summary['high_priority']}")
+            print(f"  Unread:          {summary['unread']}")
+            print()
+            for cat, cnt in sorted(summary['by_category'].items()):
+                print(f"    {cat}: {cnt}")
+            if summary['latest_event']:
+                print()
+                print(gray(f"  Latest: {summary['latest_event']['title']}"))
+            return 0
+
+        # Default: show feed
+        include_dismissed = args.all
+        events = get_feed(
+            conn,
+            limit=args.limit,
+            category=args.category,
+            min_priority=args.min_priority,
+            include_dismissed=include_dismissed,
+        )
+        unread = get_unread_count(conn)
+
+        count_str = f"{len(events)} events"
+        if unread:
+            count_str += f", {unread} unread"
+        if args.category:
+            count_str += f", category={args.category}"
+        if args.min_priority:
+            count_str += f", min-priority={args.min_priority}"
+
+        print(header("Ambient Feed", count_str))
+        print()
+
+        if not events:
+            print(gray("  No events yet. Run `friday daemon start` to begin observing."))
+            print(gray("  Events appear after each daemon cycle completes."))
+            return 0
+
+        for ev in events:
+            # Color by priority
+            pri_mark = "  "
+            if ev.priority >= 3:
+                pri_mark = red("●")
+            elif ev.priority == 2:
+                pri_mark = yellow("●")
+            elif ev.priority == 1:
+                pri_mark = blue("●")
+            else:
+                pri_mark = gray("○")
+
+            # Category badge
+            cat_colors = {
+                "workspace": green,
+                "intelligence": blue,
+                "quality": yellow,
+                "execution": cyan,
+                "system": gray,
+            }
+            cat_fn = cat_colors.get(ev.category, gray)
+            badge = cat_fn(f"[{ev.category[:5]}]")
+
+            # Timestamp (just time portion)
+            time_str = ev.timestamp[11:19] if len(ev.timestamp) >= 19 else ev.timestamp
+
+            # Dismissed marker
+            dismissed = gray(" [dismissed]") if ev.dismissed else ""
+
+            print(f"  {pri_mark} {badge} {gray(time_str)} {ev.title}{dismissed}")
+            if args.detail and ev.detail:
+                print(f"        {ev.detail[:120]}")
+            if ev.actionable:
+                print(f"        {green('→')} {gray(ev.action_command)}")
+
+        print()
+        if unread:
+            print(gray(f"  {unread} unread event(s). Use `friday feed --all` to see dismissed."))
+        print(gray(f"  Commands: friday feed summary, friday feed dismiss-all"))
+
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_learn(args: argparse.Namespace) -> int:
+    """Run conversation learning — extract operator identity and preferences
+    from unprocessed conversation_log entries using the LLM.
+
+    ``friday learn``               Process unprocessed entries
+    ``friday learn --dry-run``      Show what would be extracted without saving
+    ``friday learn --force``        Re-process already-processed entries too
+    """
+    from .presentation.cli_format import header, green, gray, yellow
+
+    dry_run = getattr(args, "dry_run", False)
+    force = getattr(args, "force", False)
+
+    conn = connect()
+    try:
+        if force:
+            # Reset processed flag for all entries so they get re-scanned.
+            conn.execute("UPDATE conversation_log SET processed = 0")
+            conn.commit()
+
+        from .conversation_learner import process_conversations
+
+        label = "dry-run" if dry_run else "learn"
+        print(header("Conversation Learning", label))
+        print()
+
+        result = process_conversations(conn, dry_run=dry_run)
+
+        scanned = result.get("scanned", 0)
+        processed = result.get("processed", 0)
+        extracted = result.get("extracted", {})
+        persisted = result.get("persisted", [])
+
+        if scanned == 0:
+            print(gray("  No unprocessed conversation entries found."))
+            print(gray("  Exchanges are logged when you chat via Telegram, Slack,"))
+            print(gray("  Discord, or the CLI."))
+            return 0
+
+        print(f"  Scanned:    {scanned} exchange(s)")
+        print(f"  Processed:  {processed} exchange(s)")
+
+        if extracted:
+            print()
+            print(green("  Extracted:"))
+            for key, value in extracted.items():
+                label_key = key.lstrip("_")
+                print(f"    {label_key}: {value}")
+
+        if persisted:
+            print()
+            print(green(f"  Persisted: {', '.join(persisted)}"))
+
+        if not extracted:
+            print()
+            print(yellow("  No operator information could be extracted."))
+            print(yellow("  This is normal if the conversations don't contain"))
+            print(yellow("  identity or preference statements."))
+
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_notif(args: argparse.Namespace) -> int:
+    """Manage notification actions — next, list, clear.
+
+    ``friday notif next``    Execute the last actionable notification's command
+    """
+    from .presentation.cli_format import header, green, gray
+
+    action = getattr(args, "action", "status")
+
+    if action == "next":
+        from .notification import run_pending_action
+        result = run_pending_action()
+        print(result)
+        return 0
+
+    if action == "clear":
+        from .notification import _clear_all_actions
+        _clear_all_actions()
+        print("✅ Pending notification actions cleared.")
+        return 0
+
+    print(f"Unknown notif action: {action}")
+    print(gray("  Usage: friday notif next, friday notif clear"))
+    return 1
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    """Show the conversation history — what Friday and the operator have said.
+
+    ``friday history``                  Show last 20 exchanges
+    ``friday history --channel telegram`` Only Telegram exchanges
+    ``friday history --limit 100``       Show last 100 exchanges
+    ``friday history --unprocessed``      Show only unprocessed exchanges
+    """
+    from .presentation.cli_format import header, green, gray, yellow, blue, cyan
+
+    conn = connect()
+    try:
+        from .db import get_conversation_history
+
+        limit = getattr(args, "limit", 20)
+        channel = getattr(args, "channel", None)
+        unprocessed = getattr(args, "unprocessed", False)
+
+        events = get_conversation_history(
+            conn,
+            limit=limit,
+            channel=channel,
+            unprocessed_only=unprocessed,
+        )
+
+        count_str = f"{len(events)} exchanges"
+        if channel:
+            count_str += f", channel={channel}"
+        if unprocessed:
+            count_str += " (unprocessed only)"
+
+        print(header("Conversation History", count_str))
+        print()
+
+        if not events:
+            print(gray("  No conversations yet."))
+            print(gray("  Use `friday ask 'hello'` or chat on Telegram/Slack/Discord."))
+            return 0
+
+        for ev in events:
+            # Channel badge
+            channel_colors = {
+                "telegram": blue,
+                "slack": green,
+                "discord": cyan,
+                "cli": gray,
+            }
+            ch_fn = channel_colors.get(ev.channel, gray)
+            badge = ch_fn(f"[{ev.channel[:8]}]")
+
+            # Timestamp (just time portion)
+            time_str = ev.conversation_at[11:19] if len(ev.conversation_at) >= 19 else ev.conversation_at
+
+            # Routing badge
+            route_badge = ""
+            if ev.routing:
+                route_badge = gray(f" {ev.routing}")
+
+            # Processed marker
+            processed = "" if ev.processed else yellow(" [new]")
+
+            print(f"  {badge} {gray(time_str)}{route_badge}{processed}")
+            print(f"    You:     {ev.user_message[:120]}")
+            print(f"    Friday:  {ev.friday_reply[:120]}")
+            print()
+
+        print(gray(f"  Total: {len(events)} exchange(s)"))
+
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_reason(args: argparse.Namespace) -> int:
+    """Run the ensemble reasoner directly — fire 2-3 models in parallel for
+    calibrated confidence on any question.
+
+    ``friday reason "which project is most mature?"``
+    ``friday reason "what should I work on next?" --verbose``
+    """
+    from .presentation.cli_format import header, green, yellow, red, gray, blue
+    from .reasoning import EnsembleReasoner
+
+    question = args.question
+    verbose = getattr(args, "verbose", False)
+
+    # Build a system prompt for the ensemble.
+    # The ensemble fires 2-3 models in parallel and measures their agreement.
+    system = (
+        "You are Friday, an AI operating partner. Answer the question concisely "
+        "and directly. Base your answer on general knowledge — no workspace "
+        "evidence is provided. Be specific and actionable."
+    )
+
+    print(header("Ensemble Reasoner", f"\"{question[:60]}...\"" if len(question) > 60 else f"\"{question}\""))
+    print()
+    print(gray("  Consulting 2-3 models in parallel..."))
+    print()
+
+    er = EnsembleReasoner(timeout_per_model=30)
+    result = er.reason(system, question)
+
+    if not result.text:
+        print(red("  No model responded. Check your API keys and model configuration."))
+        print(gray("  Set GROQ_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY to enable models."))
+        return 1
+
+    # Print the answer.
+    print(result.text)
+    print()
+
+    # Confidence badge.
+    conf_pct = f"{result.confidence:.0%}"
+    if result.agreement == "high":
+        badge = green(f"● {conf_pct} confidence (high agreement)")
+    elif result.agreement == "medium":
+        badge = yellow(f"● {conf_pct} confidence (medium agreement)")
+    else:
+        badge = red(f"● {conf_pct} confidence (low agreement — models disagree)")
+
+    label = er.confidence_label(result.confidence)
+    print(f"  {badge}")
+    print(f"  {gray(label)}")
+    print()
+
+    if verbose and result.response_count > 0:
+        print(header("Details", f"{result.response_count} model(s) responded"))
+        print(gray(f"  Agreement score: {result.agreement_score:.0%}"))
+        print(gray(f"  Primary model: {result.primary_model}"))
+        print()
+        for name, text in result.all_responses.items():
+            m = "◀ PRIMARY" if name == result.primary_model else ""
+            print(header(name, m))
+            print(text[:300])
+            print()
+
+    return 0
+
+
+def cmd_act(args: argparse.Namespace) -> int:
+    """Inspect and manage autonomous action plans.
+
+    ``friday act``                     List pending plans
+    ``friday act history``              Show completed/rejected plan history
+    ``friday act approve <plan_id>``    Approve and execute a pending plan
+    ``friday act reject <plan_id>``     Reject a pending plan
+    ``friday act run``                  Execute all auto-approvable pending plans
+    """
+    from .presentation.cli_format import header, green, yellow, red, gray, blue
+
+    action = getattr(args, "action", "list")
+    conn = connect()
+    try:
+        if action == "history":
+            plans = get_plan_history(conn, limit=30)
+            if not plans:
+                print(header("Autonomous Actions", "history empty"))
+                print(gray("  No autonomous action history yet."))
+                print(gray("  Plans are created automatically after each daemon cycle."))
+                return 0
+            print(header("Autonomous Action History", f"{len(plans)} total"))
+            print()
+            for p in plans:
+                status_color = {
+                    "pending": yellow,
+                    "approved": blue,
+                    "rejected": red,
+                    "succeeded": green,
+                    "failed": red,
+                }.get(p.status, gray)
+                status_mark = {
+                    "pending": "○",
+                    "approved": "◷",
+                    "rejected": "✗",
+                    "succeeded": "✓",
+                    "failed": "✗",
+                }.get(p.status, "?")
+                print(f"  {status_color(status_mark)} {gray(p.created_at[:16])} "
+                      f"{status_color(p.status.upper()):>10s} "
+                      f"[{p.source}] {p.source_summary[:60]}")
+            return 0
+
+        if action == "approve":
+            plan_id = getattr(args, "plan_id", "")
+            if not plan_id:
+                print("Specify a plan ID: friday act approve <plan_id>")
+                return 1
+            plans = get_pending_plans(conn)
+            plan = next((p for p in plans if p.plan_id == plan_id), None)
+            if not plan:
+                print(f"No pending plan with ID '{plan_id}'.")
+                return 1
+            from .db import now_iso
+            conn.execute(
+                "UPDATE autonomous_actions SET status='approved', updated_at=? WHERE plan_id=?",
+                (now_iso(), plan_id))
+            conn.commit()
+            print(green(f"Approved plan {plan_id[:16]}... Executing..."))
+            result = dispatch_plan(plan, conn)
+            if result:
+                if result.get("success"):
+                    print(green(f"  ✓ Succeeded ({result.get('duration_ms', 0)}ms)"))
+                else:
+                    print(red(f"  ✗ Failed: {result.get('error', 'unknown')}"))
+            return 0
+
+        if action == "reject":
+            plan_id = getattr(args, "plan_id", "")
+            if not plan_id:
+                print("Specify a plan ID: friday act reject <plan_id>")
+                return 1
+            from .db import now_iso
+            conn.execute(
+                "UPDATE autonomous_actions SET status='rejected', updated_at=? WHERE plan_id=?",
+                (now_iso(), plan_id))
+            conn.commit()
+            print(yellow(f"Rejected plan {plan_id[:16]}."))
+            return 0
+
+        if action == "run":
+            plans = get_pending_plans(conn)
+            auto_plans = [p for p in plans if not p.requires_confirm]
+            if not auto_plans:
+                print(gray("No auto-approvable pending plans."))
+                print(gray("Use `friday act` to see all pending plans."))
+                return 0
+            print(header("Autonomous Dispatch", f"{len(auto_plans)} plan(s)"))
+            for plan in auto_plans:
+                print(f"  {gray(plan.plan_id[:12])} [{plan.source}] {plan.source_summary[:60]}")
+                conn.execute(
+                    "UPDATE autonomous_actions SET status='approved', updated_at=? WHERE plan_id=?",
+                    (now_iso(), plan.plan_id))
+                conn.commit()
+                result = dispatch_plan(plan, conn)
+                if result:
+                    if result.get("success"):
+                        print(f"    {green('✓')} Succeeded ({result.get('duration_ms', 0)}ms)")
+                    else:
+                        print(f"    {red('✗')} Failed: {result.get('error', 'unknown')}")
+            return 0
+
+        # Default: list pending plans
+        source = getattr(args, "source", None)
+        plans = get_pending_plans(conn, source=source)
+        if not plans:
+            print(header("Autonomous Actions", "none pending"))
+            print(gray("  No pending autonomous actions."))
+            print(gray("  Plans are created automatically after each daemon full cycle."))
+            print(gray("  Run `friday daemon status` to check cycle status."))
+            return 0
+
+        # Group by source for readability.
+        by_source: dict[str, list[ActionPlan]] = {}
+        for p in plans:
+            by_source.setdefault(p.source, []).append(p)
+
+        total_count = len(plans)
+        auto_count = sum(1 for p in plans if not p.requires_confirm)
+        confirm_count = sum(1 for p in plans if p.requires_confirm)
+        print(header("Autonomous Actions",
+                      f"{total_count} pending ({auto_count} auto, {confirm_count} need confirm)"))
+        print()
+        for source_name, src_plans in by_source.items():
+            print(f"  [{blue(source_name.upper())}]")
+            for p in src_plans:
+                auto_tag = gray(" [auto]") if not p.requires_confirm else yellow(" [needs confirm]")
+                print(f"    {gray(p.plan_id[:12])} {p.source_summary[:65]}{auto_tag}")
+                print(f"      → {p.action_type} ({p.auto_level}) — {p.motivation[:80]}")
+            print()
+
+        print(gray(f"  Commands:"))
+        print(gray(f"    friday act approve <plan_id>   — Approve and execute"))
+        print(gray(f"    friday act reject <plan_id>    — Reject"))
+        print(gray(f"    friday act run                 — Execute all auto plans"))
+        print(gray(f"    friday act history             — Show history"))
+
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_abort(args: argparse.Namespace) -> int:
+    """Emergency kill switch — stop all execution immediately.
+
+    ``friday abort``              Pull the kill switch (block all executors)
+    ``friday abort --resume``      Release the kill switch
+    ``friday abort --status``      Check whether kill switch is active
+
+    This is the fastest way to stop Friday in an emergency. The kill switch
+    sets a persistent flag checked before EVERY executor dispatch. Already-
+    running processes complete or timeout — no new work starts.
+
+    Equivalent to ``friday autonomy kill`` / ``friday autonomy resume``.
+    """
+    from .autonomy import is_kill_switch_active, set_kill_switch
+    from .presentation.cli_format import red, green, gray, yellow
+
+    conn = connect()
+    try:
+        if args.resume:
+            set_kill_switch(False, conn)
+            print(green("  🟢 Kill switch released. Normal operation resumed."))
+            return 0
+
+        if args.status:
+            active = is_kill_switch_active(conn)
+            if active:
+                print(red("  🛑 KILL SWITCH IS ACTIVE."))
+                print(gray("  All executor dispatch is blocked."))
+                print(gray("  Run: friday abort --resume"))
+            else:
+                print(green("  ✅ Kill switch is NOT active."))
+                print(gray("  Normal operation."))
+            return 0
+
+        # Default: activate kill switch.
+        set_kill_switch(True, conn)
+        print(red("  🛑 EMERGENCY KILL SWITCH ACTIVATED."))
+        print(gray("  All executor dispatch is blocked."))
+        print(gray("  Already-running processes will complete or time out."))
+        print()
+        print(gray("  To release:  friday abort --resume"))
+        print(gray("  To check:    friday abort --status"))
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_working_context(args: argparse.Namespace) -> int:
+    """Show Friday's working memory — what I'm doing right now.
+
+    ``friday context-wm``               Show all current context
+    ``friday context-wm clear``          Clear all working memory
+    ``friday context-wm count``           Count active entries
+    ``friday context-wm category status`` Show only status entries
+    ``friday context-wm source system``   Show only system-originated entries
+    """
+    from .presentation.cli_format import header, green, yellow, red, gray, blue, cyan
+    from .memory import WorkingMemory
+
+    action = getattr(args, "action", "show")
+    filter_val = getattr(args, "filter", None)
+
+    conn = connect()
+    try:
+        wm = WorkingMemory(conn)
+
+        if action == "clear":
+            n = wm.clear_all()
+            print(green(f"Cleared {n} working memory entries."))
+            return 0
+
+        if action == "count":
+            n = wm.count()
+            print(header("Working Memory", f"{n} active entries"))
+            print()
+            print(f"  Active (non-expired) entries: {n}")
+            print(f"  Max entries before eviction: {wm.MAX_ENTRIES}")
+            try:
+                total_row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM working_memory").fetchone()
+                total = total_row["cnt"] if total_row else 0
+                if total > n:
+                    print(f"  Total (including expired):     {total} (will be cleared next cycle)")
+            except Exception:
+                pass
+            return 0
+
+        if action == "category":
+            if not filter_val:
+                print("Specify a category: friday context-wm category <name>")
+                return 1
+            entries = wm.get_contexts_by_category(filter_val, limit=20)
+            print(header("Working Memory", f"category={filter_val}, {len(entries)} entry/ies"))
+            print()
+            if not entries:
+                print(gray(f"  No entries with category '{filter_val}'."))
+                return 0
+            for e in entries:
+                pri_label = {0: "low", 1: "normal", 2: "medium",
+                             3: "high", 4: "critical", 5: "blocking"}.get(
+                    e["priority"], str(e["priority"]))
+                expires = e["expires_at"][:19] if e["expires_at"] else "?"
+                print(f"  {green(e['context_key']):25s} {e['value'][:60]}")
+                print(f"  {'':25s} {gray(f'priority={pri_label}, expires={expires}')}")
+                print()
+            return 0
+
+        if action == "source":
+            if not filter_val:
+                print("Specify a source: friday context-wm source <name>")
+                return 1
+            entries = wm.get_contexts_by_source(filter_val, limit=20)
+            print(header("Working Memory", f"source={filter_val}, {len(entries)} entry/ies"))
+            print()
+            if not entries:
+                print(gray(f"  No entries from source '{filter_val}'."))
+                return 0
+            for e in entries:
+                cat_tag = cyan(f"[{e['category']}]")
+                print(f"  {cat_tag} {green(e['context_key']):25s} {e['value'][:60]}")
+                print()
+            return 0
+
+        # Default: show all context
+        ctx = wm.get_current_context(limit=20)
+        count = wm.count()
+        print(header("Working Memory", f"{count} active entry/ies"))
+        print()
+        if not ctx:
+            print(gray("  No active working memory entries."))
+            print(gray("  Working memory tracks what Friday is doing right now —"))
+            print(gray("  daemon status, active plans, current task state."))
+            print(gray("  Entries appear after the daemon runs its first cycle."))
+            return 0
+        print(ctx)
+        print()
+        print(gray(f"  Max entries: {wm.MAX_ENTRIES} | "))
+        print(gray(f"  Auto-eviction: lowest priority entries removed when over limit"))
+        print(gray(f"  Expiry: entries auto-delete after their TTL"))
+        print()
+        print(gray("  Filter commands:"))
+        print(gray("    friday context-wm category <name>"))
+        print(gray("    friday context-wm source <name>"))
+
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_talk(args: argparse.Namespace) -> int:
+    """Universal natural language entry point — just talk to Friday.
+
+    Routes any text through IdentityEngine which handles questions,
+    commands, chitchat, learning, and everything else. This is the same
+    unified interface Telegram, Slack, and Discord use.
+
+    Usage:
+        friday talk "what's my name bud?"
+        friday talk "deploy the fix"
+        friday talk "hello"
+        friday talk "remember my father's name is Raj"
+        friday talk "what's happening in my projects?"
+
+    Or just:
+        friday "what's my name bud?"
+        friday "deploy the fix"
+    (Unknown commands auto-route here.)
+    """
+    text = " ".join(getattr(args, "text", getattr(args, "question", "")))
+    text = text.strip()
+
+    if not text:
+        print("  Friday — Talk to me\n")
+        print("  Just tell me what you want in plain English:")
+        print()
+        print("    friday talk 'what's my name bud?'")
+        print("    friday talk 'deploy the fix'")
+        print("    friday talk 'what's happening?'")
+        print("    friday talk 'remember my father's name is Raj'")
+        print()
+        print("  Or use the short form (unknown commands auto-route):")
+        print()
+        print("    friday 'what's my name bud?'")
+        print("    friday 'show me my projects'")
+        print()
+        return 0
+
+    # ── "On it" pattern ─────────────────────────────────────────────
+    # Print instant acknowledgment, then overwrite with the real response.
+    # Uses carriage-return to overwrite the same line.
+    import sys as _sys
+    _sys.stdout.write("  On it...")
+    _sys.stdout.flush()
+
+    try:
+        from .persona import IdentityEngine
+        from .db import connect
+
+        conn = connect()
+        engine = IdentityEngine(conn=conn)
+        reply = engine.process(text, channel_id="cli")
+        conn.close()
+
+        # Clear the "On it..." line and print the real response.
+        _sys.stdout.write("\r" + " " * 20 + "\r")
+        _sys.stdout.flush()
+
+        if reply:
+            print(reply)
+            return 0
+
+        # IdentityEngine returned nothing — try the ask pipeline directly.
+        ns = argparse.Namespace(question=text, verbose=False)
+        return cmd_ask(ns)
+
+    except Exception as exc:
+        _sys.stdout.write("\r" + " " * 20 + "\r")
+        _sys.stdout.flush()
+        print(f"Sorry, I hit an error: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     _load_dotenv()
     parser = argparse.ArgumentParser(
@@ -1219,9 +1940,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_profile.add_argument(
         "action", nargs="?", default="show",
-        choices=["show", "set", "unset", "history", "derive", "stats"],
+        choices=["show", "set", "unset", "history", "derive", "stats",
+                 "depth", "relationship", "sentiment"],
         help="'show' (default), 'set <key> <value>', 'unset <key>', 'history', "
-             "'derive' (force re-derive), or 'stats'.",
+             "'derive' (force re-derive), 'stats', 'depth' (relationship depth), "
+             "'relationship' (relationship graph), or 'sentiment' (sentiment trends).",
     )
     p_profile.add_argument(
         "key", nargs="?", default=None,
@@ -1370,7 +2093,13 @@ def main(argv: list[str] | None = None) -> int:
     p_execute = sub.add_parser(
         "execute", help="Plan, resolve, schedule, and run a goal end-to-end.")
     p_execute.add_argument(
-        "goal", nargs="+", help="The goal to execute, e.g. 'Improve the README'.")
+        "goal", nargs="*",
+        help="The goal to execute, e.g. 'Improve the README'. "
+             "Omit or use --pending to run all pending compiled graphs.")
+    p_execute.add_argument(
+        "--pending", action="store_true",
+        help="Execute all pending compiled/approved graphs that haven't "
+             "been scheduled yet (same logic as daemon _stage_execution_pipeline).")
     p_execute.add_argument(
         "--workspace", default=".", help="Working directory for execution.")
     p_execute.add_argument(
@@ -1465,6 +2194,77 @@ def main(argv: list[str] | None = None) -> int:
         help="Suppress output when --run-once.")
     p_watch.set_defaults(func=cmd_watch)
 
+    p_agent = sub.add_parser(
+        "agent",
+        help="Agent management: status, history, cancel agent sessions."
+    )
+    p_agent.add_argument(
+        "subcommand", nargs="?", default="status",
+        choices=["status", "history", "cancel"],
+        help="'status' to show current session, 'history' for past runs, 'cancel' to stop."
+    )
+    p_agent.set_defaults(func=cmd_agent)
+
+    # ── Presentation & Interface: hud ──────────────────────────────────
+    p_hud = sub.add_parser(
+        "hud",
+        help="Heads-up display: persistent terminal status bar and popup notifications.")
+    p_hud.add_argument(
+        "action", nargs="?", default="status",
+        choices=["on", "off", "compact", "full", "status"],
+        help="'on'/'full' to enable, 'compact' for minimal, 'off' to disable, or omit for status.")
+    p_hud.set_defaults(func=cmd_hud)
+
+    # ── Presentation & Interface: viz ──────────────────────────────────
+    p_viz = sub.add_parser(
+        "viz",
+        help="Visualizations: architecture, dependency graph, timeline, impact tree.")
+    p_viz.add_argument(
+        "kind", nargs="?", default="arch",
+        choices=["arch", "deps", "timeline", "impact"],
+        help="'arch' for architecture tree, 'deps' for dependencies, 'timeline' for activity, 'impact' for impact analysis.")
+    p_viz.add_argument(
+        "target", nargs="?", default=None,
+        help="Target path (for arch) or symbol (for impact).")
+    p_viz.add_argument(
+        "--format", default="tree", choices=["tree", "mermaid", "image"],
+        help="Output format: tree (ASCII), mermaid (Mermaid.js), image (SVG via graphviz).")
+    p_viz.add_argument(
+        "--output", default=None,
+        help="Save output to file (required for image format).")
+    p_viz.set_defaults(func=cmd_viz)
+
+    # ── Presentation & Interface: web ──────────────────────────────────
+    p_web = sub.add_parser(
+        "web",
+        help="Start the Friday dashboard web server.")
+    p_web.add_argument(
+        "--port", type=int, default=8321,
+        help="Port to listen on (default: 8321).")
+    p_web.add_argument(
+        "--open", dest="open_browser", action="store_true",
+        help="Open browser automatically.")
+    p_web.set_defaults(func=cmd_web)
+
+    # ── Presentation & Interface: report ───────────────────────────────
+    p_report = sub.add_parser(
+        "report",
+        help="Generate rich reports: daily, weekly, impact analysis.")
+    p_report.add_argument(
+        "kind", nargs="?", default="daily",
+        choices=["daily", "weekly", "impact"],
+        help="'daily' for today's report, 'weekly' for weekly summary, 'impact' for impact analysis.")
+    p_report.add_argument(
+        "target", nargs="?", default=None,
+        help="Symbol name (required for impact report).")
+    p_report.add_argument(
+        "--format", default="markdown", choices=["markdown", "html"],
+        help="Output format: markdown or HTML.")
+    p_report.add_argument(
+        "--output", default=None,
+        help="Save report to file.")
+    p_report.set_defaults(func=cmd_report)
+
     p_suggest = sub.add_parser(
         "suggest",
         help="Surface cross-project integration opportunities from existing workspace evidence.")
@@ -1509,9 +2309,72 @@ def main(argv: list[str] | None = None) -> int:
         "--no-notify", action="store_true",
         help="Suppress desktop notifications.")
     p_daemon.add_argument(
-        "--lines", type=int, default=50,
-        help="Number of log lines to show with 'logs' action (default: 50).")
+        "--lines", type=int, default=50,            help="Number of log lines to show with 'logs' action (default: 50).")
     p_daemon.set_defaults(func=cmd_daemon)
+
+    p_notif = sub.add_parser(
+        "notif",
+        help="Manage notification actions — run the last actionable notification.")
+    p_notif.add_argument(
+        "action", nargs="?", default="status",
+        choices=["next", "clear"],
+        help="'next' to execute the last actionable notification's command, "
+             "'clear' to dismiss all pending actions.")
+    p_notif.set_defaults(func=cmd_notif)
+
+    p_learn = sub.add_parser(
+        "learn",
+        help="Extract operator identity and preferences from conversation history.")
+    p_learn.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would be extracted without persisting.")
+    p_learn.add_argument(
+        "--force", action="store_true",
+        help="Re-process already-processed entries.")
+    p_learn.set_defaults(func=cmd_learn)
+
+    p_history = sub.add_parser(
+        "history",
+        help="Show the conversation history — exchanges across all channels.")
+    p_history.add_argument(
+        "--limit", type=int, default=20,
+        help="Number of recent exchanges to show (default: 20).")
+    p_history.add_argument(
+        "--channel", default=None,
+        choices=["cli", "telegram", "slack", "discord"],
+        help="Filter by channel.")
+    p_history.add_argument(
+        "--unprocessed", action="store_true",
+        help="Show only exchanges not yet processed by LLM extraction.")
+    p_history.set_defaults(func=cmd_history)
+
+    p_dashboard = sub.add_parser(
+        "dashboard",
+        help="Unified command center — tabbed dashboard + inline command bar.")
+    p_dashboard.add_argument(
+        "--refresh", type=float, default=3.0,
+        help="Seconds between auto-refresh (default: 3.0).")
+    p_dashboard.add_argument(
+        "--legacy", action="store_true",
+        help="Launch the original ambient feed dashboard instead.")
+    p_dashboard.set_defaults(func=cmd_dashboard)
+
+    # ── Presence & Attention: status + focus ────────────────────────
+    p_status = sub.add_parser(
+        "status",
+        help="Show current presence state and attention level — at desk, in meeting, deep focus, etc.")
+    p_status.set_defaults(func=cmd_status)
+
+    p_focus = sub.add_parser(
+        "focus",
+        help="Manage focus mode — auto DND for deep work. Use 'on <minutes>' or 'off'.")
+    p_focus.add_argument(
+        "action", nargs="?", default=None,
+        help="'on' to enable (optionally with --minutes), 'off' to disable, or omit to check status.")
+    p_focus.add_argument(
+        "-m", "--minutes", type=int, default=90,
+        help="Duration of focus mode in minutes (default: 90).")
+    p_focus.set_defaults(func=cmd_focus)
 
     p_patterns = sub.add_parser(
         "patterns",
@@ -1562,6 +2425,67 @@ def main(argv: list[str] | None = None) -> int:
              "Default: abort (auto-downgrades to skip after 3+ failures).")
     p_skills.set_defaults(func=cmd_skills)
 
+    # Named protocols — user-defined multi-step macro procedures.
+    from .cli_protocol import add_subparser as add_protocol_subparser
+    add_protocol_subparser(sub)
+
+    # Change impact analysis — what breaks if I modify this file?
+    from .cli_impact import add_subparser as add_impact_subparser
+    add_impact_subparser(sub)
+
+    # Semantic code search — search codebase by meaning.
+    from .cli_search import add_subparser as add_search_subparser
+    add_search_subparser(sub)
+
+    # Live Telemetry — real-time system metrics + processes + build.
+    from .cli_telemetry import add_subparser as add_telemetry_subparser
+    add_telemetry_subparser(sub)
+
+    # Screen/Workspace Awareness — what's on your screen.
+    from .cli_screen import add_subparser as add_screen_subparser
+    add_screen_subparser(sub)
+
+    # Persistent Missions — multi-cycle adaptive goals.
+    from .cli_mission import add_subparser as add_mission_subparser
+    add_mission_subparser(sub)
+
+    # What-If Sandbox — simulate actions without side effects.
+    from .cli_sandbox import add_subparser as add_sandbox_subparser
+    add_sandbox_subparser(sub)
+
+    # Undo / Rollback — undo the last mutating action.
+    from .cli_undo import add_subparser as add_undo_subparser
+    add_undo_subparser(sub)
+
+    # Daily briefing — morning summary of workspace activity.
+    from .cli_briefing import add_subparser as add_briefing_subparser
+    add_briefing_subparser(sub)
+
+    # Daily standup report + yesterday summary.
+    from .cli_standup import add_standup_subparser, add_yesterday_subparser
+    add_standup_subparser(sub)
+    add_yesterday_subparser(sub)
+
+    # Codebase narrative — git archaeology for project evolution.
+    from .cli_narrative import add_subparser as add_narrative_subparser
+    add_narrative_subparser(sub)
+
+    # Persistent watchers — monitor conditions and notify when met.
+    from .cli_wait import add_subparser as add_wait_subparser
+    add_wait_subparser(sub)
+
+    # Guided walkthroughs — step-by-step procedures.
+    from .cli_guide import add_subparser as add_guide_subparser
+    add_guide_subparser(sub)
+
+    # Translation — translate text between languages + detect.
+    from .cli_translate import add_subparser as add_translate_subparser
+    add_translate_subparser(sub)
+
+    # PR review assistant — analyze pull requests.
+    from .cli_pr import add_subparser as add_pr_subparser
+    add_pr_subparser(sub)
+
     p_autonomy = sub.add_parser(
         "autonomy",
         help="Graduated autonomy controls: kill switch, per-action permissions, confidence escalation (Gap #7).")
@@ -1578,6 +2502,43 @@ def main(argv: list[str] | None = None) -> int:
         "level", nargs="?", default=None,
         help="Permission level for 'set': auto, confirm, double.")
     p_autonomy.set_defaults(func=cmd_autonomy)
+
+    # ── `friday abort` — emergency kill switch (discoverable shortcut) ──
+    p_abort = sub.add_parser(
+        "abort",
+        help="🛑 EMERGENCY STOP: pull the kill switch and stop all execution.")
+    p_abort.add_argument(
+        "--resume", "-r", action="store_true",
+        help="Release the kill switch and resume normal operation.")
+    p_abort.add_argument(
+        "--status", "-s", action="store_true",
+        help="Check whether the kill switch is active.")
+    p_abort.set_defaults(func=cmd_abort)
+
+    p_act = sub.add_parser(
+        "act",
+        help="Autonomous actions — inspect, approve, or reject pending plans.")
+    p_act.add_argument(
+        "action", nargs="?", default="list",
+        choices=["list", "history", "approve", "reject", "run"],
+        help="'list' (default), 'history', 'approve <plan_id>', "
+             "'reject <plan_id>', or 'run' (execute auto-approvable plans).")
+    p_act.add_argument(
+        "plan_id", nargs="?", default=None,
+        help="Plan ID for 'approve' or 'reject'.")
+    p_act.set_defaults(func=cmd_act)
+
+    p_ctx_wm = sub.add_parser(
+        "context-wm",
+        help="Show Friday's working memory — what I'm doing right now.")
+    p_ctx_wm.add_argument(
+        "action", nargs="?", default="show",
+        choices=["show", "clear", "count", "category", "source"],
+        help="'show' (default), 'clear', 'count', 'category <name>', 'source <name>'.")
+    p_ctx_wm.add_argument(
+        "filter", nargs="?", default=None,
+        help="Category or source name to filter by.")
+    p_ctx_wm.set_defaults(func=cmd_working_context)
 
     # --- Email communication layer ---
     p_email = sub.add_parser(
@@ -1638,6 +2599,16 @@ def main(argv: list[str] | None = None) -> int:
         "content", nargs="*", default=None,
         help="Message content for 'send' action.")
     p_discord.set_defaults(func=cmd_discord)
+
+    # --- Calendar configuration ---
+    p_calendar = sub.add_parser(
+        "calendar",
+        help="Calendar integration: configure Google Calendar OAuth, check status.")
+    p_calendar.add_argument(
+        "action", nargs="?", default="status",
+        choices=["auth", "status"],
+        help="'auth' for interactive OAuth setup, 'status' to show current provider.")
+    p_calendar.set_defaults(func=cmd_calendar)
 
     # --- Telegram communication layer ---
     p_telegram = sub.add_parser(
@@ -1708,6 +2679,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_do.set_defaults(func=cmd_do)
 
+    p_reason = sub.add_parser(
+        "reason",
+        help="Ensemble-based reasoning — 3 models in parallel, agreement as confidence."
+    )
+    p_reason.add_argument(
+        "question", nargs=argparse.REMAINDER,
+        help="The question to reason about.",
+    )
+    p_reason.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show each model's response and detailed agreement metrics."
+    )
+    p_reason.set_defaults(func=cmd_reason)
+
+    p_talk = sub.add_parser(
+        "talk",
+        help="Talk to Friday freely — questions, commands, chitchat, anything. The universal interface."
+    )
+    p_talk.add_argument(
+        "text", nargs=argparse.REMAINDER,
+        help="Anything you want to say to Friday — in plain English.",
+    )
+    p_talk.set_defaults(func=cmd_talk)
+
     p_doctor = sub.add_parser(
         "doctor", help="Check system health (DB, deps, workers, README, watch)."
     )
@@ -1730,13 +2725,43 @@ def main(argv: list[str] | None = None) -> int:
         help="Scan repos for project docs (PRDs, design docs) without running correlation.")
     p_correlate.set_defaults(func=cmd_correlate)
 
+    p_feed = sub.add_parser(
+        "feed",
+        help="Ambient event feed — what Friday has noticed recently.")
+    p_feed.add_argument(
+        "action", nargs="?", default="list",
+        choices=["list", "summary", "dismiss", "dismiss-all", "prune"],
+        help="'list' (default), 'summary', 'dismiss <id>', 'dismiss-all', or 'prune'.")
+    p_feed.add_argument(
+        "id", nargs="?", type=int, default=None,
+        help="Event ID for 'dismiss' action.")
+    p_feed.add_argument(
+        "--limit", type=int, default=50,
+        help="Max events to show (default: 50).")
+    p_feed.add_argument(
+        "--category", type=str, default=None,
+        help="Filter by category: workspace, intelligence, quality, execution, system.")
+    p_feed.add_argument(
+        "--min-priority", type=int, default=0,
+        help="Minimum priority level: 0=all, 1=noteworthy, 2=important, 3=critical.")
+    p_feed.add_argument(
+        "--all", action="store_true",
+        help="Include dismissed events.")
+    p_feed.add_argument(
+        "--detail", action="store_true",
+        help="Show full detail for each event.")
+    p_feed.add_argument(
+        "--hours", type=int, default=24,
+        help="Hours of history for summary (default: 24).")
+    p_feed.set_defaults(func=cmd_feed)
+
     # If the first argument isn't a known subcommand, route through
     # the NL dispatcher so `friday <anything>` works naturally.
     # ``argv`` may be None (called from the installed script or ``__main__``),
     # so resolve it to ``sys.argv[1:]`` for the fallback check.
     _argv = argv if argv is not None else sys.argv[1:] if len(sys.argv) > 1 else []
     if _argv and _argv[0] not in sub.choices and not _argv[0].startswith("-"):
-        return cmd_do(argparse.Namespace(text=_argv))
+        return cmd_talk(argparse.Namespace(text=_argv))
 
     args = parser.parse_args(argv)
     return args.func(args)

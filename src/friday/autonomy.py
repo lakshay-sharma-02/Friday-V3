@@ -13,8 +13,14 @@ Three mechanisms control Friday's autonomous execution:
 3. **Confidence-based auto-downgrade** — After ``AUTO_DOWNGRADE_THRESHOLD``
    consecutive failures for an action type, the system auto-downgrades its
    permission from the user-set or default level to one level more restrictive
-   (AUTO → CONFIRM, CONFIRM → DOUBLE_CONFIRM). Consecutive successes reset
+   (AUTO → NOTIFY → CONFIRM → DOUBLE_CONFIRM). Consecutive successes reset
    the counter and undo the downgrade.
+
+Permission tiers (least to most restrictive):
+  AUTO   — execute silently, no notification
+  NOTIFY — execute immediately, notify operator
+  CONFIRM — prompt for y/n
+  DOUBLE — prompt twice for destructive actions
 
 Precedence (highest to lowest):
   1. Kill switch disabled → block everything (emergency override)
@@ -50,7 +56,13 @@ AUTO_DOWNGRADE_THRESHOLD = 3
 AUTO_UPGRADE_THRESHOLD = 5
 
 # Valid permission levels (mirrors confirm_gate.ActionLevel values).
-VALID_LEVELS = frozenset({"auto", "confirm", "double"})
+VALID_LEVELS = frozenset({"auto", "notify", "confirm", "double"})
+
+# In-memory kill switch cache. Initialized lazily on first read.
+# Once loaded from DB, subsequent reads avoid the SQL query until a write
+# clears the cache. This makes kill-switch checks ~microseconds instead of
+# milliseconds, which matters because ``dispatch()`` checks it on every task.
+_KILL_SWITCH_CACHED: bool | None = None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -85,12 +97,22 @@ class ActionPermission:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Kill switch
+# Kill switch (in-memory + DB hybrid)
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _clear_kill_switch_cache() -> None:
+    """Clear the in-memory kill switch cache.
+
+    Called after every ``set_kill_switch()`` call so the next read re-fetches
+    from the DB. Also callable externally for testing.
+    """
+    global _KILL_SWITCH_CACHED
+    _KILL_SWITCH_CACHED = None
+
+
 def is_kill_switch_active(conn=None) -> bool:
-    """Check the global emergency kill switch.
+    """Check the global emergency kill switch with in-memory caching.
 
     Returns True when the kill switch has been pulled — ALL executors are
     blocked, not just action workers. This is the nuclear option that stops
@@ -100,22 +122,33 @@ def is_kill_switch_active(conn=None) -> bool:
     (Hyprland/Browser), the kill switch blocks the entire Friday execution
     pipeline. Running processes are NOT killed (they may complete or timeout)
     — no new work starts.
+
+    Uses an in-memory cache for fast reads (no DB query on subsequent calls).
+    The cache is cleared whenever ``set_kill_switch()`` is called.
     """
+    global _KILL_SWITCH_CACHED
+
+    # Fast path: return cached value without DB query.
+    if _KILL_SWITCH_CACHED is not None:
+        return _KILL_SWITCH_CACHED
+
+    # Slow path: read from DB, populate cache.
+    close_conn = False
     if conn is None:
         conn = connect()
-        should_close = True
-    else:
-        should_close = False
+        close_conn = True
     try:
         row = conn.execute(
             "SELECT value FROM operator_preferences WHERE key = ?",
             (_KILL_SWITCH_KEY,),
         ).fetchone()
         if row is None:
-            return False  # default: not active
-        return row["value"].strip().lower() == "true"
+            _KILL_SWITCH_CACHED = False  # default: not active
+        else:
+            _KILL_SWITCH_CACHED = row["value"].strip().lower() == "true"
+        return _KILL_SWITCH_CACHED
     finally:
-        if should_close:
+        if close_conn:
             conn.close()
 
 
@@ -125,6 +158,11 @@ def set_kill_switch(active: bool, conn=None) -> None:
     When ``active=True``, ALL executor dispatch is blocked immediately.
     Already-running processes are NOT interrupted (they may complete or
     hit their timeout) — this prevents NEW actions from starting.
+
+    Clears the in-memory cache so the next ``is_kill_switch_active()``
+    call re-reads from the DB. If ``conn`` is provided, the caller owns
+    the connection lifecycle and it is also used for the ambient event
+    push (avoiding orphan events on a different DB connection).
 
     Call with ``active=False`` to resume normal operation.
     """
@@ -141,9 +179,24 @@ def set_kill_switch(active: bool, conn=None) -> None:
             (_KILL_SWITCH_KEY, val, now_iso()),
         )
         conn.commit()
+
+        # Push ambient event on the SAME connection so the event is visible
+        # to callers who passed in a specific db handle (e.g. in-memory tests).
+        try:
+            from .ambient import push_event, kill_switch_event
+            push_event(conn, kill_switch_event(active))
+        except Exception:
+            pass
     finally:
         if should_close:
             conn.close()
+
+    # Populate in-memory cache directly so the next read is instant and
+    # consistent, even when callers like ``dispatch()`` don't have a conn.
+    # This avoids a redundant DB re-read and makes the kill switch visible
+    # to the in-memory cache path immediately.
+    global _KILL_SWITCH_CACHED
+    _KILL_SWITCH_CACHED = active
 
 
 def is_autonomy_enabled(conn=None) -> bool:
@@ -223,9 +276,11 @@ def _all_hardcoded_levels() -> dict[str, str]:
 def _downgrade_one_level(current: str) -> str:
     """Return the next-more-restrictive level.
 
-    auto → confirm → double (double is terminal — can't downgrade further).
+    auto → notify → confirm → double (double is terminal — can't downgrade further).
     """
     if current == "auto":
+        return "notify"
+    if current == "notify":
         return "confirm"
     if current == "confirm":
         return "double"
@@ -235,11 +290,13 @@ def _downgrade_one_level(current: str) -> str:
 def _upgrade_one_level(current: str) -> str:
     """Return the next-less-restrictive level.
 
-    double → confirm → auto (auto is terminal — can't upgrade further).
+    double → confirm → notify → auto (auto is terminal — can't upgrade further).
     """
     if current == "double":
         return "confirm"
     if current == "confirm":
+        return "notify"
+    if current == "notify":
         return "auto"
     return "auto"
 
@@ -517,8 +574,8 @@ def record_action_outcome(
 
 
 def _level_index(level: str) -> int:
-    """Return numeric index for comparison: auto=0, confirm=1, double=2."""
-    return {"auto": 0, "confirm": 1, "double": 2}.get(level, 1)
+    """Return numeric index for comparison: auto=0, notify=1, confirm=2, double=3."""
+    return {"auto": 0, "notify": 1, "confirm": 2, "double": 3}.get(level, 2)
 
 
 # ──────────────────────────────────────────────────────────────────────

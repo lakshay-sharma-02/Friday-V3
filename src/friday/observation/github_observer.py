@@ -1,8 +1,19 @@
-"""GitHubObserver (Milestone 7.5).
+"""GitHubObserver (Milestone 7.5) with rate-limit protection and caching.
 
 A NEW observer for the frozen Observation Engine. It observes engineering
 activity happening on GitHub and emits deterministic engineering observations
 that plug into the existing engine — no engine, context, or brain changes.
+
+Rate-limit & caching:
+  - Disk-backed JSON cache (``.friday/github_cache.json``) stores the last
+    successful fetch across daemon cycles.
+  - ''Cache-first within TTL'': if the cache is less than ``CACHE_TTL_SEC``
+    old, it's returned without hitting the API (default 5 min).
+  - ''Rate-limit awareness'': providers check GitHub's ``X-RateLimit-Remaining``
+    header before fetching. If below ``RATE_LIMIT_FLOOR``, cached data is used.
+  - ''Exponential backoff'': when a 429/403 is received, the backoff duration
+    doubles (capped at ``MAX_BACKOFF_SEC``) and is persisted in the cache file.
+    The backoff resets after ``BACKOFF_RESET_AFTER`` seconds of success.
 
 DESIGN (privacy-first, metadata-only):
 
@@ -46,9 +57,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Protocol
+
+import urllib.error
 
 from .interface import Health, Observer, ObserverHealth
 from .model import Confidence, Observation
@@ -61,6 +75,21 @@ STALE_ISSUE_DAYS = 90       # open issue older than this -> stale_issue
 REPEATED_CI_FAILURES = 2    # failing workflows >= this -> repeated_ci_failures
 HIGH_REVIEW_THRESHOLD = 5   # total reviews >= this -> high_review_activity
 CADENCE_WINDOW_DAYS = 30    # window for release_cadence / merge_frequency
+
+# --- Rate-limit & caching thresholds -----------------------------------------
+
+#: Cache file path (relative to FRIDAY_DIR or ~/.friday).
+CACHE_FILE = "github_cache.json"
+#: Seconds before cached data is considered stale (default 5 min).
+CACHE_TTL_SEC = 300
+#: Minimum remaining API calls before we switch to cache.
+RATE_LIMIT_FLOOR = 10
+#: Initial backoff seconds after a rate-limit hit (doubles with each hit).
+BACKOFF_INITIAL_SEC = 60
+#: Maximum backoff seconds (capped at 30 min).
+MAX_BACKOFF_SEC = 1800
+#: Seconds of successful operation before backoff resets.
+BACKOFF_RESET_AFTER = 900
 
 # Config: repositories to observe (colon-separated "owner/name").
 GITHUB_REPOS_ENV = "FRIDAY_GITHUB_REPOS"
@@ -161,6 +190,116 @@ class GitHubProvider(Protocol):
         ...
 
 
+# ---------------------------------------------------------------------------
+# Persistent disk cache for GitHub API responses
+# ---------------------------------------------------------------------------
+
+
+def _cache_path() -> Path:
+    """Return the path to the GitHub cache file."""
+    base = Path(os.environ.get("FRIDAY_DIR", Path.home() / ".friday"))
+    base.mkdir(parents=True, exist_ok=True)
+    return base / CACHE_FILE
+
+
+def _load_cache() -> dict:
+    """Load the cache from disk. Returns a dict with keys:
+
+    - ``snapshots``: list[dict] — last successful fetch results
+    - ``cached_at``: float — timestamp of the cache
+    - ``remaining``: int — last known remaining rate limit
+    - ``backoff_until``: float — timestamp when backoff ends (0 = no backoff)
+    - ``backoff_sec``: int — current backoff duration
+    """
+    try:
+        data = json.loads(_cache_path().read_text())
+        if isinstance(data, dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"snapshots": [], "cached_at": 0.0, "remaining": 0,
+            "backoff_until": 0.0, "backoff_sec": BACKOFF_INITIAL_SEC}
+
+
+def _save_cache(data: dict) -> None:
+    """Persist the cache to disk."""
+    try:
+        _cache_path().write_text(
+            json.dumps(data, indent=2, default=str))
+    except OSError:
+        pass
+
+
+def _cache_is_fresh(cache: dict) -> bool:
+    """Check if the cached data is within TTL and not rate-limited."""
+    now = _time.time()
+    return (cache.get("cached_at", 0) > 0
+            and now - cache["cached_at"] < CACHE_TTL_SEC)
+
+
+def _is_backing_off(cache: dict) -> bool:
+    """Check if we're currently in a backoff period (after a rate-limit hit)."""
+    return _time.time() < cache.get("backoff_until", 0)
+
+
+def _rate_limit_ok(cache: dict) -> bool:
+    """Check if the remaining rate limit is above the floor.
+
+    Returns True when there's no rate-limit data (we assume it's OK until
+    GitHub tells us otherwise).
+    """
+    remaining = cache.get("remaining", -1)
+    return remaining < 0 or remaining >= RATE_LIMIT_FLOOR
+
+
+def _record_success(cache: dict, snapshots: list[dict]) -> dict:
+    """Update cache with a successful fetch. Resets backoff."""
+    cache["snapshots"] = snapshots
+    cache["cached_at"] = _time.time()
+    # Reset backoff after sustained success.
+    last_backoff = cache.get("backoff_until", 0)
+    if last_backoff > 0 and _time.time() - last_backoff > BACKOFF_RESET_AFTER:
+        cache["backoff_sec"] = BACKOFF_INITIAL_SEC
+        cache["backoff_until"] = 0.0
+    _save_cache(cache)
+    return cache
+
+
+def _record_rate_limit(cache: dict) -> dict:
+    """Update cache with a rate-limit hit. Doubles backoff (capped)."""
+    backoff = cache.get("backoff_sec", BACKOFF_INITIAL_SEC)
+    next_backoff = min(backoff * 2, MAX_BACKOFF_SEC)
+    cache["backoff_sec"] = next_backoff
+    cache["backoff_until"] = _time.time() + next_backoff
+    _save_cache(cache)
+    return cache
+
+
+def _update_remaining(cache: dict, remaining: int) -> None:
+    """Update the known remaining rate limit and persist to disk."""
+    cache["remaining"] = remaining
+    _save_cache(cache)
+
+
+def _try_cache_first(cache: dict) -> Optional[list[dict]]:
+    """Return cached snapshots if the cache is fresh AND rate limit is OK.
+
+    Returns ``None`` when we should proceed with a live fetch.
+    """
+    # Backing off after a rate-limit? Use cache (even if stale).
+    if _is_backing_off(cache):
+        return cache.get("snapshots", []) or None
+    # Cache is fresh AND rate limit is sufficient? Use cache.
+    if _cache_is_fresh(cache) and _rate_limit_ok(cache):
+        return cache.get("snapshots", []) or None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
 def _configured_repos() -> list[str]:
     raw = os.environ.get(GITHUB_REPOS_ENV, "").strip()
     if not raw:
@@ -196,12 +335,29 @@ class GhCliProvider:
         self.repos = repos
 
     def fetch(self) -> list[dict]:
+        cache = _load_cache()
+
+        # Backing off after a rate-limit? Return cached data.
+        if _is_backing_off(cache):
+            return cache.get("snapshots", []) or []
+
+        # Cache is fresh AND rate limit is sufficient? Use cache.
+        cached = _try_cache_first(cache)
+        if cached is not None:
+            return cached
+
         out: list[dict] = []
         for slug in self.repos:
             raw = _gh_api(f"repos/{slug}")
-            if not raw:
+            if raw is None:
+                # _gh_api returns None on any error (timeout, non-zero exit,
+                # invalid JSON). This includes rate-limit responses from gh CLI
+                # (which exits non-zero). Treat as a transient failure.
                 continue
             out.append(_assemble_from_raw(slug, raw))
+
+        if out:
+            _record_success(cache, out)
         return out
 
     def describe(self) -> str:
@@ -218,7 +374,19 @@ class ApiTokenProvider:
     def fetch(self) -> list[dict]:
         import urllib.request
 
+        cache = _load_cache()
+
+        # Backing off after a rate-limit? Return cached data immediately.
+        if _is_backing_off(cache):
+            return cache.get("snapshots", []) or []
+
+        # Cache is fresh AND rate limit is sufficient? Use cache.
+        cached = _try_cache_first(cache)
+        if cached is not None:
+            return cached
+
         out: list[dict] = []
+        last_remaining: Optional[int] = None
         for slug in self.repos:
             req = urllib.request.Request(
                 f"https://api.github.com/repos/{slug}",
@@ -227,10 +395,24 @@ class ApiTokenProvider:
                          "X-GitHub-Api-Version": "2022-11-28"})
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
+                    # Extract rate-limit headers.
+                    remaining = resp.headers.get("X-RateLimit-Remaining")
+                    if remaining is not None:
+                        last_remaining = int(remaining)
                     raw = json.loads(resp.read().decode("utf-8", "ignore"))
+            except urllib.error.HTTPError as exc:
+                code = getattr(exc, "code", 0)
+                if code in (403, 429):
+                    _record_rate_limit(cache)
+                    return cache.get("snapshots", []) or []
+                continue
             except (OSError, ValueError, TypeError):
                 continue
             out.append(_assemble_from_raw(slug, raw))
+
+        if last_remaining is not None:
+            _update_remaining(cache, last_remaining)
+        _record_success(cache, out)
         return out
 
     def describe(self) -> str:
@@ -305,17 +487,36 @@ def _load_snapshot_file(path: Path) -> list[dict]:
 
 
 def default_provider(repos: Optional[list[str]] = None) -> GitHubProvider:
-    """Choose a provider: fixture snapshot > gh CLI > token > empty."""
+    """Choose a provider: fixture snapshot > gh CLI > token > empty.
+
+    Uses ``gh auth status`` (lightweight, no API call) to detect CLI
+    availability instead of hitting ``/rate_limit`` which consumes an API
+    call on every daemon cycle.
+    """
     snap = os.environ.get(GITHUB_SNAPSHOT_ENV)
     if snap:
         return FixtureProvider(Path(snap).expanduser())
     repos = repos if repos is not None else _configured_repos()
-    if _gh_api("rate_limit") is not None:
+    # Use `gh auth status` instead of `gh api rate_limit` to avoid
+    # consuming an API call just for provider detection.
+    if _gh_available():
         return GhCliProvider(repos)
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         return ApiTokenProvider(token, repos)
     return FixtureProvider([])  # healthy: nothing configured to observe
+
+
+def _gh_available() -> bool:
+    """Check if the `gh` CLI is authenticated without hitting the API."""
+    try:
+        res = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return res.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -434,10 +635,24 @@ class GitHubObserver(Observer):
     # --- internals ----------------------------------------------------------
 
     def _safe_fetch(self) -> list[dict]:
+        """Fetch from the provider, with disk-backed caching fallback.
+
+        If the provider raises or returns empty, falls back to the last
+        successful cache. This ensures the daemon never emits zero
+        observations just because GitHub was momentarily unreachable.
+        """
         try:
-            return self.provider.fetch()
+            result = self.provider.fetch()
+            if result:
+                return result
         except Exception:
-            return []
+            pass
+        # Fallback: return cached data if available.
+        cache = _load_cache()
+        cached = cache.get("snapshots", [])
+        if cached:
+            return cached
+        return []
 
     def _obs(self, snap, aspect, value, conf, cause=None,
              subject=None) -> Observation:

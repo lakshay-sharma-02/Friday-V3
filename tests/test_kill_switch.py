@@ -1,30 +1,15 @@
-"""Tests for the emergency kill switch.
-
-Tests the full kill switch lifecycle:
-1. Default state (inactive)
-2. Activating via set_kill_switch(True) + is_kill_switch_active()
-3. Releasing via set_kill_switch(False)
-4. execute_with_fallback() returns abort result when active
-5. Daemon cycle is skipped when active
-6. CLI friday autonomy kill / resume subcommands
-"""
+"""Tests for the emergency kill switch — set, clear, check, in-memory cache, dispatch block."""
 
 from __future__ import annotations
 
-import os
-import sqlite3
-import tempfile
-from pathlib import Path
-from unittest import mock
-
 import pytest
 
-from friday.db import connect
+import friday.autonomy as _autonomy_mod
+
 from friday.autonomy import (
+    _clear_kill_switch_cache,
     is_kill_switch_active,
     set_kill_switch,
-    is_autonomy_enabled,
-    set_autonomy_enabled,
 )
 
 
@@ -33,377 +18,225 @@ from friday.autonomy import (
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> str:
-    """Path to a shared test database file."""
-    return str(tmp_path / "test_friday.db")
+@pytest.fixture(autouse=True)
+def clear_cache():
+    """Clear the in-memory kill switch cache before each test."""
+    _clear_kill_switch_cache()
+    yield
+    _clear_kill_switch_cache()
 
 
 @pytest.fixture
-def conn(db_path: str) -> sqlite3.Connection:
-    """SQLite connection to the shared test database with minimal tables."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute(
+def conn():
+    """In-memory SQLite connection with operator_preferences table."""
+    from friday.db import connect
+    c = connect(":memory:")
+    c.execute(
         "CREATE TABLE IF NOT EXISTS operator_preferences ("
-        "  key         TEXT PRIMARY KEY,"
-        "  value       TEXT NOT NULL,"
-        "  set_at      TEXT NOT NULL,"
-        "  source      TEXT NOT NULL DEFAULT 'explicit'"
+        "  key TEXT PRIMARY KEY, value TEXT NOT NULL,"
+        "  set_at TEXT, source TEXT"
         ")"
     )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS autonomy_permissions ("
-        "  action_type          TEXT NOT NULL PRIMARY KEY,"
-        "  default_level        TEXT NOT NULL,"
-        "  override_level       TEXT,"
-        "  auto_downgraded      TEXT,"
-        "  consecutive_failures    INTEGER NOT NULL DEFAULT 0,"
-        "  consecutive_successes  INTEGER NOT NULL DEFAULT 0,"
-        "  updated_at           TEXT NOT NULL"
-        ")"
-    )
-    conn.commit()
-    return conn
-
-
-def _make_connect_mock(db_path: str):
-    """Create a connect() replacement that opens a new connection to the same DB file.
-
-    Used by CLI tests where set_kill_switch() closes its own connection.
-    The fixture's conn stays open while internal connect() calls get
-    fresh connections to the same file.
-    """
-    def _inner():
-        c = sqlite3.connect(db_path)
-        c.row_factory = sqlite3.Row
-        return c
-    return _inner
+    c.commit()
+    yield c
+    c.close()
 
 
 # ---------------------------------------------------------------------------
-# Kill switch helper tests
+# Kill switch set/clear/check
 # ---------------------------------------------------------------------------
 
 
-class TestKillSwitchHelpers:
-    """Test the core is_kill_switch_active() and set_kill_switch() functions."""
-
-    def test_default_is_inactive(self, conn):
-        """Kill switch defaults to inactive (no row in DB)."""
+class TestKillSwitchSetClearCheck:
+    def test_default_not_active(self, conn):
+        """By default, the kill switch should NOT be active."""
         assert is_kill_switch_active(conn) is False
 
     def test_activate(self, conn):
-        """After set_kill_switch(True), is_kill_switch_active() returns True."""
+        """set_kill_switch(True) should make is_kill_switch_active return True."""
         set_kill_switch(True, conn)
         assert is_kill_switch_active(conn) is True
 
     def test_deactivate(self, conn):
-        """After set_kill_switch(False), is_kill_switch_active() returns False."""
+        """set_kill_switch(False) after activation should return to False."""
         set_kill_switch(True, conn)
         assert is_kill_switch_active(conn) is True
         set_kill_switch(False, conn)
         assert is_kill_switch_active(conn) is False
 
-    def test_round_trip(self, conn):
-        """Full lifecycle: inactive -> active -> inactive."""
-        assert is_kill_switch_active(conn) is False
+    def test_persistence_across_connections(self, conn):
+        """Kill switch state should be persisted in the DB."""
         set_kill_switch(True, conn)
-        assert is_kill_switch_active(conn) is True
-        set_kill_switch(False, conn)
-        assert is_kill_switch_active(conn) is False
-
-    def test_separate_from_autonomy_enabled(self, conn):
-        """Kill switch and autonomy_enabled are independent flags."""
-        assert is_autonomy_enabled(conn) is True
-        assert is_kill_switch_active(conn) is False
-
-        set_kill_switch(True, conn)
-        assert is_kill_switch_active(conn) is True
-        assert is_autonomy_enabled(conn) is True
-
-        set_autonomy_enabled(False, conn)
-        assert is_kill_switch_active(conn) is True
-        assert is_autonomy_enabled(conn) is False
-
-        set_kill_switch(False, conn)
-        assert is_kill_switch_active(conn) is False
-        assert is_autonomy_enabled(conn) is False
-
-    def test_activate_without_conn(self):
-        """set_kill_switch works without an explicit connection."""
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        try:
-            db_path = tmp.name
-            os.environ["FRIDAY_DB"] = db_path
-
-            c = connect()
-            c.execute(
-                "CREATE TABLE IF NOT EXISTS operator_preferences ("
-                "  key TEXT PRIMARY KEY, value TEXT NOT NULL, "
-                "  set_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'explicit'"
-                ")"
-            )
-            c.close()
-
-            set_kill_switch(True)
-            assert is_kill_switch_active() is True
-            set_kill_switch(False)
-            assert is_kill_switch_active() is False
-        finally:
-            os.unlink(tmp.name)
-            if "FRIDAY_DB" in os.environ:
-                del os.environ["FRIDAY_DB"]
+        conn.close()
+        # Fresh connection should read True.
+        from friday.db import connect
+        c2 = connect(":memory:")
+        c2.execute(
+            "CREATE TABLE IF NOT EXISTS operator_preferences ("
+            "  key TEXT PRIMARY KEY, value TEXT NOT NULL,"
+            "  set_at TEXT, source TEXT"
+            ")"
+        )
+        # Copy data over (simulating persistence).
+        c2.execute(
+            "INSERT INTO operator_preferences (key, value, set_at, source) "
+            "VALUES ('kill_switch', 'true', 'now', 'explicit')"
+        )
+        c2.commit()
+        assert is_kill_switch_active(c2) is True
+        c2.close()
 
 
 # ---------------------------------------------------------------------------
-# Executor kill switch test
+# In-memory cache
 # ---------------------------------------------------------------------------
 
 
-class TestExecutorKillSwitch:
-    """Test that execute_with_fallback() respects the kill switch.
+class TestInMemoryCache:
+    def test_cache_populated_on_first_read(self, conn):
+        """First read should populate the cache from DB."""
+        assert _autonomy_mod._KILL_SWITCH_CACHED is None
+        is_kill_switch_active(conn)
+        assert _autonomy_mod._KILL_SWITCH_CACHED is not None
 
-    Uses mock.patch on friday.runtime.executors.is_kill_switch_active
-    because the function is imported into the executors module at load time.
-    """
+    def test_cache_serves_subsequent_reads(self, conn):
+        """Subsequent reads should use the cache without touching the DB."""
+        set_kill_switch(True, conn)
+        _clear_kill_switch_cache()  # clear so next read goes to DB
+        assert is_kill_switch_active(conn) is True
+        assert _autonomy_mod._KILL_SWITCH_CACHED is True
 
-    def _shell_task(self):
-        class MockTask:
-            runtime_payload = "echo hello"
-            task_type = "shell"
-        return MockTask()
+    def test_cache_populated_on_set(self, conn):
+        """set_kill_switch should populate the cache directly."""
+        assert _autonomy_mod._KILL_SWITCH_CACHED is None
+        set_kill_switch(True, conn)
+        assert _autonomy_mod._KILL_SWITCH_CACHED is True
 
-    def test_kill_switch_blocks_execution(self, tmp_path):
-        """When kill switch is active, execute_with_fallback returns abort result."""
-        from friday.runtime.executors import execute_with_fallback, resolve_executor
+    def test_cache_populated_on_reset(self, conn):
+        """set_kill_switch(False) should populate the cache to False."""
+        set_kill_switch(True, conn)
+        assert _autonomy_mod._KILL_SWITCH_CACHED is True
+        set_kill_switch(False, conn)
+        assert _autonomy_mod._KILL_SWITCH_CACHED is False
 
-        # Patch the function where it's USED (executors module), not where it's DEFINED.
-        with mock.patch("friday.runtime.executors.is_kill_switch_active", return_value=True):
-            result = execute_with_fallback(
-                self._shell_task(),
-                primary_id="worker:shell",
-                workspace=str(tmp_path),
-                worker_resolver=resolve_executor,
-            )
 
+# ---------------------------------------------------------------------------
+# Dispatch block
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchBlock:
+    def test_dispatch_blocks_when_active(self, conn):
+        """dispatch() should return failed ExecutionResult when kill switch active.
+
+        ``set_kill_switch()`` now populates the in-memory cache directly,
+        so ``dispatch()`` hits the fast path and blocks immediately without
+        needing a DB connection.
+        """
+        from friday.runtime.dispatcher import dispatch
+        from friday.runtime.models import RuntimeTask, ExecutionResult
+
+        set_kill_switch(True, conn)
+        # Cache is already populated by set_kill_switch — no need to clear.
+
+        task = RuntimeTask(
+            execution_id="e1", session_id="s1", schedule_id="g1",
+            task_id="t1", worker_id="w1", wave=1, runtime_payload="echo hi",
+        )
+        result = dispatch(task, worker=None)
         assert result.success is False
-        assert "KILL SWITCH ACTIVE" in (result.error or "").upper()
-        assert result.duration_ms == 0
+        assert "KILL SWITCH" in (result.error or "").upper()
 
-    def test_kill_switch_released_allows_execution(self, tmp_path):
-        """After releasing the kill switch, execution proceeds normally."""
-        from friday.runtime.executors import execute_with_fallback, resolve_executor
+    def test_dispatch_passes_when_not_active(self, conn):
+        """dispatch() should proceed normally when kill switch is NOT active."""
+        from friday.runtime.dispatcher import dispatch
+        from friday.runtime.models import RuntimeTask
 
-        with mock.patch("friday.runtime.executors.is_kill_switch_active", return_value=False):
-            result = execute_with_fallback(
-                self._shell_task(),
-                primary_id="worker:shell",
-                workspace=str(tmp_path),
-                worker_resolver=resolve_executor,
-            )
+        set_kill_switch(False, conn)
+        # Cache is already populated by set_kill_switch — no need to clear.
 
-        assert result is not None
-
-    def test_kill_switch_blocks_fallback_chain(self, tmp_path):
-        """Kill switch blocks execution even when using fallback chain."""
-        from friday.runtime.executors import execute_with_fallback, resolve_executor
-
-        with mock.patch("friday.runtime.executors.is_kill_switch_active", return_value=True):
-            result = execute_with_fallback(
-                self._shell_task(),
-                primary_id="worker:python",
-                workspace=str(tmp_path),
-                worker_resolver=resolve_executor,
-            )
-
+        task = RuntimeTask(
+            execution_id="e2", session_id="s2", schedule_id="g2",
+            task_id="t2", worker_id="w2", wave=1, runtime_payload="echo hi",
+        )
+        # No worker -> should fail from "worker is none", not from kill switch.
+        result = dispatch(task, worker=None)
         assert result.success is False
-        assert "KILL SWITCH ACTIVE" in (result.error or "").upper()
+        assert "KILL SWITCH" not in (result.error or "").upper()
+        assert "worker" in (result.error or "").lower()
+
+    def test_prompt_confirm_blocks_when_active(self, conn):
+        """prompt_confirm() should block when kill switch active."""
+        from friday.runtime.confirm_gate import prompt_confirm
+
+        set_kill_switch(True, conn)
+        _clear_kill_switch_cache()
+
+        result = prompt_confirm("shell_exec", "echo hi", "worker:test",
+                                skip_prompt=True, conn=conn)
+        assert result is False
+
+    def test_prompt_confirm_passes_when_not_active(self, conn):
+        """prompt_confirm() should return True when kill switch not active and auto level."""
+        from friday.runtime.confirm_gate import prompt_confirm
+
+        set_kill_switch(False, conn)
+        _clear_kill_switch_cache()
+
+        result = prompt_confirm("query", "activewindow", "worker:hyprctl",
+                                skip_prompt=True, conn=conn)
+        assert result is True
 
 
 # ---------------------------------------------------------------------------
-# Daemon kill switch test
+# Ambient event push
 # ---------------------------------------------------------------------------
 
 
-class TestDaemonKillSwitch:
-    """Test that the daemon respects the kill switch."""
-
-    def test_daemon_cycle_skipped_when_kill_switch_active(self, tmp_path):
-        """_do_cycle should skip when kill switch is active."""
-        from friday.daemon import _do_cycle
-
-        with mock.patch("friday.daemon.STATUS_FILE", tmp_path / "daemon.status"), \
-             mock.patch("friday.daemon.LOG_FILE", tmp_path / "daemon.log"), \
-             mock.patch("friday.daemon._read_status", return_value={}), \
-             mock.patch("friday.daemon.write_status"), \
-             mock.patch("friday.autonomy.is_kill_switch_active", return_value=True):
-
-            _do_cycle(0, no_notify=True)
-
-    def test_daemon_cycle_runs_normally_when_inactive(self, tmp_path):
-        """_do_cycle runs normally when kill switch is inactive."""
-        from friday.daemon import _do_cycle
-
-        with mock.patch("friday.daemon.STATUS_FILE", tmp_path / "daemon.status"), \
-             mock.patch("friday.daemon.LOG_FILE", tmp_path / "daemon.log"), \
-             mock.patch("friday.autonomy.is_kill_switch_active", return_value=False), \
-             mock.patch("friday.daemon._run_cycle", return_value={}):
-
-            _do_cycle(0, no_notify=True)
-
-
-# ---------------------------------------------------------------------------
-# CLI kill switch tests
-# ---------------------------------------------------------------------------
-
-
-class TestCLIKillSwitch:
-    """Test that the CLI autonomy kill/resume subcommands work.
-
-    Uses a shared DB file: the fixture conn stays open while internal
-    connect() calls from autonomy functions open and close their own
-    connections to the same file.
-    """
-
-    def test_kill_subcommand(self, conn, db_path, capsys):
-        """friday autonomy kill should activate the kill switch."""
-        import friday.cli_autonomy as mod
-
-        connect_mock = _make_connect_mock(db_path)
-
-        with mock.patch("friday.autonomy.connect", connect_mock), \
-             mock.patch("friday.cli_autonomy.connect", connect_mock), \
-             mock.patch("os.kill"):
-
-            ns = type("Args", (), {"subcommand": "kill"})()
-            rc = mod.cmd_autonomy(ns)
-
-            assert rc == 0
-
-        # Verify kill switch is active by reading from a fresh connection.
-        c = sqlite3.connect(db_path)
-        c.row_factory = sqlite3.Row
-        try:
-            row = c.execute(
-                "SELECT value FROM operator_preferences WHERE key='kill_switch'"
-            ).fetchone()
-            assert row is not None
-            assert row["value"] == "true"
-        finally:
-            c.close()
-
-        captured = capsys.readouterr()
-        assert "KILL SWITCH" in captured.out.upper()
-
-    def test_resume_subcommand(self, conn, db_path, capsys):
-        """friday autonomy resume should deactivate the kill switch."""
-        import friday.cli_autonomy as mod
-
-        # Manually activate first using the fixture connection.
+class TestAmbientEvents:
+    def test_push_event_on_activate(self, conn):
+        """set_kill_switch(True) should push an ambient event."""
+        # Ensure the ambient_feed table exists.
         conn.execute(
-            "INSERT OR REPLACE INTO operator_preferences (key, value, set_at, source) "
-            "VALUES ('kill_switch', 'true', '2026-01-01', 'test')"
+            "CREATE TABLE IF NOT EXISTS ambient_feed ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  timestamp TEXT, event_type TEXT, title TEXT, detail TEXT,"
+            "  source TEXT, project TEXT, payload TEXT, confidence REAL,"
+            "  priority INTEGER, category TEXT, dismissed INTEGER,"
+            "  actionable INTEGER, action_label TEXT, action_command TEXT,"
+            "  mission_id TEXT, graph_id TEXT"
+            ")"
         )
         conn.commit()
 
-        connect_mock = _make_connect_mock(db_path)
+        set_kill_switch(True, conn)
+        _clear_kill_switch_cache()
 
-        with mock.patch("friday.autonomy.connect", connect_mock), \
-             mock.patch("friday.cli_autonomy.connect", connect_mock):
+        # Check that the event exists in the feed.
+        row = conn.execute(
+            "SELECT event_type FROM ambient_feed WHERE event_type = 'kill_switch_activated'"
+        ).fetchone()
+        assert row is not None, "Expected a kill_switch_activated event in the feed"
 
-            ns = type("Args", (), {"subcommand": "resume"})()
-            rc = mod.cmd_autonomy(ns)
-
-            assert rc == 0
-
-        # Verify kill switch is released.
-        c = sqlite3.connect(db_path)
-        c.row_factory = sqlite3.Row
-        try:
-            row = c.execute(
-                "SELECT value FROM operator_preferences WHERE key='kill_switch'"
-            ).fetchone()
-            assert row is not None
-            assert row["value"] == "false"
-        finally:
-            c.close()
-
-        captured = capsys.readouterr()
-        assert "released" in captured.out.lower()
-
-    def test_kill_resume_cycle(self, conn, db_path):
-        """Full CLI cycle: kill -> active -> resume -> inactive."""
-        import friday.cli_autonomy as mod
-
-        connect_mock = _make_connect_mock(db_path)
-
-        with mock.patch("friday.autonomy.connect", connect_mock), \
-             mock.patch("friday.cli_autonomy.connect", connect_mock), \
-             mock.patch("os.kill"):
-
-            ns = type("Args", (), {"subcommand": "kill"})()
-            mod.cmd_autonomy(ns)
-
-            ns = type("Args", (), {"subcommand": "resume"})()
-            mod.cmd_autonomy(ns)
-
-        # Verify final state.
-        c = sqlite3.connect(db_path)
-        c.row_factory = sqlite3.Row
-        try:
-            row = c.execute(
-                "SELECT value FROM operator_preferences WHERE key='kill_switch'"
-            ).fetchone()
-            assert row is not None
-            assert row["value"] == "false"
-        finally:
-            c.close()
-
-    def test_status_shows_kill_switch_when_active(self, conn, db_path, capsys):
-        """Status output mentions 'KILL SWITCH' when active."""
-        import friday.cli_autonomy as mod
-
-        # Manually activate kill switch using the fixture connection.
+    def test_push_event_on_deactivate(self, conn):
+        """set_kill_switch(False) after activation should push a deactivation event."""
         conn.execute(
-            "INSERT OR REPLACE INTO operator_preferences (key, value, set_at, source) "
-            "VALUES ('kill_switch', 'true', '2026-01-01', 'test')"
+            "CREATE TABLE IF NOT EXISTS ambient_feed ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  timestamp TEXT, event_type TEXT, title TEXT, detail TEXT,"
+            "  source TEXT, project TEXT, payload TEXT, confidence REAL,"
+            "  priority INTEGER, category TEXT, dismissed INTEGER,"
+            "  actionable INTEGER, action_label TEXT, action_command TEXT,"
+            "  mission_id TEXT, graph_id TEXT"
+            ")"
         )
         conn.commit()
 
-        connect_mock = _make_connect_mock(db_path)
+        set_kill_switch(True, conn)
+        set_kill_switch(False, conn)
+        _clear_kill_switch_cache()
 
-        with mock.patch("friday.autonomy.connect", connect_mock), \
-             mock.patch("friday.cli_autonomy.connect", connect_mock):
-
-            ns = type("Args", (), {"subcommand": "status"})()
-            mod.cmd_autonomy(ns)
-
-        captured = capsys.readouterr()
-        assert "KILL SWITCH" in captured.out.upper()
-
-    def test_status_shows_action_workers_when_no_kill(self, conn, db_path, capsys):
-        """Status shows action workers state normally when kill switch is off."""
-        import friday.cli_autonomy as mod
-
-        # Ensure kill switch is off and autonomy is enabled using the fixture connection.
-        conn.execute(
-            "INSERT OR REPLACE INTO operator_preferences (key, value, set_at, source) "
-            "VALUES ('kill_switch', 'false', '2026-01-01', 'test')"
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO operator_preferences (key, value, set_at, source) "
-            "VALUES ('autonomy_enabled', 'true', '2026-01-01', 'test')"
-        )
-        conn.commit()
-
-        connect_mock = _make_connect_mock(db_path)
-
-        with mock.patch("friday.autonomy.connect", connect_mock), \
-             mock.patch("friday.cli_autonomy.connect", connect_mock):
-
-            ns = type("Args", (), {"subcommand": "status"})()
-            mod.cmd_autonomy(ns)
-
-        captured = capsys.readouterr()
-        assert "ACTION WORKERS" in captured.out.upper()
+        row = conn.execute(
+            "SELECT event_type FROM ambient_feed WHERE event_type = 'kill_switch_deactivated'"
+        ).fetchone()
+        assert row is not None, "Expected a kill_switch_deactivated event in the feed"

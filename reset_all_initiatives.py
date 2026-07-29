@@ -6,7 +6,6 @@ from friday.db import connect
 conn = connect()
 # Delete all initiatives and their related data
 conn.execute('DELETE FROM initiative_relationships')
-conn.execute('DELETE FROM initiative_evolution')
 conn.execute('DELETE FROM initiative_history')
 conn.execute('DELETE FROM initiatives')
 conn.execute('DELETE FROM pending_initiatives')

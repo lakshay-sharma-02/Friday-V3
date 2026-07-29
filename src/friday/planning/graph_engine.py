@@ -20,7 +20,6 @@ from typing import List, Optional, Tuple
 
 from ..db import (
     TaskEdgeRow,
-    TaskEvolutionRow,
     TaskGraphRow,
     TaskHistoryRow,
     TaskRow,
@@ -31,11 +30,10 @@ from ..db import (
     get_task_graph_by_id,
     get_tasks_for_graph,
     get_repositories,
+    insert_layer_history,
     insert_plan,
-    insert_task_evolution,
     insert_task_graph,
     insert_task_history,
-    task_evolution_for,
     task_history_for,
 )
 from ..initiative import InitiativeEngine
@@ -203,11 +201,21 @@ class TaskGraphEngine:
     def history(self, gid: str) -> List[TaskHistoryRow]:
         return task_history_for(self.conn, gid)
 
-    def evolution(self, gid: Optional[str] = None) -> List[TaskEvolutionRow]:
+    def evolution(self, gid: Optional[str] = None) -> list[dict]:
         if gid is None:
-            from ..db import task_evolution_all
-            return task_evolution_all(self.conn)
-        return task_evolution_for(self.conn, gid)
+            rows = self.conn.execute(
+                "SELECT * FROM layer_history "
+                "WHERE entity_type = 'task_graph' "
+                "ORDER BY recorded_at DESC LIMIT 100"
+            ).fetchall()
+            return [dict(r) for r in rows]
+        rows = self.conn.execute(
+            "SELECT * FROM layer_history "
+            "WHERE entity_type = 'task_graph' AND entity_id = ? "
+            "ORDER BY recorded_at ASC",
+            (gid,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # --- WRITE ----------------------------------------------------------------
 
@@ -794,32 +802,30 @@ class TaskGraphEngine:
 
     def _record_evolution(self, generated_at: str, g: TaskGraph,
                           prev: Optional[TaskGraph]) -> int:
-        events: List[TaskEvolutionRow] = []
         gid = g.id
+        meta = {
+            "task_count": len(g.tasks),
+            "edge_count": len(g.edges),
+            "plan_id": g.plan_id,
+        }
         if prev is None:
-            events.append(self._event(
-                generated_at, "Compiled", gid, None, g.status, None,
-                len(g.tasks), None, len(g.edges),
-                f"Task graph compiled for plan {g.plan_id}."))
-            insert_task_evolution(self.conn, events)
-            return len(events)
+            insert_layer_history(
+                self.conn, "task_graph", gid, "Compiled",
+                new_state=g.status,
+                reason=f"Task graph compiled for plan {g.plan_id}.",
+                metadata=meta,
+            )
+            return 1
         if len(g.tasks) != len(prev.tasks) or len(g.edges) != len(prev.edges):
-            events.append(self._event(
-                generated_at, "Recompiled", gid, prev.status, g.status,
-                len(prev.tasks), len(g.tasks), len(prev.edges), len(g.edges),
-                "Graph shape changed on recompilation (plan changed)."))
-            insert_task_evolution(self.conn, events)
-            return len(events)
+            insert_layer_history(
+                self.conn, "task_graph", gid, "Recompiled",
+                previous_state=prev.status,
+                new_state=g.status,
+                reason="Graph shape changed on recompilation (plan changed).",
+                metadata=meta,
+            )
+            return 1
         return 0
-
-    @staticmethod
-    def _event(gen_at, etype, gid, prev_status, new_status, prev_tasks,
-               new_tasks, prev_edges, new_edges, reason):
-        return TaskEvolutionRow(
-            id=f"{gen_at}:{etype}:{gid}", generated_at=gen_at,
-            event_type=etype, graph_id=gid, previous_status=prev_status,
-            new_status=new_status, reason=reason, task_count=new_tasks or 0,
-            edge_count=new_edges or 0, timestamp=gen_at)
 
 
 def _dumps(xs: list) -> str:

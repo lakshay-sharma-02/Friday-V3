@@ -604,6 +604,421 @@ class ReplayExecutor(Executor):
 
 
 # ---------------------------------------------------------------------------
+# ShadowExecutor — simulate formed skill execution with zero side effects
+# ---------------------------------------------------------------------------
+
+
+_SHADOW_PROMOTION_THRESHOLD = 3  # consecutive clean shadow runs -> promote
+
+# Number of successful beta executions before promoting to stable.
+# Beta skills execute for real (canary mode). After N consecutive successful
+# executions, they promote to stable (full execution, monitored via drift).
+_CANARY_PROMOTION_THRESHOLD = 5
+
+
+class ShadowExecutor:
+    """Simulate a formed skill's execution without producing side effects.
+
+    Unlike ReplayExecutor which actually dispatches actions through real
+    executors (Hyprland, Browser, etc.), ShadowExecutor:
+      1. Reads the skill's task_graph and exemplars
+      2. For each step, checks if the exemplar target is reasonable
+         (exists in workspace, matches expected patterns)
+      3. Compares actual workspace state against exemplar expectations
+      4. Logs all comparisons to shadow_runs table
+      5. Never executes anything with side effects
+
+    After N consecutive clean shadow runs (N = SHADOW_PROMOTION_THRESHOLD),
+    the skill auto-promotes from proposed -> beta status.
+    """
+
+    def __init__(
+        self,
+        conn,
+        skill_id: int,
+        worker_id: str,
+        task_graph: list[list[str]] | None = None,
+        exemplars: dict[str, dict] | None = None,
+        workspace: str = ".",
+    ) -> None:
+        self.conn = conn
+        self.skill_id = skill_id
+        self.worker_id = worker_id
+        self._task_graph = task_graph or []
+        self._exemplars = exemplars or {}
+        self._ws = workspace
+
+    def run(self) -> dict:
+        """Execute the shadow run. Returns a result dict with match details.
+
+        Returns:
+            Dict with keys:
+              - skill_id
+              - step_count
+              - steps_matched
+              - steps_mismatched
+              - steps_skipped
+              - exemplar_comparison (list of per-step dicts)
+              - overall_match_score (0.0 to 1.0)
+              - outcome ('matched', 'mismatched', 'error')
+              - promoted (bool)
+        """
+        from datetime import datetime, timezone
+        import json
+
+        # Rate-limit: skip if a shadow run was recorded within the last
+        # _AUTO_DISPATCH_INTERVAL seconds (avoid flooding on rapid cycles).
+        try:
+            last_run = self.conn.execute(
+                "SELECT run_at FROM shadow_runs WHERE skill_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (self.skill_id,)
+            ).fetchone()
+            if last_run:
+                from datetime import datetime as _dt
+                last_dt = _dt.fromisoformat(last_run["run_at"])
+                if (datetime.now(timezone.utc) - last_dt).total_seconds() < 3600:
+                    return {
+                        "skill_id": self.skill_id,
+                        "step_count": 0,
+                        "steps_matched": 0,
+                        "steps_mismatched": 0,
+                        "steps_skipped": 0,
+                        "exemplar_comparison": [],
+                        "overall_match_score": 0.0,
+                        "outcome": "skipped",
+                        "promoted": False,
+                        "skipped_reason": "rate_limited",
+                    }
+        except Exception:
+            pass
+
+        steps = self._task_graph
+        if not steps:
+            return {
+                "skill_id": self.skill_id,
+                "step_count": 0,
+                "steps_matched": 0,
+                "steps_mismatched": 0,
+                "steps_skipped": 0,
+                "exemplar_comparison": [],
+                "overall_match_score": 0.0,
+                "outcome": "error",
+                "promoted": False,
+            }
+
+        # Per-step comparison: check exemplar targets against workspace state.
+        comparison: list[dict] = []
+        matched = 0
+        mismatched = 0
+        skipped = 0
+
+        for i, (action_type, target) in enumerate(steps):
+            step_key = str(i)
+            pos_data = self._exemplars.get(step_key, {})
+            if isinstance(pos_data, dict) and pos_data:
+                default_val = pos_data.get("default", "") or ""
+                distribution = pos_data.get("distribution", {})
+                consensus = pos_data.get("consensus", 1.0)
+                stable = pos_data.get("stable", True)
+
+                # Determine if the exemplar target is still valid in the
+                # current workspace. We check: would the action succeed?
+                # For file/workspace actions, check if target path/workspace
+                # exists. For browser actions, just verify exemplar has
+                # reasonable format.
+                target_valid = self._check_target_valid(action_type, target)
+
+                comparison.append({
+                    "step": i,
+                    "action": action_type,
+                    "exemplar_target": default_val or target,
+                    "exemplar_consensus": consensus,
+                    "exemplar_stable": stable,
+                    "target_valid": target_valid,
+                    "step_matched": target_valid,
+                })
+                if target_valid:
+                    matched += 1
+                else:
+                    mismatched += 1
+            else:
+                # No exemplar data for this step — check if workspace is
+                # in a reasonable state for this action type.
+                workspace_ok = self._check_workspace_reasonable(action_type)
+                comparison.append({
+                    "step": i,
+                    "action": action_type,
+                    "exemplar_target": target,
+                    "exemplar_consensus": 0.0,
+                    "exemplar_stable": False,
+                    "target_valid": workspace_ok,
+                    "step_matched": workspace_ok,
+                })
+                if workspace_ok:
+                    matched += 1
+                else:
+                    skipped += 1
+
+        total = len(steps)
+        score = matched / max(total, 1)
+        outcome = "matched" if score >= 0.8 else "mismatched"
+
+        result = {
+            "skill_id": self.skill_id,
+            "step_count": total,
+            "steps_matched": matched,
+            "steps_mismatched": mismatched,
+            "steps_skipped": skipped,
+            "exemplar_comparison": comparison,
+            "overall_match_score": round(score, 3),
+            "outcome": outcome,
+            "promoted": False,
+        }
+
+        # Persist shadow run to DB.
+        self._persist(result)
+
+        # Check promotion: if score meets threshold and we have enough
+        # consecutive clean runs, promote to beta.
+        if score >= 0.8:
+            self._maybe_promote(result)
+
+        return result
+
+    def _check_target_valid(self, action_type: str, target: str) -> bool:
+        """Check if an exemplar target is reasonable for the action type.
+
+        For workspace operations: check if the workspace id exists.
+        For app launch: check if the binary exists on PATH.
+        For browser operations: validate URL or element format.
+        """
+        from pathlib import Path
+
+        if not target:
+            return True  # No target = generic action, always valid
+
+        # Workspace switch: verify the target workspace id exists.
+        if action_type == "workspace_switch":
+            try:
+                from .hyprctl_util import hyprctl
+                import json as _json
+                raw = hyprctl("workspaces")
+                if raw:
+                    try:
+                        ws_list = _json.loads(raw) if isinstance(raw, str) else raw
+                        if isinstance(ws_list, list):
+                            ws_ids = {str(w.get("id", "")) for w in ws_list}
+                            ws_names = {w.get("name", "") for w in ws_list}
+                            return target in ws_ids or target in ws_names
+                    except (_json.JSONDecodeError, TypeError, AttributeError):
+                        pass
+                return False
+            except Exception:
+                # Can't check Hyprland — trust the exemplar.
+                return True
+
+        # Window focus: can't easily verify without listing windows.
+        if action_type == "window_focus":
+            return True
+
+        # App launch: check if the binary exists on PATH.
+        if action_type == "app_launch":
+            import shutil
+            return shutil.which(target) is not None or Path(target).exists()
+
+        # Browser navigation actions: validate URL format.
+        if action_type == "navigate":
+            return target.startswith("http://") or target.startswith("https://") or target.startswith("file://")
+
+        # Browser actions that reference a page element: assume valid.
+        if action_type in ("click", "type", "wait", "screenshot"):
+            return True
+
+        # App close: check if target looks like a window address.
+        if action_type == "app_close":
+            return bool(target and len(target) > 0)
+
+        # All other actions (read, title, url): trust the exemplar.
+        return True
+
+    def _check_workspace_reasonable(self, action_type: str) -> bool:
+        """Check if the workspace is in a reasonable state for an action
+        that has no exemplar data."""
+        from pathlib import Path
+
+        # For any action, check that the workspace directory is valid.
+        ws_path = Path(self._ws)
+        if not ws_path.is_dir():
+            return False
+
+        # Workspace switch needs Hyprland.
+        if action_type == "workspace_switch":
+            try:
+                from .hyprctl_util import hyprctl
+                hyprctl("monitors")
+                return True
+            except Exception:
+                return False
+
+        # Window focus needs Hyprland.
+        if action_type == "window_focus":
+            try:
+                from .hyprctl_util import hyprctl
+                hyprctl("clients")
+                return True
+            except Exception:
+                return False
+
+        # App launch just needs a working shell.
+        if action_type == "app_launch":
+            return True
+
+        # Browser operations: always reasonable to try.
+        if action_type in ("navigate", "click", "type", "screenshot", "title", "url", "wait"):
+            return True
+
+        # App close: possible if any windows exist.
+        if action_type == "app_close":
+            return True
+
+        return True
+
+    def _persist(self, result: dict) -> None:
+        """Persist shadow run to the shadow_runs table."""
+        from datetime import datetime, timezone
+        import json
+
+        from .db import insert_shadow_run
+
+        try:
+            row = {
+                "skill_id": self.skill_id,
+                "run_at": datetime.now(timezone.utc).isoformat(),
+                "step_count": result["step_count"],
+                "steps_matched": result["steps_matched"],
+                "steps_mismatched": result["steps_mismatched"],
+                "exemplar_comparison": json.dumps(result["exemplar_comparison"]),
+                "overall_match_score": result["overall_match_score"],
+                "outcome": result["outcome"],
+                "promoted": 1 if result["promoted"] else 0,
+            }
+            insert_shadow_run(self.conn, row)
+        except Exception:
+            pass  # Shadow run logging is best-effort
+
+    def _maybe_promote(self, result: dict) -> None:
+        """Promote skill from proposed -> beta if enough clean shadow runs."""
+        from datetime import datetime, timezone
+        from .db import count_recent_shadow_runs
+
+        try:
+            clean_count = count_recent_shadow_runs(
+                self.conn, self.skill_id, _SHADOW_PROMOTION_THRESHOLD)
+
+            if clean_count >= _SHADOW_PROMOTION_THRESHOLD:
+                # Promote: update worker status from proposed -> beta.
+                self.conn.execute(
+                    """UPDATE workers SET status = 'beta', updated_at = ?
+                       WHERE manifest_ref = ? AND status = 'proposed'""",
+                    (datetime.now(timezone.utc).isoformat(),
+                     f"formed_skill:{self.skill_id}")
+                )
+                self.conn.commit()
+
+                # Mark this run as promoted.
+                result["promoted"] = True
+
+                _log_dispatch(
+                    self.skill_id,
+                    f"auto-promoted to beta after {clean_count} "
+                    f"clean shadow runs (score={result['overall_match_score']})")
+
+                # Push ambient event for the promotion.
+                self._push_promotion_event()
+
+        except Exception as exc:
+            _log_dispatch(self.skill_id, f"promotion check failed: {exc}")
+
+    def _push_promotion_event(self) -> None:
+        """Push an ambient feed event for the shadow-run promotion."""
+        try:
+            from .ambient import push_event, AmbientEvent
+            from datetime import datetime, timezone
+
+            # Get skill name for the event title.
+            worker_row = self.conn.execute(
+                "SELECT name FROM workers WHERE manifest_ref = ?",
+                (f"formed_skill:{self.skill_id}",)
+            ).fetchone()
+            skill_name = worker_row["name"] if worker_row else f"skill #{self.skill_id}"
+
+            ev = AmbientEvent(
+                source="friday",
+                event_type="skill_promotion",
+                title=f"Skill '{skill_name}' promoted to beta",
+                detail=(
+                    f"Skill '{skill_name}' auto-promoted from proposed to beta "
+                    f"after {_SHADOW_PROMOTION_THRESHOLD} clean shadow runs."
+                ),
+                priority=2,
+                category="execution",
+                project="",
+                confidence=1.0,
+                payload=f'{{"skill_id": {self.skill_id}, '
+                        f'"worker": "{skill_name}", '
+                        f'"new_status": "beta"}}',
+                salience=0.0,
+            )
+            push_event(self.conn, ev)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Shadow event helpers — push ambient events for shadow run outcomes
+# ---------------------------------------------------------------------------
+
+
+def _push_shadow_event(conn, skill_id: int, worker_name: str, result: dict) -> None:
+    """Push an ambient feed event for a shadow run (not just promotions)."""
+    try:
+        from .ambient import push_event, AmbientEvent
+
+        outcome = result.get("outcome", "?")
+        score = result.get("overall_match_score", 0.0)
+        matched = result.get("steps_matched", 0)
+        total = result.get("step_count", 0)
+
+        if outcome == "skipped":
+            return  # No event for rate-limited skips
+
+        ev = AmbientEvent(
+            source="friday",
+            event_type="shadow_run",
+            title=f"Shadow run: {worker_name}",
+            detail=(
+                f"Skill '{worker_name}' shadow run completed: "
+                f"{matched}/{total} steps matched (score={score:.0%}, "
+                f"outcome={outcome})"
+            ),
+            priority=1,
+            category="intelligence",
+            project="",
+            confidence=0.7,
+            payload=f'{{"skill_id": {skill_id}, '
+                    f'"worker": "{worker_name}", '
+                    f'"score": {score}, '
+                    f'"matched": {matched}, '
+                    f'"total": {total}}}',
+            salience=0.0,
+        )
+        push_event(conn, ev)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Auto-dispatch — trigger formed skills when their pattern is observed
 # ---------------------------------------------------------------------------
 
@@ -634,7 +1049,7 @@ def auto_dispatch_skills(conn) -> list[dict]:
                JOIN workers w
                  ON w.manifest_ref = 'formed_skill:' || CAST(fs.id AS TEXT)
                WHERE w.kind = 'formed_skill'
-                 AND w.status IN ('beta', 'proposed')"""
+                 AND w.status IN ('beta', 'proposed', 'stable')"""
         ).fetchall()
 
         if not skills:
@@ -660,8 +1075,9 @@ def auto_dispatch_skills(conn) -> list[dict]:
                 status = skill["status"]
                 last_invoked = skill["last_invoked_at"]
 
-                # Rate-limit: skip if dispatched within the interval.
-                if last_invoked:
+                # Stable skills skip rate-limiting — they run whenever triggered.
+                # Beta and proposed skills respect _AUTO_DISPATCH_INTERVAL.
+                if status != "stable" and last_invoked:
                     try:
                         last_dt = datetime.fromisoformat(last_invoked)
                         elapsed = (now_utc - last_dt).total_seconds()
@@ -692,7 +1108,12 @@ def auto_dispatch_skills(conn) -> list[dict]:
                     continue
 
                 # 4. Dispatch the skill.
-                result = _dispatch_one(conn, skill, worker_id, now_utc)
+                # Proposed skills run in shadow mode (simulation, no side effects).
+                # Beta skills execute for real (via ReplayExecutor).
+                if status == "proposed":
+                    result = _shadow_dispatch_one(conn, skill, worker_id)
+                else:
+                    result = _dispatch_one(conn, skill, worker_id, now_utc)
                 if result:
                     dispatched.append(result)
 
@@ -705,6 +1126,84 @@ def auto_dispatch_skills(conn) -> list[dict]:
         _log_dispatch("all", f"auto_dispatch_skills failed: {exc}")
 
     return dispatched
+
+
+def _shadow_dispatch_one(conn, skill_row, worker_id: str) -> Optional[dict]:
+    """Run a formed skill through the ShadowExecutor.
+
+    Proposed skills are simulated instead of executed for real. The shadow
+    run compares exemplar targets against current workspace state and logs
+    the comparison. No side effects. After N clean shadow runs, the skill
+    auto-promotes to beta.
+
+    Returns a dict with shadow dispatch metadata, or None if shadow failed.
+    """
+    try:
+        skill_id = skill_row["id"]
+        task_graph_str = skill_row["task_graph"] or "[]"
+        skill_graph = json.loads(task_graph_str) if isinstance(task_graph_str, str) else task_graph_str
+        exemplars_str = skill_row["exemplars"] or "{}"
+        exemplars = json.loads(exemplars_str) if isinstance(exemplars_str, str) else exemplars_str
+
+        worker_name = skill_row["worker_name"] if "worker_name" in skill_row.keys() else ""
+
+        # Build and run the ShadowExecutor.
+        shadow = ShadowExecutor(
+            conn=conn,
+            skill_id=skill_id,
+            worker_id=worker_id,
+            task_graph=skill_graph,
+            exemplars=exemplars,
+        )
+        result = shadow.run()
+
+        # Log the shadow run to action log.
+        from .action_log import ActionEvent, log_action, now_iso as _n
+        log_action(conn, ActionEvent(
+            source="friday",
+            action_type="skill_shadow_run",
+            target=json.dumps({
+                "skill_id": skill_id,
+                "worker_id": worker_id,
+                "worker_name": worker_name,
+                "outcome": result["outcome"],
+                "match_score": result["overall_match_score"],
+            }),
+            detail=json.dumps({
+                "steps": result["step_count"],
+                "steps_graph": skill_graph,
+                "matched": result["steps_matched"],
+                "mismatched": result["steps_mismatched"],
+                "promoted": result["promoted"],
+            }),
+            confidence="derived",
+            observed_at=_n(),
+        ))
+
+        # Push ambient event for the shadow run (low priority, intelligence category).
+        _push_shadow_event(conn, skill_id, worker_name, result)
+
+        dispatch_info = {
+            "skill_id": skill_id,
+            "worker_id": worker_id,
+            "worker_name": worker_name,
+            "succeeded": result["outcome"] == "matched",
+            "error": "",
+            "shadow": True,
+            "outcome": result["outcome"],
+            "match_score": result["overall_match_score"],
+            "promoted": result["promoted"],
+        }
+
+        status_str = "promoted" if result["promoted"] else result["outcome"]
+        _log_dispatch(skill_id, f"shadow {status_str} for {worker_name}")
+        return dispatch_info
+
+    except Exception as exc:
+        _log_dispatch(
+            skill_row["id"] if "id" in skill_row.keys() else "?",
+            f"shadow dispatch failed: {exc}")
+        return None
 
 
 def _dispatch_one(conn, skill_row, worker_id: str, now_utc) -> Optional[dict]:
@@ -771,6 +1270,14 @@ def _dispatch_one(conn, skill_row, worker_id: str, now_utc) -> Optional[dict]:
         _log_dispatch(skill_id,
                       f"{'succeeded' if result.success else 'failed'}"
                       f" for {worker_name}")
+
+        # Canary promotion: if this beta skill succeeded, check if it's
+        # ready to promote to stable.
+        if result.success:
+            skill_status = skill_row["status"] if "status" in skill_row.keys() else ""
+            if skill_status == "beta":
+                _maybe_promote_canary(conn, skill_id, worker_name)
+
         return dispatch_info
 
     except Exception as exc:
@@ -792,6 +1299,107 @@ def _log_dispatch(skill_id, message: str) -> None:
         print(f"[auto-dispatch skill #{skill_id}] {message}", file=sys.stderr)
     except Exception:
         pass
+
+
+def _maybe_promote_canary(conn, skill_id: int, worker_name: str) -> bool:
+    """Promote a beta skill to stable after N successful executions.
+
+    Checks:
+      1. invocation_count >= _CANARY_PROMOTION_THRESHOLD
+      2. Recent 5 skill_auto_dispatch entries have >= 80% success rate
+
+    If both conditions are met, updates the worker status from beta to stable
+    and pushes an ambient feed event.
+
+    Returns True if promotion happened, False otherwise.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        # 1. Check invocation count.
+        fs = conn.execute(
+            "SELECT invocation_count FROM formed_skills WHERE id = ?",
+            (skill_id,)
+        ).fetchone()
+        if not fs or (fs["invocation_count"] or 0) < _CANARY_PROMOTION_THRESHOLD:
+            return False
+
+        # 2. Check recent success rate from auto-dispatch log.
+        recent = conn.execute(
+            """SELECT target FROM actions
+               WHERE action_type = 'skill_auto_dispatch'
+               AND target LIKE '%skill_id%'
+               ORDER BY observed_at DESC LIMIT 5""",
+        ).fetchall()
+
+        target_marker = f'"skill_id": {skill_id}'
+        matching = []
+        for r in recent:
+            t = r["target"] if isinstance(r["target"], str) else json.dumps(r["target"])
+            if target_marker in t:
+                matching.append(r)
+
+        if len(matching) < _CANARY_PROMOTION_THRESHOLD:
+            return False
+
+        successes = 0
+        for r in matching:
+            try:
+                td = json.loads(r["target"]) if isinstance(r["target"], str) else dict(r["target"])
+                if td.get("succeeded", False):
+                    successes += 1
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                continue
+
+        success_rate = successes / max(len(matching), 1)
+        if success_rate < 0.8:
+            return False
+
+        # 3. Promote beta -> stable.
+        conn.execute(
+            """UPDATE workers SET status = 'stable', updated_at = ?
+               WHERE manifest_ref = ? AND status = 'beta'""",
+            (datetime.now(timezone.utc).isoformat(),
+             f"formed_skill:{skill_id}")
+        )
+        conn.commit()
+
+        _log_dispatch(
+            skill_id,
+            f"promoted from beta to stable after "
+            f"{fs['invocation_count']} invocations "
+            f"({successes}/{len(matching)} recent successes)")
+
+        # Push ambient event.
+        try:
+            from .ambient import push_event, AmbientEvent
+            ev = AmbientEvent(
+                source="friday",
+                event_type="skill_promotion",
+                title=f"Skill '{worker_name}' promoted to stable",
+                detail=(
+                    f"Skill '{worker_name}' auto-promoted from beta to stable "
+                    f"after {fs['invocation_count']} successful executions "
+                    f"({success_rate:.0%} recent success rate)."
+                ),
+                priority=2,
+                category="execution",
+                project="",
+                confidence=1.0,
+                payload=f'{{"skill_id": {skill_id}, '
+                        f'"worker": "{worker_name}", '
+                        f'"new_status": "stable"}}',
+                salience=0.0,
+            )
+            push_event(conn, ev)
+        except Exception:
+            pass
+
+        return True
+
+    except Exception as exc:
+        _log_dispatch(skill_id, f"canary promotion check failed: {exc}")
+        return False
 
 
 class _MiniTask:
@@ -979,6 +1587,32 @@ def detect_skill_drift(conn) -> list[DriftReport]:
             else:
                 overall_health = "healthy"
 
+            # Auto-demotion: if a stable skill is degrading/unhealthy, demote
+            # it back to beta so it gets re-evaluated.
+            worker_status = conn.execute(
+                "SELECT status FROM workers WHERE manifest_ref = ?",
+                (f"formed_skill:{skill_id}",)
+            ).fetchone()
+            if worker_status and worker_status["status"] == "stable" \
+               and overall_health in ("degrading", "unhealthy"):
+                from datetime import datetime as _dt
+                conn.execute(
+                    """UPDATE workers SET status = 'beta', updated_at = ?
+                       WHERE manifest_ref = ? AND status = 'stable'""",
+                    (_dt.now(timezone.utc).isoformat(),
+                     f"formed_skill:{skill_id}")
+                )
+                conn.commit()
+                _log_dispatch(
+                    skill_id,
+                    f"auto-demoted from stable to beta: drift={overall_health}, "
+                    f"success_rate={overall_success_rate:.0%}")
+                # Update the report and push ambient event.
+                _push_stable_demotion_event(conn, skill_id, worker_name,
+                                             overall_health,
+                                             overall_success_rate,
+                                             total_invocations)
+
             # Generate recommendation.
             if overall_health == "unhealthy":
                 recommendation = (
@@ -1020,6 +1654,38 @@ def detect_skill_drift(conn) -> list[DriftReport]:
         pass
 
     return reports
+
+
+def _push_stable_demotion_event(conn, skill_id: int, worker_name: str,
+                                 health: str, success_rate: float,
+                                 recent_count: int) -> None:
+    """Push an ambient feed event when a stable skill is demoted to beta."""
+    try:
+        from .ambient import push_event, AmbientEvent
+        ev = AmbientEvent(
+            source="friday",
+            event_type="skill_demotion",
+            title=f"Skill '{worker_name}' demoted to beta",
+            detail=(
+                f"Skill '{worker_name}' demoted from stable to beta "
+                f"due to drift: {health} "
+                f"({success_rate:.0%} success rate over "
+                f"{recent_count} invocations)."
+            ),
+            priority=3,
+            category="quality",
+            project="",
+            confidence=0.9,
+            payload=f'{{"skill_id": {skill_id}, '
+                    f'"worker": "{worker_name}", '
+                    f'"old_status": "stable", '
+                    f'"new_status": "beta", '
+                    f'"reason": "{health}"}}',
+            salience=0.0,
+        )
+        push_event(conn, ev)
+    except Exception:
+        pass
 
 
 def format_drift_reports(reports: list[DriftReport]) -> str:

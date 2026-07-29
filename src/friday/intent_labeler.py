@@ -116,22 +116,20 @@ def label_intent(
     pattern_text = _format_pattern(pattern_sequence)
 
     # Try LLM.
-    result_text = _call_llm(pattern_text, pattern_count, workspace, project)
+    data = _call_llm(pattern_text, pattern_count, workspace, project)
 
-    if result_text:
-        parsed = _parse_llm_result(result_text)
-        if parsed:
-            return WorkflowIntent(
-                pattern_seq=pattern_sequence,
-                pattern_count=pattern_count,
-                pattern_workspace=workspace,
-                pattern_project=project,
-                intent_label=parsed.get("intent_label", _fallback_label(pattern_sequence)),
-                intent_description=parsed.get("intent_description", ""),
-                steps=parsed.get("steps", _fallback_steps(pattern_sequence)),
-                confidence=parsed.get("confidence", "medium"),
-                labeled_at=now_iso(),
-            )
+    if data:
+        return WorkflowIntent(
+            pattern_seq=pattern_sequence,
+            pattern_count=pattern_count,
+            pattern_workspace=workspace,
+            pattern_project=project,
+            intent_label=data.get("intent_label", _fallback_label(pattern_sequence)),
+            intent_description=data.get("intent_description", ""),
+            steps=data.get("steps", _fallback_steps(pattern_sequence)),
+            confidence=data.get("confidence", "medium"),
+            labeled_at=now_iso(),
+        )
 
     # Fallback: deterministic label from action types.
     return WorkflowIntent(
@@ -148,14 +146,14 @@ def label_intent(
 
 
 # ---------------------------------------------------------------------------
-# LLM integration
+# LLM integration — single pattern
 # ---------------------------------------------------------------------------
 
 
-def _call_llm(pattern_text: str, count: int, workspace: str, project: str) -> Optional[str]:
-    """Call the LLM to label a pattern. Returns raw JSON text or None."""
+def _call_llm(pattern_text: str, count: int, workspace: str, project: str) -> Optional[dict]:
+    """Call the LLM to label a single pattern. Returns parsed dict or None."""
     try:
-        from .services.llm import _call as _llm_call
+        from .services.llm import _call_structured
 
         user = _USER_TEMPLATE.format(
             pattern_text=pattern_text,
@@ -163,28 +161,147 @@ def _call_llm(pattern_text: str, count: int, workspace: str, project: str) -> Op
             project=project or "(unknown)",
             count=count,
         )
-        return _llm_call(_LABEL_SYSTEM_PROMPT, user)
+        data = _call_structured(
+            _LABEL_SYSTEM_PROMPT,
+            user,
+            required_keys=["intent_label"],
+        )
+        if isinstance(data, dict) and "intent_label" in data:
+            return data
+        return None
     except Exception:
         return None
 
 
-def _parse_llm_result(raw: str) -> Optional[dict]:
-    """Parse the LLM's JSON response."""
-    raw = raw.strip()
-    # Strip markdown fences if present.
-    if raw.startswith("```"):
-        # Find the first { and last }
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start != -1 and end != -1:
-            raw = raw[start:end + 1]
+# ---------------------------------------------------------------------------
+# LLM integration — batch labeling (one call for all patterns)
+# ---------------------------------------------------------------------------
+
+_BATCH_LABEL_SYSTEM = (
+    "You infer the WORKFLOW INTENT behind sequences of desktop actions. "
+    "Below you will receive MULTIPLE patterns. For EACH pattern, infer "
+    "the workflow intent. Return a JSON array of objects, one per pattern, "
+    "each with:\n"
+    "- \"index\": the pattern\'s integer index from the input\n"
+    "- \"intent_label\": short memorable name (2-5 words)\n"
+    "- \"intent_description\": one sentence explaining the workflow\n"
+    "- \"steps\": array of natural-language descriptions of each action\n"
+    "- \"confidence\": 'high', 'medium', or 'low'\n\n"
+    "Rules:\n"
+    "- Include EVERY pattern index in the output array — even if confidence is low\n"
+    "- Be specific to actual actions; don\'t invent steps\n"
+    "- If a pattern is unclear, set confidence to 'low' rather than skipping it\n"
+    "- Respond with ONLY the JSON array, no markdown, no explanation"
+)
+
+_BATCH_USER_TEMPLATE = """Below are {count} mined action patterns. For EACH pattern,
+infer the workflow intent and return it as described.
+
+{patterns_block}
+
+Return a JSON array of {count} objects, indexed by pattern number."""
+
+
+def label_intents_batch(
+    pattern_rows: list[dict],
+) -> list[WorkflowIntent]:
+    """Label MULTIPLE patterns in a single LLM call.
+
+    Sends all patterns in one batch request, which reduces N LLM calls
+    to 1. Patterns that fail LLM labeling fall back to deterministic
+    labels (same as ``label_intent()`` fallback).
+
+    Args:
+        pattern_rows: List of pattern dicts from ``get_mined_patterns()``.
+            Each dict must have ``sequence_json``, ``count``, and optionally
+            ``common_workspace`` and ``common_project``.
+
+    Returns:
+        A list of ``WorkflowIntent`` objects, one per input pattern.
+        Never raises — failed patterns get deterministic fallback labels.
+    """
+    if not pattern_rows:
+        return []
+
+    # Build the patterns block for the prompt.
+    blocks: list[str] = []
+    for i, p in enumerate(pattern_rows):
+        seq = json.loads(p["sequence_json"]) if isinstance(p["sequence_json"], str) else p["sequence_json"]
+        seq_str = _format_pattern([tuple(item) for item in seq])
+        ws = p.get("common_workspace", "") or "(unknown)"
+        proj = p.get("common_project", "") or "(unknown)"
+        cnt = p.get("count", 1)
+        blocks.append(
+            f"Pattern {i}:\n"
+            f"{seq_str}\n"
+            f"  Context: workspace={ws}, project={proj}, occurrences={cnt}\n"
+        )
+
+    patterns_block = "\n".join(blocks)
+
     try:
-        obj = json.loads(raw)
-        if "intent_label" in obj:
-            return obj
-    except (json.JSONDecodeError, ValueError):
-        pass
-    return None
+        from .services.llm import _call_structured
+
+        user = _BATCH_USER_TEMPLATE.format(
+            count=len(pattern_rows),
+            patterns_block=patterns_block,
+        )
+        data = _call_structured(_BATCH_LABEL_SYSTEM, user)
+
+        # Parse the batch response: should be a list of dicts with "index" + fields.
+        batch_results: dict[int, dict] = {}
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and "index" in item and "intent_label" in item:
+                    idx = int(item["index"])
+                    batch_results[idx] = item
+
+        # Build results: batch result if available, else single-call LLM, else fallback.
+        results: list[WorkflowIntent] = []
+        for i, p in enumerate(pattern_rows):
+            seq = json.loads(p["sequence_json"]) if isinstance(p["sequence_json"], str) else p["sequence_json"]
+            seq_tuples = [tuple(item) for item in seq]
+            cnt = p.get("count", 1)
+            ws = p.get("common_workspace", "") or ""
+            proj = p.get("common_project", "") or ""
+
+            if i in batch_results:
+                item = batch_results[i]
+                results.append(WorkflowIntent(
+                    pattern_seq=seq_tuples,
+                    pattern_count=cnt,
+                    pattern_workspace=ws,
+                    pattern_project=proj,
+                    intent_label=item.get("intent_label", _fallback_label(seq_tuples)),
+                    intent_description=item.get("intent_description", ""),
+                    steps=item.get("steps", _fallback_steps(seq_tuples)),
+                    confidence=item.get("confidence", "medium"),
+                    labeled_at=now_iso(),
+                ))
+            else:
+                # Pattern not in batch result — try individual LLM call as fallback.
+                single = label_intent(
+                    pattern_sequence=seq_tuples,
+                    pattern_count=cnt,
+                    workspace=ws,
+                    project=proj,
+                )
+                results.append(single)
+
+        return results
+
+    except Exception:
+        # Entire batch failed — fall back to individual labeling for each pattern.
+        return [
+            label_intent(
+                pattern_sequence=[tuple(item) for item in
+                    (json.loads(p["sequence_json"]) if isinstance(p["sequence_json"], str) else p["sequence_json"])],
+                pattern_count=p.get("count", 1),
+                workspace=p.get("common_workspace", "") or "",
+                project=p.get("common_project", "") or "",
+            )
+            for p in pattern_rows
+        ]
 
 
 # ---------------------------------------------------------------------------

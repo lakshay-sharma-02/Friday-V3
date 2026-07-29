@@ -465,3 +465,122 @@ def register_approved_proposal(
     result = registry.register(worker)
     update_proposed_worker_status(conn, proposal_id, "approved")
     return True
+
+
+def propose_from_gaps(conn) -> int:
+    """Create worker proposals from new open capability gaps.
+
+    Reads open capability gaps from the DB that don't already have a
+    corresponding pending proposal, then calls ``propose_worker()`` for
+    each one. This bridges the gap analyzer → worker proposal pipeline:
+    gaps discovered during analysis automatically get worker proposals
+    drafted, which are then auto-approved by ``auto_approve_proposals()``
+    in the same daemon cycle if they're deterministic PATH matches.
+
+    Returns the number of proposals created.
+    """
+    from ..db import get_capability_gaps, get_proposed_workers
+
+    try:
+        open_gaps = get_capability_gaps(conn, status="open")
+        if not open_gaps:
+            return 0
+
+        pending = get_proposed_workers(conn, status="pending")
+        pending_caps = {p.capability_gap for p in pending}
+
+        created = 0
+        for gap in open_gaps:
+            desc = gap.get("description", "").strip()
+            if not desc:
+                continue
+            # Check if a proposal already exists for this capability.
+            if desc in pending_caps:
+                continue
+            # Skip "no worker" generic descriptions — they're too vague.
+            if desc.startswith("Missing worker —"):
+                continue
+            # Strip composite keys (worker_id:::cap) — use only the cap part.
+            if ":::" in desc:
+                desc = desc.split(":::", 1)[1]
+
+            # Use the gap description as the capability to propose for.
+            reset_gap_tracking()
+            proposal_ids = propose_worker(
+                conn,
+                goal=f"Auto-detected: {desc}",
+                missing_capabilities=[desc],
+                task_id="",
+                graph_id="",
+            )
+            created += len(proposal_ids)
+
+        return created
+    except Exception:
+        return 0
+
+
+def auto_approve_proposals(conn, registry) -> int:
+    """Auto-approve pending worker proposals that meet safety criteria.
+
+    Uses the same validation as ``register_approved_proposal()`` but skips
+    proposals that require human review (LLM-generated manifests with low
+    confidence or overbroad claims).
+
+    Auto-approve criteria:
+      1. Status is ``pending``.
+      2. Manifest confidence is at least ``medium``.
+      3. All capabilities are from the closed vocabulary (enforced by
+         ``register_approved_proposal()``, which rejects invalid claims).
+      4. The proposal is NOT an LLM-generated fallback (Tier 2).
+         Only deterministic PATH-based proposals (Tier 1) are auto-approved.
+
+    Returns the number of proposals that were auto-approved.
+    """
+    # Only proposals with a tool on PATH (deterministic Tier 1) get auto-approved.
+    # LLM-generated proposals require manual review.
+    pending = get_proposed_workers(conn, status="pending")
+    if not pending:
+        return 0
+
+    approved_count = 0
+    for row in pending:
+        try:
+            manifest_data = json.loads(row.draft_manifest_json)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        # Criterion 2: confidence must be at least "medium".
+        confidence = (manifest_data.get("confidence") or "").strip().lower()
+        if confidence not in ("high", "medium"):
+            continue
+
+        # Criterion 4: only auto-approve deterministic PATH-based proposals.
+        # These have origin="generated" and confidence="medium" (set by
+        # draft_manifest's Tier 1 deterministic path).
+        # LLM-generated proposals (Tier 2) have varying confidence but
+        # require manual review — skip them here.
+        # We detect Tier 2 by checking if the requirements field references
+        # a tool found on PATH via _check_path_for_tool().
+        origin = (manifest_data.get("origin") or "").strip()
+        requirements = manifest_data.get("requirements", [])
+
+        is_deterministic = (
+            origin == "generated"
+            and len(requirements) >= 1
+            and any(_check_path_for_tool(r) for r in requirements)
+        )
+        if not is_deterministic:
+            continue
+
+        # Attempt to register. register_approved_proposal() handles
+        # vocabulary validation internally — if it fails (invalid caps,
+        # bad manifest), the proposal is marked rejected.
+        try:
+            success = register_approved_proposal(conn, row.id, registry)
+            if success:
+                approved_count += 1
+        except Exception:
+            continue
+
+    return approved_count

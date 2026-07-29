@@ -51,8 +51,13 @@ def db():
 
 
 class TestLevelTransitions:
-    def test_downgrade_auto_to_confirm(self):
-        assert _downgrade_one_level("auto") == "confirm"
+    """Test the four-tier escalation chain: auto → notify → confirm → double."""
+
+    def test_downgrade_auto_to_notify(self):
+        assert _downgrade_one_level("auto") == "notify"
+
+    def test_downgrade_notify_to_confirm(self):
+        assert _downgrade_one_level("notify") == "confirm"
 
     def test_downgrade_confirm_to_double(self):
         assert _downgrade_one_level("confirm") == "double"
@@ -63,8 +68,11 @@ class TestLevelTransitions:
     def test_upgrade_double_to_confirm(self):
         assert _upgrade_one_level("double") == "confirm"
 
-    def test_upgrade_confirm_to_auto(self):
-        assert _upgrade_one_level("confirm") == "auto"
+    def test_upgrade_confirm_to_notify(self):
+        assert _upgrade_one_level("confirm") == "notify"
+
+    def test_upgrade_notify_to_auto(self):
+        assert _upgrade_one_level("notify") == "auto"
 
     def test_upgrade_auto_stays_auto(self):
         assert _upgrade_one_level("auto") == "auto"
@@ -118,16 +126,18 @@ class TestActionPermission:
 
     def test_known_action_default(self, db):
         p = get_action_permission("workspace", db)
-        assert p.default_level == "confirm"
-        assert p.effective_level == "confirm"
+        # workspace is (REVERSIBLE, MEDIUM) → NOTIFY
+        assert p.default_level == "notify"
+        assert p.effective_level == "notify"
 
     def test_read_only_is_auto(self, db):
         p = get_action_permission("query", db)
         assert p.default_level == "auto"
 
-    def test_destructive_is_double(self, db):
+    def test_destructive_is_confirm(self, db):
         p = get_action_permission("closewindow", db)
-        assert p.default_level == "double"
+        # closewindow is (IRREVERSIBLE, NARROW) → CONFIRM
+        assert p.default_level == "confirm"
 
     def test_set_override_confirm_to_auto(self, db):
         set_override("workspace", "auto", conn=db)
@@ -146,7 +156,8 @@ class TestActionPermission:
         clear_override("workspace", conn=db)
         p = get_action_permission("workspace", db)
         assert p.override_level is None
-        assert p.effective_level == "confirm"
+        # workspace default is now NOTIFY (was CONFIRM)
+        assert p.effective_level == "notify"
 
     def test_invalid_level_raises(self, db):
         with pytest.raises(ValueError, match="must be one of"):
@@ -185,7 +196,8 @@ class TestConfidenceEscalation:
         record_action_outcome("workspace", success=False, conn=db)
         p = get_action_permission("workspace", db)
         assert p.auto_downgraded_level is None
-        assert p.effective_level == "confirm"
+        # workspace default is now NOTIFY (was CONFIRM)
+        assert p.effective_level == "notify"
         assert p.consecutive_failures == 1
 
     def test_threshold_failures_triggers_downgrade(self, db):
@@ -196,19 +208,20 @@ class TestConfidenceEscalation:
 
         p = get_action_permission("workspace", db)
         assert p.auto_downgraded_level is not None
-        assert p.effective_level == "double"  # confirm → double
+        # workspace starts at NOTIFY, downgrades to CONFIRM
+        assert p.effective_level == "confirm"
         # Counter should be reset after downgrade
         assert p.consecutive_failures == 0
 
-    def test_downgrade_from_auto_to_confirm(self, db):
-        """AUTO → CONFIRM after threshold failures."""
+    def test_downgrade_from_auto_to_notify(self, db):
+        """AUTO → NOTIFY after threshold failures."""
         at = AUTO_DOWNGRADE_THRESHOLD
         for _ in range(at):
             record_action_outcome("query", success=False, conn=db)
 
         p = get_action_permission("query", db)
-        assert p.auto_downgraded_level == "confirm"
-        assert p.effective_level == "confirm"
+        assert p.auto_downgraded_level == "notify"
+        assert p.effective_level == "notify"
 
     def test_success_resets_failure_counter(self, db):
         """A success should reset the consecutive failures counter."""
@@ -228,7 +241,7 @@ class TestConfidenceEscalation:
             record_action_outcome("query", success=False, conn=db)
 
         p = get_action_permission("query", db)
-        assert p.auto_downgraded_level == "confirm"
+        assert p.auto_downgraded_level == "notify"
 
         # Then succeed enough times to undo it
         ust = AUTO_UPGRADE_THRESHOLD

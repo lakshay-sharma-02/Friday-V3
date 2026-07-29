@@ -20,11 +20,9 @@ Design (mirrors synthesis.py):
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
-from ..services.llm import _call as llm_call
 from ..services.llm import _enabled as llm_enabled
 from .models import UnderstandingType
 
@@ -235,24 +233,17 @@ def _call_llm_for_subject(
         type_list=type_list,
     )
 
-    content = llm_call(_UNDERSTANDING_SYSTEM, user)
-    if not content:
+    from ..services.llm import _call_structured
+
+    data = _call_structured(
+        _UNDERSTANDING_SYSTEM,
+        user,
+        required_keys=["findings"],
+    )
+    if not isinstance(data, dict):
         return []
 
-    # Parse JSON
-    content = content.strip()
-    if content.startswith("```"):
-        content = content.split("```", 2)[1]
-        if content.startswith("json"):
-            content = content[4:]
-    content = content.strip().strip("`").strip()
-
-    try:
-        data = json.loads(content)
-    except (json.JSONDecodeError, ValueError):
-        return []
-
-    findings = data.get("findings", []) if isinstance(data, dict) else []
+    findings = data.get("findings", [])
     out: List[Candidate] = []
     all_ids = [k.id for k in idx.knowledge if k.id]
     seen_types: Set[str] = set()

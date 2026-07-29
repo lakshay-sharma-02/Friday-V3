@@ -39,20 +39,50 @@ def dispatch(task: RuntimeTask, worker: Optional[Worker]) -> ExecutionResult:
 
     A missing worker (should not happen — the scheduler already BLOCKED such
     tasks) yields a failed result rather than raising.
+
+    KILL SWITCH: checked BEFORE every dispatch. If active, the task is
+    rejected immediately without executing anything. Running processes are
+    NOT interrupted — this prevents NEW work from starting.
     """
+    # Emergency kill switch check — nuclear option, checked FIRST.
+    try:
+        from ..autonomy import is_kill_switch_active
+        if is_kill_switch_active():
+            return ExecutionResult(
+                success=False, stdout="", stderr="", exit_code=None,
+                duration_ms=0,
+                error="🛑 KILL SWITCH ACTIVE: all executor dispatch blocked. "
+                      "Run 'friday autonomy resume' to re-enable execution.",
+            )
+    except Exception:
+        pass
+
     if worker is None:
         return ExecutionResult(
-            success=False, stdout="", stderr="no worker resolved",
-            exit_code=None, duration_ms=0,
-            error=f"no worker for task {task.task_id}")
+            success=False, stdout="", stderr="", exit_code=None,
+            duration_ms=0,
+            error="Worker is None — cannot dispatch task.",
+        )
     t0 = time.monotonic()
     try:
         result = worker.execute(task)
     except Exception as e:  # worker blew up — record, do not retry
         dur = int((time.monotonic() - t0) * 1000)
+        # Wrap in structured FridayError envelope.
+        from ..errors import error_from_exception, FridayError, format_friday_error
+        if not isinstance(e, FridayError):
+            wrapped = error_from_exception(
+                e,
+                action="worker_execute",
+                target=getattr(task, "worker_id", ""),
+                recovery_hint="Check the worker's capabilities and payload.",
+            )
+            error_str = str(wrapped)
+        else:
+            error_str = format_friday_error(e)
         return ExecutionResult(
-            success=False, stdout="", stderr=str(e),
-            exit_code=None, duration_ms=dur, error=f"{type(e).__name__}: {e}")
+            success=False, stdout="", stderr=error_str,
+            exit_code=None, duration_ms=dur, error=error_str)
     result.duration_ms = int((time.monotonic() - t0) * 1000)
     # Verification: objective correctness, worker-owned. Always runs before
     # any review. Record outcome in metadata (provenance). The engine owns
@@ -60,8 +90,15 @@ def dispatch(task: RuntimeTask, worker: Optional[Worker]) -> ExecutionResult:
     try:
         vres = worker.verify(task, result)
     except Exception as e:  # verify must never break execution reporting
-        vres = VerificationResult(passed=False,
-                                  reason=f"verify raised: {type(e).__name__}: {e}")
+        from ..errors import error_from_exception, FridayError
+        if not isinstance(e, FridayError):
+            wrapped = error_from_exception(
+                e, action="worker_verify",
+                target=getattr(task, "worker_id", ""),
+            )
+            vres = VerificationResult(passed=False, reason=str(wrapped))
+        else:
+            vres = VerificationResult(passed=False, reason=str(e))
     result.metadata = {**result.metadata,
                        "verified": vres.passed,
                        "verify_reason": vres.reason}
