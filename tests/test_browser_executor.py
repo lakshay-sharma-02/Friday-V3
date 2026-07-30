@@ -100,7 +100,8 @@ class TestErrorHandling:
         """No browser running — should hit gate (title is AUTO now) and then
         fail on connectivity, not crash."""
         exe = BrowserExecutor()
-        result = exe.execute(_make_task('{"action": "title"}'))
+        with patch.object(exe, '_ensure_connected', return_value=False):
+            result = exe.execute(_make_task('{"action": "title"}'))
         assert result.success is False
         assert any(msg in result.error.lower() for msg in
                    ("connect", "browser", "could not connect", "--remote-debugging-port"))
@@ -114,7 +115,8 @@ class TestConfirmGateIntegration:
     def test_read_bypasses_gate(self):
         """title is AUTO level — should not prompt."""
         exe = BrowserExecutor()
-        result = exe.execute(_make_task('{"action": "title"}'))
+        with patch.object(exe, '_ensure_connected', return_value=False):
+            result = exe.execute(_make_task('{"action": "title"}'))
         assert result.success is False
         # Must fail on connectivity, not "cancelled by user"
         assert "user" not in result.error.lower()

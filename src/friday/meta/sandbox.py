@@ -55,6 +55,23 @@ class Sandbox:
     def base_commit(self) -> Optional[str]:
         return self._base_commit
 
+    # ── sandbox env ──────────────────────────────────────────────────────
+
+    def sandbox_env(self) -> dict:
+        """Return environment with PYTHONPATH pointing at the sandbox src.
+
+        Ensures subprocesses (tests, code-generation tools) resolve imports
+        from the sandbox copy of Friday, not the live installation.
+        """
+        env = os.environ.copy()
+        if self._sandbox_path:
+            sp_src = str(Path(self._sandbox_path) / "src")
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{sp_src}{os.pathsep}{existing}" if existing else sp_src
+            )
+        return env
+
     def create(self) -> str:
         """Create the sandbox. Returns the sandbox root path.
 
@@ -114,16 +131,36 @@ class Sandbox:
         # Record the base commit so we can snapshot/rollback.
         self._base_commit = self._git("rev-parse", "HEAD")
 
-        # Install project deps so the regression suite can run.
+        # Install project runtime deps so the regression suite can run.
+        # We do NOT `pip install -e .` — that would overwrite the live `friday`
+        # CLI entry point (the sandbox version).  Instead we install only the
+        # runtime dependencies (already satisfied globally since they are the
+        # same project), then rely on PYTHONPATH to point at the sandbox source.
+        # This way the live CLI stays intact.
+        _deps_ok = False
         try:
+            # Read pyproject.toml for runtime deps and install them.
+            import tomllib
+            pp = Path(sandbox_path) / "pyproject.toml"
+            if pp.exists():
+                pyproject = tomllib.loads(pp.read_text())
+                deps = pyproject.get("project", {}).get("dependencies", [])
+                if deps:
+                    subprocess.run(
+                        ["pip", "install", "--break-system-packages"] + deps,
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    _deps_ok = True
+        except Exception:
+            pass
+
+        if not _deps_ok:
+            # Fallback: install any deps that may be missing quietly.
             subprocess.run(
-                ["pip", "install", "-e", "."],
-                cwd=sandbox_path, capture_output=True, text=True, timeout=120,
+                ["pip", "install", "--break-system-packages",
+                 "requests"],
+                capture_output=True, text=True, timeout=60,
             )
-        except subprocess.CalledProcessError as e:
-            print(f"  warning: pip install failed in sandbox: {e.stderr[:200]}")
-        except Exception as e:
-            print(f"  warning: pip install error: {e}")
 
         return sandbox_path
 
@@ -170,15 +207,16 @@ class Sandbox:
         finally:
             os.unlink(patch_file)
 
-    def run_tests(self, test_args: list[str] | None = None) -> dict:
-        """Run the test suite inside the sandbox. Returns {passed, output, duration_ms}."""
-        if not self._sandbox_path:
-            raise RuntimeError("Sandbox not created yet")
-        args = test_args or ["python", "-m", "pytest", "tests/", "-x", "--tb=short"]
-        t0 = datetime.now(timezone.utc)
+	    def run_tests(self, test_args: list[str] | None = None) -> dict:
+	        """Run the test suite inside the sandbox. Returns {passed, output, duration_ms}."""
+	        if not self._sandbox_path:
+	            raise RuntimeError("Sandbox not created yet")
+	        args = test_args or ["python", "-m", "pytest", "tests/", "-x", "--tb=short"]
+	        env = self.sandbox_env()
+	        t0 = datetime.now(timezone.utc)
         try:
             result = subprocess.run(
-                args, cwd=self._sandbox_path, capture_output=True,
+                args, cwd=self._sandbox_path, env=env, capture_output=True,
                 text=True, timeout=120,
             )
         except subprocess.TimeoutExpired as e:
@@ -219,14 +257,22 @@ class Sandbox:
         for dep in deps:
             try:
                 result = subprocess.run(
-                    ["pip", "install", dep],
+                    ["pip", "install", "--break-system-packages", dep],
                     cwd=self._sandbox_path, capture_output=True, text=True, timeout=120,
                 )
                 if result.returncode == 0:
                     output_parts.append(f"  ✓ {dep}")
                 else:
-                    failed.append(dep)
-                    output_parts.append(f"  ✗ {dep}: {result.stderr[:100]}")
+                    # Retry without --break-system-packages as fallback
+                    result2 = subprocess.run(
+                        ["pip", "install", dep],
+                        cwd=self._sandbox_path, capture_output=True, text=True, timeout=120,
+                    )
+                    if result2.returncode == 0:
+                        output_parts.append(f"  ✓ {dep}")
+                    else:
+                        failed.append(dep)
+                        output_parts.append(f"  ✗ {dep}: {result.stderr[:100]}")
             except Exception as e:
                 failed.append(dep)
                 output_parts.append(f"  ✗ {dep}: {e}")
@@ -378,6 +424,112 @@ class Sandbox:
                 result["config_changes"].append(entry)
 
         return result
+
+    def run_claude_code(self, prompt: str, allowed_tools: list[str] | None = None,
+                         model: str = "oc/deepseek-v4-flash-free") -> dict:
+        """Run Claude Code inside the sandbox to implement a capability.
+
+        Invokes ``claude --print --allowedTools ... -p "..."`` inside the sandbox
+        directory. CC reads Friday's source code, creates/modifies files, runs
+        tests, and iterates autonomously.
+
+        Args:
+            prompt: The capability request + context for CC.
+            allowed_tools: Tools CC is allowed to use
+                           (default: Write, Read, Bash, Edit).
+            model: Model to use (default: oc/deepseek-v4-flash-free).
+
+        Returns:
+            {success, output, duration_ms, files_changed}
+        """
+        if not self._sandbox_path:
+            return {
+                "success": False,
+                "output": "Sandbox not created",
+                "duration_ms": 0,
+                "files_changed": 0,
+            }
+
+        import shutil
+        if not shutil.which("claude"):
+            return {
+                "success": False,
+                "output": "Claude Code CLI not found on PATH",
+                "duration_ms": 0,
+                "files_changed": 0,
+            }
+
+        tools = allowed_tools or ["Write", "Read", "Bash", "Edit"]
+        tools_arg = ",".join(tools)
+
+        # Build the claude command.
+        cmd = [
+            "claude",
+            "--print",  # headless mode, no interactive TUI
+            "--model", model,
+            "--allowedTools", tools_arg,
+            "-p", prompt,
+        ]
+
+        t0 = datetime.now(timezone.utc)
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self._sandbox_path,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 min default for CC
+            )
+        except subprocess.TimeoutExpired as e:
+            dur = 300000
+            return {
+                "success": False,
+                "output": f"TIMEOUT (300s)\n{e.output or ''}",
+                "duration_ms": dur,
+                "files_changed": 0,
+            }
+        except FileNotFoundError:
+            return {
+                "success": False,
+                "output": "Claude Code CLI binary not found",
+                "duration_ms": 0,
+                "files_changed": 0,
+            }
+
+        dur = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
+        success = result.returncode == 0
+
+        # Count files changed via git diff --stat.
+        files_changed = 0
+        diff_stat = subprocess.run(
+            ["git", "diff", "--stat"],
+            cwd=self._sandbox_path, capture_output=True, text=True, timeout=15,
+        )
+        # Count files in the diff stat (lines like "src/friday/foo.py | 10 ++++++++-")
+        if diff_stat.returncode == 0:
+            for line in diff_stat.stdout.splitlines():
+                line = line.strip()
+                if line and "|" in line and not line.startswith(" "):
+                    files_changed += 1
+
+        # Also count untracked/new files via git status.
+        status_out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=self._sandbox_path, capture_output=True, text=True, timeout=15,
+        )
+        if status_out.returncode == 0:
+            for line in status_out.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("??") or line.startswith("A "):
+                    files_changed += 1
+
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        return {
+            "success": success,
+            "output": output,
+            "duration_ms": dur,
+            "files_changed": files_changed,
+        }
 
     def capture_diff(self) -> str:
         """Capture the diff between the sandbox and base, return it as text.

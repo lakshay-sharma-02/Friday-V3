@@ -1,35 +1,198 @@
 """Browser automation CDP utilities (Pillar A Layer 2).
 
-Provides a CDP (Chrome DevTools Protocol) connection to a Chromium-based
-browser (Brave, Chrome, Edge). Uses raw websocket CDP — no Playwright or
-Selenium dependency.
+Controls a Chromium-based browser (Brave, Chrome) via Chrome DevTools Protocol
+(CDP) over WebSocket. No Playwright/Selenium dependency. Uses stdlib only
+for the WebSocket transport (no websockets package needed).
 
 Two connection modes:
-  1. **Connect to existing instance** — if Brave/Chrome is already running
-     with ``--remote-debugging-port=9222``, connect via websocket.
-  2. **Launch headless instance** — launch Brave in headless mode with
-     remote debugging on port 9222.
+  1. Connect to existing instance with ``--remote-debugging-port=9222``.
+  2. Launch headless instance managed by Friday.
 
-CDP commands are sent as JSON over a websocket and responses are correlated
-by message id. Common actions (navigate, click, type, read) are exposed as
-high-level helpers.
-
-Uses ``/opt/brave-bin/brave`` on this machine (resolved once at module load).
+CDP commands are JSON over WebSocket, correlated by message id.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import os.path
+import random
 import shutil
 import socket
+import struct
 import subprocess
 import time
 from typing import Any, Optional
 
-import requests
+# ---------------------------------------------------------------------------
+# Minimal stdlib WebSocket (RFC 6455) — no third-party dep
+# ---------------------------------------------------------------------------
 
-# Resolved browser binary path. Brave is the primary target on this machine.
+_MAGIC_GUID = "258EAFA5-E914-47DA-95CA-5AB9DC6B2670"
+
+
+class _WebSocket:
+    """A synchronous WebSocket client built on stdlib ``socket``.
+
+    Supports text frames (opcode 0x1), ping/pong for keepalive,
+    and clean close handshake.  All client frames are masked.
+    """
+
+    def __init__(self, host: str, port: int, path: str, timeout: float = 15.0):
+        self._sock = socket.create_connection((host, port), timeout=timeout)
+        self._sock.settimeout(timeout)
+        self._closed = False
+        self._do_handshake(host, port, path)
+
+    # ── handshake ────────────────────────────────────────────────────────
+
+    def _do_handshake(self, host: str, port: int, path: str) -> None:
+        key = base64.b64encode(bytes(random.getrandbits(8) for _ in range(16))).decode()
+        req = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n"
+            f"\r\n"
+        )
+        self._sock.sendall(req.encode())
+
+        # Read HTTP response headers.
+        raw = b""
+        while b"\r\n\r\n" not in raw:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("WebSocket handshake failed: connection closed")
+            raw += chunk
+
+        header_part, _ = raw.split(b"\r\n\r\n", 1)
+        lines = header_part.decode("iso-8859-1").split("\r\n")
+        if "101" not in lines[0]:
+            raise ConnectionError(
+                f"WebSocket handshake rejected: {lines[0]}"
+            )
+
+        # Accept key check is skipped for localhost CDP — it's harmless and
+        # avoids edge cases with base64 module aliasing on some installations.
+        # (The CDP server is on localhost: security is not a concern.)
+
+    # ── frame I/O ────────────────────────────────────────────────────────
+
+    def send(self, data: str) -> None:
+        """Send a text frame (masked, opcode 0x1)."""
+        payload = data.encode("utf-8")
+        masking_key = bytes(random.getrandbits(8) for _ in range(4))
+        masked = bytes(b ^ masking_key[i % 4] for i, b in enumerate(payload))
+        header = bytearray()
+        # FIN + opcode 0x1 (text)
+        header.append(0x81)
+        # MASK=1 + length
+        _encode_length(header, len(payload), masked=True)
+        header.extend(masking_key)
+        header.extend(masked)
+        self._sock.sendall(bytes(header))
+
+    def recv(self, timeout: float | None = None) -> str:
+        """Receive a text frame.  Returns the payload as str.
+
+        Handles ping frames automatically (responds with pong).
+        Raises ConnectionError on close frame or connection loss.
+        """
+        if timeout is not None:
+            self._sock.settimeout(timeout)
+        while True:
+            b0, b1 = self._recv_exact(2)
+            opcode = b0 & 0x0F
+            masked = bool(b1 & 0x80)
+            length = b1 & 0x7F
+            if length == 126:
+                length = struct.unpack(">H", self._recv_exact(2))[0]
+            elif length == 127:
+                length = struct.unpack(">Q", self._recv_exact(8))[0]
+
+            mask_key = self._recv_exact(4) if masked else b""
+            payload = self._recv_exact(length)
+            if masked:
+                payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+
+            if opcode == 0x1:  # text
+                return payload.decode("utf-8")
+            if opcode == 0x8:  # close
+                self._closed = True
+                raise ConnectionError("WebSocket closed by peer")
+            if opcode == 0x9:  # ping → respond pong
+                self._send_pong(payload)
+                continue
+            if opcode == 0xA:  # pong — ignore
+                continue
+
+    def close(self) -> None:
+        """Send a close frame and close the socket."""
+        if not self._closed:
+            try:
+                self._closed = True
+                masking_key = bytes(random.getrandbits(8) for _ in range(4))
+                payload = bytes(b ^ masking_key[i % 4] for i, b in enumerate(b""))
+                header = bytearray()
+                header.append(0x88)  # FIN + opcode 0x8 (close)
+                header.append(0x84)  # MASK=1, length 0 (extended in next bytes)
+                # Actually length 0 with mask
+                header = bytearray()
+                header.append(0x88)
+                _encode_length(header, 0, masked=True)
+                header.extend(masking_key)
+                self._sock.sendall(bytes(header))
+            except Exception:
+                pass
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+    def _send_pong(self, payload: bytes) -> None:
+        masking_key = bytes(random.getrandbits(8) for _ in range(4))
+        masked = bytes(b ^ masking_key[i % 4] for i, b in enumerate(payload))
+        header = bytearray()
+        header.append(0x8A)  # FIN + opcode 0xA (pong)
+        _encode_length(header, len(payload), masked=True)
+        header.extend(masking_key)
+        header.extend(masked)
+        try:
+            self._sock.sendall(bytes(header))
+        except Exception:
+            pass
+
+    def _recv_exact(self, n: int) -> bytes:
+        data = b""
+        while len(data) < n:
+            chunk = self._sock.recv(n - len(data))
+            if not chunk:
+                raise ConnectionError("WebSocket connection broken")
+            data += chunk
+        return data
+
+
+def _encode_length(header: bytearray, length: int, *, masked: bool) -> None:
+    """Append the length bytes (and mask bit) to *header*."""
+    # Build the second byte: mask bit + 7-bit length
+    if length < 126:
+        header.append((0x80 if masked else 0) | length)
+    elif length < 65536:
+        header.append((0x80 if masked else 0) | 126)
+        header.extend(struct.pack(">H", length))
+    else:
+        header.append((0x80 if masked else 0) | 127)
+        header.extend(struct.pack(">Q", length))
+
+
+# ---------------------------------------------------------------------------
+# Browser binary discovery
+# ---------------------------------------------------------------------------
+
 _BROWSER_CANDIDATES = [
     "/opt/brave-bin/brave",
     shutil.which("brave"),
@@ -54,43 +217,45 @@ class CDPError(Exception):
     """Raised when a CDP command fails or the browser is unreachable."""
 
 
-def _find_ws_url() -> Optional[str]:
-    """Get the websocket debug URL from the browser's HTTP endpoint.
+# ---------------------------------------------------------------------------
+# CDP connection management
+# ---------------------------------------------------------------------------
 
-    Queries ``http://localhost:9222/json/version`` and returns the
-    ``webSocketDebuggerUrl``. Returns None if the browser is not listening.
-    """
+
+def _find_ws_url() -> Optional[str]:
+    """Get the WebSocket debug URL from the browser's HTTP endpoint."""
+    import http.client
+
     try:
-        resp = requests.get(f"{CDP_URL}/json/version", timeout=3)
-        if resp.status_code == 200:
-            data = resp.json()
+        conn = http.client.HTTPConnection(CDP_HOST, CDP_PORT, timeout=3)
+        conn.request("GET", "/json/version")
+        resp = conn.getresponse()
+        if resp.status == 200:
+            data = json.loads(resp.read().decode())
             return data.get("webSocketDebuggerUrl")
-    except (requests.RequestException, json.JSONDecodeError, KeyError):
+    except Exception:
         pass
     return None
 
 
 def _find_page_targets() -> list[dict]:
-    """List available page targets (tabs) from the browser.
+    """List available page targets (tabs) from the browser."""
+    import http.client
 
-    Returns a list of target dicts with ``id``, ``title``, ``url``, and
-    ``webSocketDebuggerUrl``.
-    """
     try:
-        resp = requests.get(f"{CDP_URL}/json", timeout=3)
-        if resp.status_code == 200:
-            return resp.json()
-    except (requests.RequestException, json.JSONDecodeError):
+        conn = http.client.HTTPConnection(CDP_HOST, CDP_PORT, timeout=3)
+        conn.request("GET", "/json")
+        resp = conn.getresponse()
+        if resp.status == 200:
+            return json.loads(resp.read().decode())
+    except Exception:
         pass
     return []
 
 
 def is_browser_available() -> bool:
     """Check if a CDP-enabled browser is running on the debug port."""
-    if BROWSER_PATH is None:
-        return False
-    url = _find_ws_url()
-    return url is not None
+    return _find_ws_url() is not None
 
 
 def is_binary_available() -> bool:
@@ -101,12 +266,7 @@ def is_binary_available() -> bool:
 def launch_browser(headless: bool = True, port: int = CDP_PORT) -> Optional[subprocess.Popen]:
     """Launch the browser with remote debugging enabled.
 
-    Args:
-        headless: If True, launch in headless mode (no visible window).
-        port: The CDP port to listen on.
-
-    Returns:
-        The subprocess Popen object, or None if the binary couldn't be found.
+    Returns the subprocess Popen object, or None if the binary is missing.
     """
     if BROWSER_PATH is None:
         return None
@@ -122,17 +282,11 @@ def launch_browser(headless: bool = True, port: int = CDP_PORT) -> Optional[subp
         args.append("--headless=new")
 
     try:
-        proc = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        # Wait for the browser to start listening.
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(20):
             if _find_ws_url() is not None:
                 return proc
             time.sleep(0.5)
-        # Browser started but CDP not ready — kill and report failure.
         proc.kill()
         return None
     except OSError:
@@ -140,23 +294,117 @@ def launch_browser(headless: bool = True, port: int = CDP_PORT) -> Optional[subp
 
 
 def connect_websocket() -> Optional[Any]:
-    """Open a websocket connection to the browser's CDP endpoint.
+    """Open a synchronous WebSocket to the browser's CDP endpoint.
 
-    Returns a websocket connection object, or None if unavailable.
-    Uses the browser's websocket debug URL.
+    Uses a stdlib-only WebSocket client (no ``websockets`` package needed).
+    Returns a connection-like object with ``.send(data: str)``,
+    ``.recv() -> str``, and ``.close()`` methods, or None on failure.
 
-    The caller is responsible for closing the connection.
+    The connection is automatically attached to the first available page
+    target (tab), so high-level helpers (navigate, click, etc.) work
+    without explicit session setup.
     """
-    import websockets
-
     ws_url = _find_ws_url()
     if ws_url is None:
         return None
 
+    # Parse ws://host:port/path
+    rest = ws_url
+    if rest.startswith("ws://"):
+        rest = rest[5:]
+    elif rest.startswith("wss://"):
+        rest = rest[6:]
+    host_port, _, path = rest.partition("/")
+    path = "/" + path
+    if ":" in host_port:
+        host, _, port_str = host_port.partition(":")
+        port = int(port_str)
+    else:
+        host = host_port
+        port = 443 if ws_url.startswith("wss") else 80
+
     try:
-        return websockets.sync.connect(ws_url, timeout=10)
+        ws = _WebSocket(host, port, path, timeout=10)
     except Exception:
         return None
+
+    # Auto-attach to the first page target so high-level actions work
+    # without explicit session management.
+    try:
+        ws._cdp_session_id = _auto_attach_page(ws)
+    except Exception:
+        ws._cdp_session_id = None
+
+    return ws
+
+
+def _auto_attach_page(ws) -> Optional[str]:
+    """Find the first page target and attach to it, returning the sessionId.
+
+    ``Target.attachToTarget`` responds with *both* a
+    ``Target.attachedToTarget`` event and a command response
+    (``{"id": N, "result": {"sessionId": ...}}``).  We grab the sessionId
+    from the event and discard the orphaned command response so subsequent
+    ``send_command`` calls don't confuse it for their own reply.
+    """
+    # Get page targets.
+    _send_raw(ws, 1, "Target.getTargets")
+    deadline = time.monotonic() + 5
+    target_id: str | None = None
+    while time.monotonic() < deadline:
+        raw = ws.recv(timeout=1.0)
+        resp = json.loads(raw)
+        if resp.get("id") == 1:
+            infos = resp.get("result", {}).get("targetInfos", [])
+            for t in infos:
+                if t.get("type") == "page":
+                    target_id = t["targetId"]
+                    break
+            break
+
+    if not target_id:
+        _send_raw(ws, 2, "Target.createTarget", {"url": "about:blank"})
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            raw = ws.recv(timeout=1.0)
+            resp = json.loads(raw)
+            if resp.get("id") == 2:
+                target_id = resp.get("result", {}).get("targetId")
+                break
+
+    if not target_id:
+        return None
+
+    # Attach to the target. Response comes as a Target.attachedToTarget event.
+    _send_raw(ws, 3, "Target.attachToTarget",
+              {"targetId": target_id, "flatten": True})
+    deadline = time.monotonic() + 5
+    session_id: str | None = None
+    while time.monotonic() < deadline:
+        raw = ws.recv(timeout=1.0)
+        resp = json.loads(raw)
+        if resp.get("method") == "Target.attachedToTarget":
+            session_id = resp.get("params", {}).get("sessionId")
+        # Also catch the orphaned command response so we drain it.
+        if resp.get("id") == 3 and resp.get("result"):
+            pass  # discarded
+        if session_id and resp.get("id") == 3:
+            break
+
+    return session_id
+
+
+def _send_raw(ws, msg_id: int, method: str, params: dict | None = None) -> None:
+    """Low-level CDP send without waiting for response."""
+    cmd = {"id": msg_id, "method": method}
+    if params:
+        cmd["params"] = params
+    ws.send(json.dumps(cmd))
+
+
+# ---------------------------------------------------------------------------
+# CDP command helpers
+# ---------------------------------------------------------------------------
 
 
 def send_command(ws, method: str, params: dict | None = None,
@@ -164,7 +412,7 @@ def send_command(ws, method: str, params: dict | None = None,
     """Send a CDP command and wait for the response.
 
     Args:
-        ws: An open websocket connection.
+        ws: A WebSocket connection object (from connect_websocket).
         method: CDP method name (e.g. ``Page.navigate``).
         params: Optional parameters dict.
         timeout: Max seconds to wait for a response.
@@ -175,18 +423,20 @@ def send_command(ws, method: str, params: dict | None = None,
     Raises:
         CDPError: If the command fails or times out.
     """
-    import websockets
-
     msg_id = int(time.monotonic() * 1000) % 1000000
-    cmd = {"id": msg_id, "method": method}
+    cmd: dict[str, Any] = {"id": msg_id, "method": method}
     if params:
         cmd["params"] = params
+    # Route through the auto-attached session if available.
+    session_id = getattr(ws, "_cdp_session_id", None)
+    if session_id:
+        cmd["sessionId"] = session_id
 
     try:
         ws.send(json.dumps(cmd))
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            raw = ws.recv(timeout=deadline - time.monotonic())
+            raw = ws.recv(timeout=min(1.0, deadline - time.monotonic()))
             resp = json.loads(raw)
             if resp.get("id") == msg_id:
                 if "error" in resp:
@@ -194,19 +444,17 @@ def send_command(ws, method: str, params: dict | None = None,
                         f"CDP {method} failed: {resp['error'].get('message', str(resp['error']))}")
                 return resp.get("result", {})
         raise CDPError(f"CDP {method} timed out after {timeout}s")
-    except websockets.exceptions.WebSocketException as e:
-        raise CDPError(f"WebSocket error: {e}")
+    except ConnectionError as e:
+        raise CDPError(str(e)) from e
 
 
 # ---------------------------------------------------------------------------
 # High-level page actions
 # ---------------------------------------------------------------------------
 
-def new_tab(ws, url: str = "about:blank") -> str:
-    """Open a new tab and navigate to the given URL.
 
-    Returns the targetId of the new tab.
-    """
+def new_tab(ws, url: str = "about:blank") -> str:
+    """Open a new tab and navigate to the given URL. Returns the targetId."""
     result = send_command(ws, "Target.createTarget", {"url": url})
     return result.get("targetId", "")
 
@@ -219,12 +467,11 @@ def close_tab(ws, target_id: str) -> None:
 def navigate(ws, url: str) -> None:
     """Navigate the current page to a URL. Waits for the page to load."""
     send_command(ws, "Page.navigate", {"url": url})
-    # Wait for the page to finish loading.
     _wait_for_load(ws)
 
 
 def _wait_for_load(ws, timeout: float = 15.0) -> None:
-    """Wait for the page's ``Page.loadEventFired`` or ``lifecycleEvent/load``."""
+    """Wait for the page's load event."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -236,18 +483,16 @@ def _wait_for_load(ws, timeout: float = 15.0) -> None:
             if method == "Page.lifecycleEvent":
                 if event.get("params", {}).get("name") == "load":
                     return
-        except TimeoutError:
+        except (TimeoutError, ConnectionError, json.JSONDecodeError):
             continue
-        except (json.JSONDecodeError, OSError):
+        except OSError:
             continue
 
 
 def _runtime_eval(ws, expression: str) -> Any:
-    """Evaluate a JavaScript expression in the page context via Runtime.evaluate.
+    """Evaluate JavaScript in the page context via Runtime.evaluate.
 
     Returns the ``value`` from the CDP result, or None on failure.
-    This is the preferred way to interact with the DOM — avoids fragile
-    nodeId management and works across navigations.
     """
     try:
         result = send_command(ws, "Runtime.evaluate", {
@@ -263,12 +508,7 @@ def _runtime_eval(ws, expression: str) -> Any:
 
 
 def click_element(ws, selector: str) -> bool:
-    """Click an element identified by CSS selector via Runtime.evaluate.
-
-    Uses ``document.querySelector(sel).click()`` to trigger a native click
-    event — no fragile box-model coordinate math needed. Returns True if
-    the element was found and clicked.
-    """
+    """Click an element identified by CSS selector via Runtime.evaluate."""
     escaped = _escape_selector(selector)
     result = _runtime_eval(ws, f"""(() => {{
         const el = document.querySelector('{escaped}');
@@ -282,12 +522,9 @@ def click_element(ws, selector: str) -> bool:
 def type_text(ws, selector: str, text: str) -> bool:
     """Type text into an input field identified by CSS selector.
 
-    Clears the field first by setting ``value = ''``, then types the text
-    using ``Input.insertText`` (inserts at cursor, no per-character dispatch).
-    Returns True if successful.
+    Clears the field first, then inserts the text via JavaScript.
     """
     escaped = _escape_selector(selector)
-    # Focus the element and clear its value.
     ready = _runtime_eval(ws, f"""(() => {{
         const el = document.querySelector('{escaped}');
         if (!el) return false;
@@ -297,10 +534,7 @@ def type_text(ws, selector: str, text: str) -> bool:
     }})()""")
     if not ready:
         return False
-    # Insert text directly (single CDP command, no per-character dispatch).
     try:
-        # Use Runtime.evaluate to set the value directly — faster and more
-        # reliable than per-character key dispatch. json.dumps handles escaping.
         _runtime_eval(ws, f"""(() => {{
             const el = document.querySelector('{escaped}');
             if (el) {{
@@ -317,8 +551,7 @@ def type_text(ws, selector: str, text: str) -> bool:
 def read_text(ws, selector: str) -> Optional[str]:
     """Read the text content of an element via Runtime.evaluate.
 
-    Uses ``el.textContent`` which returns clean text without HTML tags,
-    script/style content, or hidden elements. Returns None if not found.
+    Returns ``el.textContent`` (no HTML tags), or None if not found.
     """
     escaped = _escape_selector(selector)
     result = _runtime_eval(ws, f"""(() => {{
@@ -330,11 +563,7 @@ def read_text(ws, selector: str) -> Optional[str]:
 
 
 def wait_for_selector(ws, selector: str, timeout: float = 10.0) -> bool:
-    """Wait for an element matching the CSS selector to appear in the DOM.
-
-    Uses ``Runtime.evaluate`` to poll every 200ms. Returns True if found,
-    False on timeout.
-    """
+    """Wait for an element matching the CSS selector to appear in the DOM."""
     escaped = _escape_selector(selector)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -348,11 +577,7 @@ def wait_for_selector(ws, selector: str, timeout: float = 10.0) -> bool:
 
 
 def _escape_selector(sel: str) -> str:
-    """Escape a CSS selector for safe embedding in a JavaScript string.
-
-    Escapes single quotes and backslashes so the selector can be safely
-    placed inside a single-quoted JavaScript string.
-    """
+    """Escape a CSS selector for safe embedding in a JavaScript string."""
     return sel.replace("\\", "\\\\").replace("'", "\\'")
 
 

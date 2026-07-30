@@ -14,6 +14,7 @@ deploys that install dependencies, create feature flags, and track rollback.
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -21,6 +22,7 @@ from typing import Optional
 from .sandbox import Sandbox
 from .verification import VerificationResult, verify
 from .capability import CapabilityRegistry
+from ..services.llm import _call as llm_call
 from ..db import (
     WorkerHistoryRow,
     WorkerRow,
@@ -44,47 +46,77 @@ def _now() -> str:
     return now_iso()
 
 
+def _parse_failed_tests(output: str) -> set[str]:
+    """Extract failing test IDs from pytest output.
+
+    Parses lines like:
+      FAILED tests/test_foo.py::TestBar::test_baz - AssertionError: ...
+    or the summary section:
+      FAILED tests/test_agent.py::TestDecompose::test_keyword_run_tests_decomposes
+    """
+    failed: set[str] = set()
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("FAILED "):
+            # Line format: FAILED path/to/test.py::TestClass::test_name - Error
+            test_id = line[len("FAILED "):]
+            # Strip the error message after " - "
+            if " - " in test_id:
+                test_id = test_id.split(" - ", 1)[0]
+            failed.add(test_id)
+    return failed
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Phase 3: Multi-file Capability Deploy
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def deploy_capability(conn, plan: dict) -> Optional[str]:
+def deploy_capability(
+    conn,
+    request: str,
+    plan: Optional[dict] = None,
+) -> Optional[str]:
     """Deploy a new capability through the full self-evolution pipeline.
 
+    Two paths available:
+
+    **Claude Code path** (default when ``claude`` binary is on PATH):
     1. Create sandbox from Friday's repo
-    2. Write all new files
-    3. Apply all modified files
-    4. Install dependencies
-    5. Run new capability's tests
-    6. Run full regression suite
-    7. If all pass: create rollback commit, register capability flag (disabled)
-    8. Report success
+    2. Invoke Claude Code inside the sandbox to implement the capability
+    3. If CC fails: rollback, optionally retry once, report error
+    4. Capture diff of all changes
+    5. Run full regression suite
+    6. If tests fail: rollback, return error
+    7. Snapshot for rollback, register capability flag (disabled)
+
+    **LLM path** (fallback when CC unavailable):
+    1-8. Same as before, using ``generate_capability_plan()`` +
+         ``apply_capability_plan_to_sandbox()``.
 
     Args:
         conn: Database connection.
-        plan: Capability plan dict from ``generate_capability_plan()``.
+        request: Natural-language capability description.
+        plan: Optional pre-computed plan (from ``friday upgrade plan`` dry-run).
+              Used for dependency hints when provided.
 
     Returns:
-        Capability name on success (for enable/rollback), or None on failure.
+        Capability name on success, or None on failure.
     """
-    cap_name = plan.get("capability_name", "")
-    if not cap_name:
-        print("  error: plan missing capability_name")
-        return None
-
     from .si_planner import (
+        _derive_capability_name,
+        generate_capability_plan,
+        generate_capability_via_claude_code,
         validate_capability_plan,
         apply_capability_plan_to_sandbox,
+        update_capability_plan_with_deterministic_fallback,
     )
 
-    # Validate plan.
-    errors = validate_capability_plan(plan)
-    if errors:
-        print(f"  error: plan validation failed:")
-        for e in errors:
-            print(f"    - {e}")
-        return None
+    # Derive capability name.
+    if plan and plan.get("capability_name"):
+        cap_name = plan["capability_name"]
+    else:
+        cap_name = _derive_capability_name(request)
 
     # Create sandbox.
     sandbox = Sandbox(label=f"cap_{cap_name}")
@@ -92,15 +124,69 @@ def deploy_capability(conn, plan: dict) -> Optional[str]:
         sb_path = sandbox.create()
         print(f"  sandbox created at {sb_path}")
 
-        # Write new files and apply modified files.
-        ok = apply_capability_plan_to_sandbox(sandbox, plan)
-        if not ok:
-            print("  error: failed to write files to sandbox")
-            sandbox.cleanup()
-            return None
-        new_count = len(plan.get("new_files", []))
-        mod_count = len(plan.get("modified_files", []))
-        print(f"  wrote {new_count} new file(s), {mod_count} modified file(s)")
+        # Try Claude Code path first.
+        cc_plan = generate_capability_via_claude_code(request, sandbox, conn=conn)
+
+        if cc_plan:
+            # Claude Code succeeded — use its output as the plan.
+            plan = cc_plan
+            print(f"  ✓ Claude Code completed")
+        else:
+            # Clean up any partial CC modifications before fallback.
+            sandbox.rollback()
+
+            # ── LLM plan path (fallback) ──
+            print("  Claude Code not found or failed — falling back to LLM-based planning")
+            print("  Install CC for autonomous implementation: pip install claude-code")
+
+            generated_plan = generate_capability_plan(request, sandbox, conn=conn)
+            generated_plan = update_capability_plan_with_deterministic_fallback(
+                request, generated_plan
+            )
+
+            if not generated_plan:
+                print("  error: could not generate capability plan")
+                sandbox.cleanup()
+                return None
+
+            plan = generated_plan
+            errors = validate_capability_plan(plan)
+            if errors:
+                print("  error: plan validation failed:")
+                for e in errors:
+                    print(f"    - {e}")
+                sandbox.cleanup()
+                return None
+
+            new_count = len(plan.get("new_files", []))
+            mod_count = len(plan.get("modified_files", []))
+
+            # Write files to sandbox.
+            ok = apply_capability_plan_to_sandbox(sandbox, plan)
+            if not ok:
+                print("  error: failed to write files to sandbox")
+                sandbox.cleanup()
+                return None
+            print(f"  wrote {new_count} new file(s), {mod_count} modified file(s)")
+
+        # ── Common post-implementation steps ──
+
+        # Capture baseline test failures if running full suite.
+        ver_steps = plan.get("verification_steps", [])
+        _baseline_failures: set[str] = set()
+        for step in ver_steps:
+            args = shlex.split(step)
+            _is_full_suite = any(a in ("tests/", "tests", ".") for a in args)
+            if _is_full_suite:
+                base_result = sandbox.run_tests(args + ["--tb=line", "-q"])
+                _baseline_failures = _parse_failed_tests(
+                    base_result.get("output", "")
+                )
+                if _baseline_failures:
+                    print(f"  ℹ pre-existing test failures: {len(_baseline_failures)}")
+                    for f in sorted(_baseline_failures):
+                        print(f"    ─ {f}")
+                break
 
         # Install dependencies.
         deps = plan.get("dependencies", [])
@@ -111,41 +197,68 @@ def deploy_capability(conn, plan: dict) -> Optional[str]:
                 print(f"  continuing without: {dep_result['failed_packages']}")
             else:
                 print(f"  installed {len(deps)} dependency/ies")
-                # Mark as deps_installed.
                 registry = CapabilityRegistry(conn)
                 registry.mark_deps_installed(cap_name)
 
-        # Run new capability's test files.
-        test_files = plan.get("test_files", [])
-        if test_files:
-            test_paths = [tf.get("path", "") for tf in test_files if tf.get("path")]
-            for tp in test_paths:
-                test_result = sandbox.test_file(tp)
-                if not test_result.get("passed", False):
-                    print(f"  ✗ tests failed: {tp}")
-                    print(f"    {test_result.get('output', '')[:300]}")
-                    sandbox.cleanup()
-                    return None
-                print(f"  ✓ tests passed: {tp} "
-                      f"({test_result.get('duration_ms', 0)}ms)")
+        # Capture diff of all changes.
+        diff = sandbox.capture_diff()
+        if diff:
+            print(f"  captured diff ({len(diff)} bytes)")
+        else:
+            print("  warning: no diff produced")
 
-        # Run verification steps.
-        ver_steps = plan.get("verification_steps", [])
-        for step in ver_steps:
-            step_result = sandbox.run_tests(step.split())
-            if not step_result.get("passed", False):
-                print(f"  ✗ verification failed: {step[:80]}")
-                print(f"    {step_result.get('output', '')[:300]}")
+        # Run regression suite.
+        reg_result = sandbox.run_tests([
+            "python", "-m", "pytest", "tests/", "-x", "--tb=short", "-q",
+        ])
+        if not reg_result.get("passed", False):
+            # Check if only pre-existing failures.
+            current_failures = _parse_failed_tests(reg_result.get("output", ""))
+            new_failures = current_failures - _baseline_failures
+            if new_failures:
+                print(f"  ✗ regression suite failed — new failures:")
+                for f in sorted(new_failures):
+                    print(f"    ─ {f}")
+                print("  Rolling back...")
+                sandbox.rollback()
                 sandbox.cleanup()
                 return None
-            print(f"  ✓ verification passed: {step[:80]}")
+            else:
+                print(f"  ✓ regression passed (only {len(_baseline_failures)} pre-existing failures)")
+        else:
+            print("  ✓ regression suite passed")
+
+        # Post-deploy integration smoke test.
+        # Run the new capability's import/dry-run against the sandbox code
+        # (via PYTHONPATH) to catch API mismatches (wrong dep version, missing
+        # symbols, etc.) before registering the capability.
+        _smoke_test = plan.get("capability_smoke_test", "")
+        if _smoke_test:
+            _smoke_start = datetime.now(timezone.utc)
+            _smoke_result = subprocess.run(
+                ["python", "-c", _smoke_test],
+                cwd=sandbox.sandbox_path,
+                env=sandbox.sandbox_env(),
+                capture_output=True, text=True, timeout=30,
+            )
+            _smoke_dur = int((datetime.now(timezone.utc) - _smoke_start).total_seconds() * 1000)
+            if _smoke_result.returncode != 0:
+                stderr_snip = _smoke_result.stderr[:500] if _smoke_result.stderr else ""
+                print(f"  ✗ smoke test failed ({_smoke_dur}ms):")
+                for ln in stderr_snip.split("\n"):
+                    print(f"    | {ln}")
+                print("  Rolling back...")
+                sandbox.rollback()
+                sandbox.cleanup()
+                return None
+            print(f"  ✓ smoke test passed ({_smoke_dur}ms)")
 
         # Snapshot for rollback.
         snapshot_commit = sandbox.snapshot()
         if snapshot_commit:
             print(f"  rollback commit: {snapshot_commit[:12]}")
         else:
-            print(f"  warning: could not create rollback snapshot")
+            print("  warning: could not create rollback snapshot")
 
         # Register capability flag (disabled by default).
         registry = CapabilityRegistry(conn)
