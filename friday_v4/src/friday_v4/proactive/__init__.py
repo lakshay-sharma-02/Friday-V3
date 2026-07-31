@@ -18,6 +18,7 @@ from .context_engine import DeepContextEngine, WorkContext
 from .pattern_learner import PatternLearner
 from .session_memory import SessionStore
 from .priority import PriorityInference
+from .v3source import V3DataSource
 
 __all__ = [
     "AnticipationEngine",
@@ -27,4 +28,5 @@ __all__ = [
     "PatternLearner",
     "SessionStore",
     "PriorityInference",
+    "V3DataSource",
 ]

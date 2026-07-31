@@ -25,10 +25,10 @@ feel like progress, and never crunch.
 ## Wave Strategy
 
 ```
-Wave 1: VOICE ─────> "Hey Friday, what's new?" ─────────> 7-9 weeks
-Wave 2: DESKTOP ───> Friday controls your environment ──> 8-12 weeks
+Wave 1: VOICE ─────> "Hey Friday, what's new?" ─────────> ✅ SHIPPED
+Wave 2: DESKTOP ───> Friday controls your environment ──> ✅ SHIPPED
 Wave 3: SECURITY ──> Friday protects your code ─────────> 3-4 weeks
-Wave 4: SMART ─────> Friday anticipates your needs ─────> 6-8 weeks
+Wave 4: SMART ─────> Friday anticipates your needs ─────> ✅ SHIPPED
 Wave 5: COLLAB ────> Friday works with teams ───────────> 4-6 weeks
 Wave 6: IDE ───────> Friday lives in your editor ───────> 6-10 weeks
 Wave 7: MOBILE ────> Friday in your pocket ─────────────> 10-12 weeks
@@ -39,7 +39,12 @@ Wave 8: POLISH ────> Production-ready ───────────�
 
 ---
 
-## Wave 1: Voice Interaction (7-9 weeks)
+## Wave 1: Voice Interaction ✅ SHIPPED (2026-08)
+
+**Status:** Built. `friday4 talk` (hotword + push-to-talk), `friday4 voice setup/status/test`.
+TTS: kokoro-onnx / piper / edge-tts / pyttsx3 with auto-fallback. STT: faster-whisper.
+VAD: Silero/WebRTC. Hotword: openwakeword (`hey_jarvis` ≈ "hey friday" — custom
+retraining deferred). Barge-in interruption, voice modes, chimes, caching — all in.
 
 **Goal:** Walk up to your dev environment, say "Hey Friday, what's going on?"
 and hear Friday respond aloud. This is the single most transformative feature.
@@ -100,7 +105,13 @@ and hear Friday respond aloud. This is the single most transformative feature.
 
 ---
 
-## Wave 2: Desktop Presence (8-12 weeks)
+## Wave 2: Desktop Presence ✅ SHIPPED (2026-08)
+
+**Status:** Built. WM abstraction + 5 adapters (Hyprland/GNOME/KDE/macOS/Windows),
+system tray, global hotkeys, desktop watcher, V3 ambient → desktop notification
+channel, proactive suggestion channel. `friday4 desktop status/windows/switch/
+focus/launch/screenshot/platforms`. **`friday4 daemon start [--voice]`** runs the
+whole ambient stack (observer + notifier + sampler) as one process.
 
 **Goal:** Friday controls your desktop environment — windows, workspaces, apps,
 system tray — on every platform you use.
@@ -213,7 +224,14 @@ secrets, and code quality issues — and tells you about them proactively.
 
 ---
 
-## Wave 4: Proactive Intelligence (6-8 weeks)
+## Wave 4: Proactive Intelligence ✅ SHIPPED (2026-08)
+
+**Status:** Built. Drift detection, anomaly detection, code health diagnostics,
+anticipation engine (context + patterns + session + priority), continuous
+learner. Wired into V3's DB via `V3DataSource` (observations/actions/ambient —
+graceful fallback when V3 absent). `friday4 proactive status/suggest/learn/brief/
+observe`, `friday4 intelligence status/drift/anomaly/health/predict`. Plus
+`friday4 doctor` / `friday4 status` ops tooling.
 
 **Goal:** Friday doesn't just react — it anticipates. It notices patterns in
 your behavior, predicts what you'll need, and offers help before you ask.
@@ -420,17 +438,19 @@ a full test suite.
 ```
 WAVE       MONTHS    CUMULATIVE    FEELING                     DIFFICULTY
 ───────────────────────────────────────────────────────────────────────────
-Voice      2 mo      2 mo          🎤 "I can talk to Friday!"  Medium
-Desktop    2.5 mo    4.5 mo        🖥️ "Friday controls desktop" HIGH
-Security   1 mo      5.5 mo        🔒 "Friday protects code"   Low
-Smart      2 mo      7.5 mo        🧠 "Friday knows my needs"  Medium-HIGH
-Collab     1.5 mo    9 mo          🤝 "Friday is networked"    Medium
-IDE        2 mo      11 mo         📝 "Friday in my editor"    HIGH
-Mobile     3 mo      14 mo         📱 "Friday on my phone"     VERY HIGH
-Polish     1.5 mo    15.5 mo       📦 "Production-ready V4"    Medium
+Voice      ✅ SHIPPED             🎤 "I can talk to Friday!"  Medium
+Desktop    ✅ SHIPPED             🖥️ "Friday controls desktop" HIGH
+Security   1 mo      +1 mo         🔒 "Friday protects code"   Low
+Smart      ✅ SHIPPED             🧠 "Friday knows my needs"  Medium-HIGH
+Collab     1.5 mo    +1.5 mo       🤝 "Friday is networked"    Medium
+IDE        2 mo      +2 mo         📝 "Friday in my editor"    HIGH
+Mobile     3 mo      +3 mo         📱 "Friday on my phone"     VERY HIGH
+Polish     ~1 mo     +1 mo         📦 "Production-ready V4"    Medium
 ```
 
-**Total: 14-16 months for the complete vision (a solo dev, multi-platform)**
+**Total remaining: ~8-10 months solo.** Waves 1, 2, and 4 are built and live
+(`friday4 daemon`, `friday4 talk`, `friday4 desktop`, `friday4 proactive`,
+`friday4 intelligence`, `friday4 doctor`).
 
 **Minimum MCU Friday (Voice + Desktop + Security): ~5.5 months**
 

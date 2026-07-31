@@ -276,23 +276,23 @@ friday_v4/
 **Deliverables:**
 - [x] `friday_v4/` directory scaffolded
 - [x] `PLAN.md` (this document)
-- [ ] `ARCHITECTURE.md` — V4 architecture reference
-- [ ] `pyproject.toml` — V4 dependencies
+- [x] `ARCHITECTURE.md` — V4 architecture reference
+- [x] `pyproject.toml` — V4 dependencies
 - [ ] CI pipeline (V3 tests + V4 tests)
 - [ ] V3 API compatibility layer
-- [ ] `friday_v4` CLI entry point (wraps V3 CLI + adds V4 commands)
+- [x] `friday4` CLI entry point (wraps V3 CLI + adds V4 commands)
 
 ### Phase 1 — Voice Interface (Weeks 3-5)
 **Goal:** Talk to Friday like Tony Stark talks to FRIDAY
 
 **Deliverables:**
-- [ ] Speech-to-text pipeline (local Whisper or API)
-- [ ] Text-to-speech pipeline (local or API)
-- [ ] Voice activity detection
-- [ ] Hotword/wake word ("Hey Friday")
-- [ ] Voice → V3 persona engine routing
-- [ ] `friday talk` — interactive voice session
-- [ ] Desktop push-to-talk hotkey
+- [x] Speech-to-text pipeline (faster-whisper / whisper.cpp)
+- [x] Text-to-speech pipeline (kokoro-onnx / piper / edge-tts / pyttsx3)
+- [x] Voice activity detection (Silero / WebRTC)
+- [x] Hotword/wake word ("Hey Friday" via openwakeword)
+- [x] Voice → V3 persona engine routing (VoiceRouter: desktop → proactive → V3 → fallback)
+- [x] `friday4 talk` — interactive voice session
+- [x] Desktop push-to-talk hotkey
 
 **Key Integration Points:**
 - Voice pipeline outputs text → feeds into V3 `IdentityEngine.process()`
@@ -303,13 +303,17 @@ friday_v4/
 **Goal:** Friday controls your entire desktop environment
 
 **Deliverables:**
-- [ ] Cross-platform WM abstraction API
-- [ ] Hyprland adapter (port from V3)
-- [ ] GNOME adapter
-- [ ] System tray icon (all platforms)
-- [ ] Global hotkey registration
-- [ ] `friday desktop` — desktop control CLI
-- [ ] Desktop notification channel (V3 ambient → desktop overlay)
+- [x] Cross-platform WM abstraction API
+- [x] Hyprland adapter (ported from V3)
+- [x] GNOME adapter
+- [x] KDE adapter
+- [x] macOS adapter
+- [x] Windows adapter
+- [x] System tray icon (all platforms)
+- [x] Global hotkey registration
+- [x] `friday4 desktop` — desktop control CLI
+- [x] Desktop notification channel (V3 ambient → desktop overlay)
+- [x] `friday4 daemon` — persistent ambient service wiring desktop watcher + notifier + proactive observer
 
 **Key Integration Points:**
 - WM abstraction replaces V3's Hyprland-only executor
@@ -368,12 +372,15 @@ friday_v4/
 **Goal:** Friday anticipates your needs
 
 **Deliverables:**
-- [ ] Predictive drift detection (time-series analysis)
-- [ ] Anomaly detection in execution patterns
-- [ ] Code health diagnostics (complexity, coverage, churn)
-- [ ] Need anticipation engine (context + history → predictions)
-- [ ] Automated workflow suggestions
-- [ ] Self-improving via user correction learning
+- [x] Predictive drift detection (time-series analysis)
+- [x] Anomaly detection in execution patterns
+- [x] Code health diagnostics (complexity, coverage, churn)
+- [x] Need anticipation engine (context + history → predictions)
+- [x] Automated workflow suggestions
+- [x] Self-improving via user correction learning
+- [x] V3 data wiring: anticipation reads V3 observations/action_log via `V3DataSource` (graceful fallback)
+- [x] `friday4 doctor` — one-command subsystem diagnostics
+- [x] `friday4 status` — unified layer overview
 
 ### Phase 7 — IDE Integration (Weeks 21-22)
 **Goal:** Friday lives inside your editor

@@ -11,13 +11,18 @@ Design:
 - Leaves the feed itself untouched (dismissal is left to the operator).
 - Degrades gracefully if V3 isn't installed/importable.
 
+Also provides :class:`ProactiveSuggestionChannel`, which polls the V4
+proactive engine (``AnticipationEngine.get_suggestions``) and raises a
+desktop notification for each suggestion that passed priority filtering —
+so learned patterns surface as notifications while the daemon runs.
+
 Usage:
     channel = DesktopNotificationChannel(min_priority=1, poll_interval=5.0)
     channel.start()        # background thread
     ...
     channel.stop()
 
-CLI: ``friday desktop watch [--min-priority N] [--poll N]``
+CLI: ``friday4 desktop watch [--min-priority N] [--poll N]``
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from .wm_abstraction import DesktopAbstraction
 
@@ -65,7 +70,7 @@ class DesktopNotificationChannel:
         self.last_event_id: int = self._load_last_id()
         self.running = False
         self._thread: Optional[threading.Thread] = None
-        self._v3: Optional = None  # friday.ambient module (lazy)
+        self._v3: Optional[dict] = None  # friday.ambient module (lazy)
 
     # ── State persistence ─────────────────────────────────────────
 
@@ -195,7 +200,12 @@ class DesktopNotificationChannel:
                 self.poll_once()
             except Exception:
                 logger.debug("Notifier poll error", exc_info=True)
-            time.sleep(self.poll_interval)
+            # Short waits with running-check keep stop() responsive even
+            # for long poll intervals.
+            for _ in range(max(int(self.poll_interval / 0.5), 1)):
+                if not self.running:
+                    return
+                time.sleep(0.5)
         logger.info("Desktop notification channel stopped")
 
     def stop(self) -> None:
@@ -208,3 +218,177 @@ class DesktopNotificationChannel:
     def __repr__(self) -> str:
         return (f"<DesktopNotificationChannel min_priority={self.min_priority} "
                 f"last_event_id={self.last_event_id} running={self.running}>")
+
+
+class ProactiveSuggestionChannel:
+    """Polls the V4 proactive engine and raises desktop notifications.
+
+    Bridges ``AnticipationEngine.get_suggestions()`` into the desktop
+    notification channel, so pattern-learned suggestions ("Whenever
+    you're in Code you switch to Firefox") pop up as notifications while
+    the daemon runs.
+
+    Design:
+    - Polls the engine for suggestions that passed priority filtering
+      (``should_notify`` set by :class:`PriorityInference`).
+    - Remembers each notified suggestion text so a suggestion is raised
+      at most once per ``cooldown_seconds`` — no notification spam.
+    - Accepts an optional injected engine (the daemon shares the same
+      AnticipationEngine as the proactive observer so patterns are warm).
+    - Degrades gracefully if the engine isn't importable/available.
+
+    Usage:
+        channel = ProactiveSuggestionChannel(engine=engine, poll_interval=120.0)
+        channel.start()        # background thread
+        ...
+        channel.stop()
+    """
+
+    def __init__(
+        self,
+        engine: Optional[Any] = None,
+        poll_interval: float = 120.0,
+        cooldown_seconds: float = 3600.0,
+        notify: Optional[Callable[..., bool]] = None,
+    ):
+        self.engine = engine  # AnticipationEngine (lazy if None)
+        self.poll_interval = poll_interval
+        self.cooldown_seconds = cooldown_seconds
+        self._notify = notify or DesktopAbstraction.notify
+        self.running = False
+        self._thread: Optional[threading.Thread] = None
+        # Only clean up engines we built ourselves — an injected engine
+        # (e.g. the daemon's shared observer) stays owned by its caller.
+        self._owns_engine = engine is None
+        # suggestion text -> epoch of last notification (cooldown dedup)
+        self._notified: dict[str, float] = {}
+
+    # ── Engine ─────────────────────────────────────────────────────
+
+    def _get_engine(self):
+        """Lazily build an AnticipationEngine if none was injected."""
+        if self.engine is None:
+            try:
+                from ..proactive.anticipation import AnticipationEngine
+                self.engine = AnticipationEngine()
+                self._owns_engine = True
+            except Exception as exc:
+                logger.debug(f"Proactive engine unavailable: {exc}")
+                self.engine = False
+        return self.engine
+
+    def _cleanup_engine(self) -> None:
+        """End the engine's session on stop (only if we created it).
+
+        An injected engine belongs to its caller (e.g. the daemon's shared
+        observer), so it is never cleaned up here — otherwise the daemon's
+        own shutdown would end the session twice.
+        """
+        if (self._owns_engine and self.engine
+                and self.engine is not False
+                and hasattr(self.engine, "cleanup")):
+            try:
+                self.engine.cleanup()
+            except Exception:
+                pass
+
+    # ── Polling ───────────────────────────────────────────────────
+
+    def poll_once(self) -> int:
+        """Poll for suggestions once and notify anything new above threshold.
+
+        Returns:
+            Number of notifications raised.
+        """
+        engine = self._get_engine()
+        if not engine:
+            return 0
+
+        try:
+            suggestions = engine.get_suggestions()
+        except Exception as exc:
+            logger.debug(f"Proactive suggestion poll failed: {exc}")
+            return 0
+
+        notified = 0
+        now = time.time()
+        for item in suggestions:
+            # Only surface items the priority engine flagged as notify-worthy.
+            if not getattr(item, "should_notify", False):
+                continue
+            text = (getattr(item, "text", "") or "").strip()
+            if not text:
+                continue
+            # Cooldown: don't re-notify the same suggestion too often.
+            last = self._notified.get(text)
+            if last is not None and (now - last) < self.cooldown_seconds:
+                continue
+            self._raise_notification(item, text)
+            self._notified[text] = now
+            notified += 1
+
+        self._prune_notified(now)
+        return notified
+
+    def _raise_notification(self, item, text: str) -> None:
+        """Raise a desktop notification for a suggestion item."""
+        urgency = "critical" if getattr(item, "should_speak", False) else "normal"
+        title = "Friday · Suggestion"
+        if getattr(item, "source", None):
+            title = f"Friday · {str(item.source).capitalize()}"
+        message = text[:200]
+        try:
+            self._notify(title, message, urgency=urgency)
+            logger.info(f"Suggestion notification: {title} — {text[:60]}")
+        except Exception as exc:
+            logger.debug(f"Suggestion notification failed: {exc}")
+
+    def _prune_notified(self, now: float) -> None:
+        """Drop cooldown entries older than the window (bounds memory)."""
+        stale = [t for t, ts in self._notified.items()
+                 if (now - ts) >= self.cooldown_seconds]
+        for t in stale:
+            self._notified.pop(t, None)
+
+    # ── Lifecycle ─────────────────────────────────────────────────
+
+    def start(self, daemon: bool = True) -> bool:
+        """Start the polling loop (background thread unless ``daemon=False``)."""
+        if self.running:
+            return True
+        self.running = True
+        if daemon:
+            self._thread = threading.Thread(
+                target=self._run_loop, name="friday-suggestions", daemon=True,
+            )
+            self._thread.start()
+        else:
+            self._run_loop()
+        return True
+
+    def _run_loop(self) -> None:
+        """The background polling loop."""
+        while self.running:
+            try:
+                self.poll_once()
+            except Exception:
+                logger.debug("Suggestion poll error", exc_info=True)
+            # Short waits with running-check keep stop() responsive even
+            # for long poll intervals.
+            for _ in range(max(int(self.poll_interval / 0.5), 1)):
+                if not self.running:
+                    return
+                time.sleep(0.5)
+        logger.info("Proactive suggestion channel stopped")
+
+    def stop(self) -> None:
+        """Stop the polling loop and clean up any engine we created."""
+        self.running = False
+        if self._thread is not None:
+            self._thread.join(timeout=max(self.poll_interval + 1, 3))
+            self._thread = None
+        self._cleanup_engine()
+
+    def __repr__(self) -> str:
+        return (f"<ProactiveSuggestionChannel engine={'set' if self.engine else 'none'} "
+                f"poll_interval={self.poll_interval} running={self.running}>")

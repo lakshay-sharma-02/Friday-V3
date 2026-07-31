@@ -207,6 +207,10 @@ in pure Python, no asset files.
   future work.
 - Streaming/word-by-word TTS — sentence-level is enough for v2.
 - Mobile push-to-talk — that's the mobile wave.
+- **Custom "hey friday" hotword retraining** — v2 ships openwakeword's prebuilt
+  `hey_jarvis` model, which sounds close to but is not literally "hey friday".
+  Retraining a custom model needs ~15 s of user voice samples + a training run;
+  deferred. `friday4 voice train-hotword` is the planned command.
 
 *This document supersedes the v1 implementation choices while keeping the
 VOICE_SPEC.md and VOICE_EXPERIENCE.md product goals intact.*
