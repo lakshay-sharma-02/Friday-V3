@@ -1,0 +1,101 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "friday-v4"
+version = "0.1.0.dev0"
+description = "Friday V4 — Ambient, proactive, multi-modal AI operating partner"
+authors = [
+    { name = "Friday Team", email = "friday@example.com" },
+]
+readme = "README.md"
+requires-python = ">=3.12"
+keywords = ["ai", "assistant", "developer-tools", "productivity"]
+
+dependencies = [
+    "edge-tts>=7.0",
+    "pyttsx3>=2.90",
+]
+
+[project.optional-dependencies]
+full = [
+    "kokoro-onnx",
+    "faster-whisper",
+    "openwakeword",
+    "onnxruntime",
+    "sounddevice",
+    "webrtcvad",
+    "edge-tts>=7.0",
+    "pyttsx3",
+    "espeakng_loader",
+]
+voice = [
+    "kokoro-onnx",
+    "sounddevice",
+    "webrtcvad",
+    "onnxruntime",
+    "edge-tts>=7.0",
+    "pyttsx3",
+    "espeakng_loader",
+]
+stt = ["faster-whisper"]
+hotword = ["openwakeword", "onnxruntime"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.12",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+desktop = [
+    "pystray>=0.19.5",
+    "Pillow>=10.0",
+    "keyboard>=0.13.5",
+    "pydbus>=0.6.0",
+    "pyobjc>=10.0; platform_system == 'Darwin'",
+    "pypiwin32>=223; platform_system == 'Windows'",
+]
+collab = [
+    "websockets>=12.0",
+    "zeroconf>=0.131",
+]
+security = [
+    "grype-py>=0.1",
+    "truffleHog>=3.0",
+]
+
+[project.scripts]
+friday4 = "friday_v4.cli_talk:main"
+friday-v4 = "friday_v4.cli_talk:main"
+# Note: `friday` script is defined by V3 (pyproject.toml in project root).
+# V4 uses `friday4` to avoid CLI entry-point conflicts when V3 is installed
+# side-by-side. Run V4 voice with:  friday4 talk --tts-provider edge
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["friday_v4*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+markers = [
+    "voice: voice pipeline tests",
+    "desktop: desktop abstraction tests",
+    "collab: collaboration tests",
+    "security: security scanning tests",
+    "intelligence: intelligence layer tests",
+    "network: network tests",
+    "proactive: proactive intelligence tests",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true

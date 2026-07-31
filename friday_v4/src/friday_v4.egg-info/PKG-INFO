@@ -1,0 +1,142 @@
+Metadata-Version: 2.4
+Name: friday-v4
+Version: 0.1.0.dev0
+Summary: Friday V4 — Ambient, proactive, multi-modal AI operating partner
+Author-email: Friday Team <friday@example.com>
+Keywords: ai,assistant,developer-tools,productivity
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: edge-tts>=7.0
+Requires-Dist: pyttsx3>=2.90
+Provides-Extra: full
+Requires-Dist: kokoro-onnx; extra == "full"
+Requires-Dist: faster-whisper; extra == "full"
+Requires-Dist: openwakeword; extra == "full"
+Requires-Dist: onnxruntime; extra == "full"
+Requires-Dist: sounddevice; extra == "full"
+Requires-Dist: webrtcvad; extra == "full"
+Requires-Dist: edge-tts>=7.0; extra == "full"
+Requires-Dist: pyttsx3; extra == "full"
+Provides-Extra: voice
+Requires-Dist: kokoro-onnx; extra == "voice"
+Requires-Dist: sounddevice; extra == "voice"
+Requires-Dist: webrtcvad; extra == "voice"
+Requires-Dist: onnxruntime; extra == "voice"
+Requires-Dist: edge-tts>=7.0; extra == "voice"
+Requires-Dist: pyttsx3; extra == "voice"
+Provides-Extra: stt
+Requires-Dist: faster-whisper; extra == "stt"
+Provides-Extra: hotword
+Requires-Dist: openwakeword; extra == "hotword"
+Requires-Dist: onnxruntime; extra == "hotword"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-cov>=5.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: pytest-mock>=3.12; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+Requires-Dist: mypy>=1.8; extra == "dev"
+Provides-Extra: desktop
+Requires-Dist: pystray>=0.19.5; extra == "desktop"
+Requires-Dist: Pillow>=10.0; extra == "desktop"
+Requires-Dist: keyboard>=0.13.5; extra == "desktop"
+Requires-Dist: pydbus>=0.6.0; extra == "desktop"
+Requires-Dist: pyobjc>=10.0; platform_system == "Darwin" and extra == "desktop"
+Requires-Dist: pypiwin32>=223; platform_system == "Windows" and extra == "desktop"
+Provides-Extra: collab
+Requires-Dist: websockets>=12.0; extra == "collab"
+Requires-Dist: zeroconf>=0.131; extra == "collab"
+Provides-Extra: security
+Requires-Dist: grype-py>=0.1; extra == "security"
+Requires-Dist: truffleHog>=3.0; extra == "security"
+
+# Friday V4 🚀
+
+> **An ambient, proactive, multi-modal AI operating partner.**
+> Inspired by Tony Stark's FRIDAY, built on Friday V3's frozen core.
+
+## Quick Start
+
+```bash
+# Install V4 alongside V3
+pip install -e friday_v4/
+
+# Start voice session
+friday talk
+
+# Check status
+friday daemon status
+```
+
+## ⚠️ Running under ZCode (this machine)
+
+ZCode's AppImage sets `APPIMAGE`/`APPDIR` env vars, which make **every**
+`python` invocation report the AppImage as `sys.executable`. This breaks
+venvs (bin/python symlinks point at the AppImage, site-packages never
+loads, no numpy/voice deps). Always run python through the fixed venv
+with those vars unset:
+
+```bash
+cd friday_v4
+env -u APPIMAGE -u APPDIR .venv312/bin/python -m friday_v4.cli_talk talk
+```
+
+Never create venvs with the AppImage env vars set — they'll be unusable.
+If a venv's `bin/python` is a symlink to `ZCode-*.AppImage`, rebuild it:
+
+```bash
+rm -rf .venv312
+env -u APPIMAGE -u APPDIR /usr/sbin/python3.12 -m venv .venv312
+env -u APPIMAGE -u APPDIR .venv312/bin/pip install -e . -e ../  # reinstall editable pkgs
+```
+
+## What's New in V4
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| 🗣️ Voice Interface | Phase 1 | Speak to Friday, hear responses aloud |
+| 🖥️ Desktop Integration | Phase 2 | Cross-platform WM control, system tray |
+| 🔒 Security Scanning | Phase 3 | Vulnerability scanning, secret detection |
+| 🤝 Collaboration | Phase 4 | Multi-instance team workspaces |
+| 📱 Mobile Companion | Phase 5 | Phone app, push notifications |
+| 🧠 Advanced Intelligence | Phase 6 | Drift prediction, anomaly detection |
+| 📝 IDE Integration | Phase 7 | VS Code, IntelliJ extensions |
+
+## Architecture
+
+V4 builds *on top of* V3's frozen core. It never modifies V3.
+
+```
+┌────────────────────────────────────────┐
+│       Friday V4 Surfaces              │
+│  Voice │ Mobile │ Web │ IDE │ Desktop  │
+├────────────────────────────────────────┤
+│    Friday V4 Communication Bus         │
+├────────────────────────────────────────┤
+│    Friday V4 Intelligence Layer        │
+├────────────────────────────────────────┤
+│      Friday V3 Core (Frozen)           │
+│  106K LOC │ 273 files │ 1656 tests     │
+└────────────────────────────────────────┘
+```
+
+## Project Structure
+
+```
+friday_v4/
+├── docs/           # Architecture, plans, specs
+├── src/friday_v4/  # V4 source code
+│   ├── voice/      # Speech-to-text, text-to-speech
+│   ├── desktop/    # WM abstraction, IDE integration
+│   ├── mobile/     # Companion app API
+│   ├── collab/     # Multi-instance collaboration
+│   ├── security/   # Vulnerability scanning
+│   ├── intelligence/ # Drift detection, predictions
+│   ├── network/    # SSH, webhooks, remote access
+│   └── proactive/  # Anticipation engine
+└── tests/          # V4 test suite
+```
+
+## License
+
+Same as Friday V3.
