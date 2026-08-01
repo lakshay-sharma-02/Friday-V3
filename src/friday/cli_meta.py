@@ -17,11 +17,33 @@ from .db import connect
 from .presentation.cli_format import header, green, yellow, red, gray, cyan, bold
 
 
+_KNOWN_UPGRADE_ACTIONS = frozenset({
+    "plan", "deploy", "run", "list", "enable", "disable", "rollback", "status", "show",
+})
+
+
 def cmd_upgrade(args: argparse.Namespace) -> int:
     """Dispatch `friday upgrade` subcommands."""
     action = getattr(args, "action", None)
-    if not action:
+    request_raw = getattr(args, "request", "")
+    if isinstance(request_raw, list):
+        request_raw = " ".join(request_raw).strip()
+
+    # If action is not a known keyword, treat it as the start of the request.
+    if action and action not in _KNOWN_UPGRADE_ACTIONS:
+        request_raw = f"{action} {request_raw}".strip()
+        action = None
+
+    # Inject for downstream use.
+    args.request = request_raw
+
+    # No action keyword AND no request → show help.
+    if not action and not request_raw:
         return _show_upgrade_help()
+
+    # No action keyword but there IS a request → default to deploy.
+    if not action:
+        return _upgrade_run(args)
 
     if action == "plan":
         return _upgrade_plan(args)
@@ -102,6 +124,7 @@ def _upgrade_plan(args: argparse.Namespace) -> int:
     from .meta.sandbox import Sandbox
     from .meta.si_planner import (
         generate_capability_plan,
+        update_capability_plan_with_deterministic_fallback,
         estimate_plan_changes,
         validate_capability_plan,
     )
@@ -123,9 +146,11 @@ def _upgrade_plan(args: argparse.Namespace) -> int:
         finally:
             conn.close()
 
+        # Fallback to deterministic plan if LLM unavailable.
+        plan = update_capability_plan_with_deterministic_fallback(request, plan)
+
         if not plan:
-            print(red("  Could not generate a plan. Is the LLM configured?"))
-            print(gray("  Set GROQ_API_KEY, OPENROUTER_API_KEY, or similar."))
+            print(red("  Could not generate a plan — both LLM and fallback failed."))
             sandbox.cleanup()
             return 1
 
@@ -162,7 +187,7 @@ def _upgrade_plan(args: argparse.Namespace) -> int:
 
 
 def _upgrade_run(args: argparse.Namespace) -> int:
-    """Full pipeline: plan → sandbox → verify → deploy."""
+    """Full pipeline: sandbox → deploy (CC when available, LLM fallback)."""
     request = _get_request(args)
     if not request:
         print(red("  Specify what capability to add."))
@@ -173,54 +198,25 @@ def _upgrade_run(args: argparse.Namespace) -> int:
     print(header("Self-Evolution", "deploy"))
     print(yellow(f"  This will modify Friday's own source code!"))
     print(f"  Request: {request}")
+
     print()
     answer = input(gray("  Continue? (y/N): ")).strip().lower()
     if answer not in ("y", "yes"):
         print(gray("  Aborted."))
         return 0
 
-    from .meta.sandbox import Sandbox
-    from .meta.si_planner import (
-        generate_capability_plan,
-        validate_capability_plan,
-    )
     from .meta.deploy import deploy_capability
 
     print()
-    print(gray("  Phase 1: Planning..."))
+    print(gray("  Deploying capability..."))
 
     conn = connect()
-    sandbox = Sandbox(label="capability_deploy")
     try:
-        sb_path = sandbox.create()
-        print(gray(f"  Sandbox created"))
-
-        plan = generate_capability_plan(request, sandbox, conn=conn)
-        if not plan:
-            print(red("  Could not generate a plan. Is the LLM configured?"))
-            sandbox.cleanup()
-            conn.close()
-            return 1
-
-        errors = validate_capability_plan(plan)
-        if errors:
-            print(red("  Plan validation errors:"))
-            for e in errors:
-                print(f"    - {e}")
-            sandbox.cleanup()
-            conn.close()
-            return 1
-
-        cap_name = plan.get("capability_name", "?")
-        print(green(f"  ✓ Plan generated: {cap_name}"))
-        print()
-
-        print(gray("  Phase 2: Building & Verifying..."))
-        result = deploy_capability(conn, plan)
+        result = deploy_capability(conn, request)
         if result:
             print()
-            print(green(f"  ✅ Upgrade complete: {cap_name}"))
-            print(gray(f"  Enable it: friday upgrade enable {cap_name}"))
+            print(green(f"  ✅ Upgrade complete: {result}"))
+            print(gray(f"  Enable it: friday upgrade enable {result}"))
             print(gray(f"  Check status: friday upgrade list"))
         else:
             print(red(f"  ❌ Upgrade failed"))
@@ -232,7 +228,6 @@ def _upgrade_run(args: argparse.Namespace) -> int:
         traceback.print_exc()
         return 1
     finally:
-        sandbox.cleanup()
         conn.close()
 
     return 0
@@ -425,15 +420,17 @@ def add_subparser(sub) -> None:
         "upgrade",
         help="Self-evolution engine — upgrade Friday's own capabilities."
     )
+    action_help = ("One of: plan, deploy, run, list, enable, disable, rollback, status, show. "
+                   "Omit to run the full pipeline with an inline request.")
     p.add_argument(
         "action",
         nargs="?",
-        choices=["plan", "deploy", "run", "list", "enable", "disable", "rollback", "status", "show"],
         default=None,
+        help=action_help,
     )
     p.add_argument(
         "request",
-        nargs="?",
+        nargs="*",  # Remaining words become the full request text.
         default="",
     )
     p.add_argument("--name", "-n", default="")

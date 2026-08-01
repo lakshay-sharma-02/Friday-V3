@@ -17,6 +17,8 @@ Requires-Dist: sounddevice; extra == "full"
 Requires-Dist: webrtcvad; extra == "full"
 Requires-Dist: edge-tts>=7.0; extra == "full"
 Requires-Dist: pyttsx3; extra == "full"
+Requires-Dist: espeakng_loader; extra == "full"
+Requires-Dist: numpy<2.5,>=1.26; extra == "full"
 Provides-Extra: voice
 Requires-Dist: kokoro-onnx; extra == "voice"
 Requires-Dist: sounddevice; extra == "voice"
@@ -24,6 +26,8 @@ Requires-Dist: webrtcvad; extra == "voice"
 Requires-Dist: onnxruntime; extra == "voice"
 Requires-Dist: edge-tts>=7.0; extra == "voice"
 Requires-Dist: pyttsx3; extra == "voice"
+Requires-Dist: espeakng_loader; extra == "voice"
+Requires-Dist: numpy<2.5,>=1.26; extra == "voice"
 Provides-Extra: stt
 Requires-Dist: faster-whisper; extra == "stt"
 Provides-Extra: hotword
@@ -57,15 +61,23 @@ Requires-Dist: truffleHog>=3.0; extra == "security"
 
 ## Quick Start
 
+V4 installs its CLI as **`friday4`** (aliased `friday-v4`) so it doesn't
+clash with V3's `friday` command when both are installed side by side.
+
 ```bash
 # Install V4 alongside V3
 pip install -e friday_v4/
 
-# Start voice session
-friday talk
+# Start a voice session (hotword mode, or hold Ctrl+Space with --push-to-talk)
+friday4 talk
+friday4 talk --push-to-talk
 
-# Check status
-friday daemon status
+# Voice diagnostics / setup wizard
+friday4 voice status
+friday4 voice setup
+
+# Desktop awareness & control
+friday4 desktop status
 ```
 
 ## ⚠️ Running under ZCode (this machine)

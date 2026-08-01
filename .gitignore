@@ -1,6 +1,7 @@
 # dependencies
 node_modules/
 .venv/
+.venv*/
 __pycache__/
 *.pyc
 .env
@@ -28,3 +29,14 @@ dogfood_run/
 # accidental nested package / editor detritus
 New Folder/
 src/src/
+
+# temp/scratch root-level files
+friday.db
+.env
+*.swp
+
+# developer scripts directory (not committed)
+scripts/
+
+# mission journal archives
+~/.friday/mission_journals/

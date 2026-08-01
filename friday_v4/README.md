@@ -1,19 +1,40 @@
 # Friday V4 🚀
 
 > **An ambient, proactive, multi-modal AI operating partner.**
-> Inspired by Tony Stark's FRIDAY, built on Friday V3's frozen core.
+> Inspired by Tony Stark's FRIDAY.
+
+## ⭐ Project Status: V4 Is the Main Project
+
+**V4 is the project being actively built right now.**
+
+- V3 is largely built but **inconsistent** — it is not the deliverable.
+- V4 has its own roadmap (`docs/ROADMAP.md`) and is developed here on its
+  own terms.
+- V4 **imports only the V3 modules that are properly built** and useful
+  (e.g. persona/IdentityEngine, ambient feed, db layer) — as a dependency,
+  never as the foundation V4 is subordinated to.
+- If a V3 module is missing or broken, the answer is to build it properly
+  in V4 — not to patch V3 wholesale.
 
 ## Quick Start
+
+V4 installs its CLI as **`friday4`** (aliased `friday-v4`) so it doesn't
+clash with V3's `friday` command when both are installed side by side.
 
 ```bash
 # Install V4 alongside V3
 pip install -e friday_v4/
 
-# Start voice session
-friday talk
+# Start a voice session (hotword mode, or hold Ctrl+Space with --push-to-talk)
+friday4 talk
+friday4 talk --push-to-talk
 
-# Check status
-friday daemon status
+# Voice diagnostics / setup wizard
+friday4 voice status
+friday4 voice setup
+
+# Desktop awareness & control
+friday4 desktop status
 ```
 
 ## ⚠️ Running under ZCode (this machine)
@@ -52,7 +73,9 @@ env -u APPIMAGE -u APPDIR .venv312/bin/pip install -e . -e ../  # reinstall edit
 
 ## Architecture
 
-V4 builds *on top of* V3's frozen core. It never modifies V3.
+V4 is the main project. It selectively imports only properly-built V3
+modules (persona/IdentityEngine, ambient, db) — nothing is treated as a
+"frozen core" V4 must preserve.
 
 ```
 ┌────────────────────────────────────────┐
@@ -63,8 +86,8 @@ V4 builds *on top of* V3's frozen core. It never modifies V3.
 ├────────────────────────────────────────┤
 │    Friday V4 Intelligence Layer        │
 ├────────────────────────────────────────┤
-│      Friday V3 Core (Frozen)           │
-│  106K LOC │ 273 files │ 1656 tests     │
+│  V3 modules selectively imported       │
+│  persona │ ambient │ db               │
 └────────────────────────────────────────┘
 ```
 

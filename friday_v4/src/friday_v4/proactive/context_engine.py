@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,6 +121,9 @@ class DeepContextEngine:
         self._session_store = session_store
         self._session_start = datetime.now(timezone.utc)
         self._wm = None  # WindowManager — lazy loaded
+        # pid → (cached_at, repo_name, branch); avoids spawning git
+        # subprocesses on every observer cycle for the same window.
+        self._repo_cache: dict[int, tuple[float, str, str]] = {}
 
     @property
     def _window_manager(self):
@@ -151,6 +156,87 @@ class DeepContextEngine:
         self._derive_work_mode(ctx)
 
         return ctx
+
+    def get_active_app(self) -> tuple[str, str]:
+        """Cheap desktop-only probe: (app_class, title) of the active window.
+
+        Unlike get_context(), this never spawns git subprocesses or walks
+        sessions, so the background PatternLearner observer can call it
+        every few seconds without paying for git queries.
+        """
+        wm = self._window_manager
+        if not wm or not wm.is_available:
+            return ("", "")
+        try:
+            active = wm.get_active_window()
+            if active:
+                return (active.app_class or "", active.title or "")
+        except Exception as exc:
+            logger.debug(f"Active window probe failed: {exc}")
+        return ("", "")
+
+    def get_active_repo(self, ttl_seconds: float = 60.0) -> tuple[str, str]:
+        """Resolve (repo_name, branch) for the active window's process.
+
+        Uses the active window's PID to find its working directory (via
+        ``/proc/<pid>/cwd`` on Linux) and asks git for the repo there — so
+        patterns tie to the project the user is *actually in*, not the
+        daemon's own CWD. Falls back to ``os.getcwd()`` when the PID is
+        unavailable, and returns ("", "") when there's no desktop or repo.
+
+        Cached per-PID for ``ttl_seconds`` so the background observer
+        doesn't re-run git subprocesses on every cycle.
+        """
+        wm = self._window_manager
+        if not wm or not wm.is_available:
+            return ("", "")
+        try:
+            active = wm.get_active_window()
+            if not active:
+                return ("", "")
+            pid = int(getattr(active, "pid", 0) or 0)
+            now = time.time()
+            cached = self._repo_cache.get(pid)
+            if cached and now - cached[0] < ttl_seconds:
+                return cached[1], cached[2]
+            cwd = self._cwd_for_window(pid)
+            repo, branch = self._resolve_repo(cwd)
+            self._repo_cache[pid] = (now, repo, branch)
+            return repo, branch
+        except Exception as exc:
+            logger.debug(f"Active repo probe failed: {exc}")
+            return ("", "")
+
+    @staticmethod
+    def _cwd_for_window(pid: int) -> str:
+        """Best-effort working directory of a window's process."""
+        if pid > 0 and platform.system() == "Linux":
+            try:
+                return os.readlink(f"/proc/{pid}/cwd")
+            except OSError:
+                pass
+        return os.getcwd()
+
+    @staticmethod
+    def _resolve_repo(cwd: str) -> tuple[str, str]:
+        """Return (repo_name, branch) for a directory, or ('', '')."""
+        try:
+            top = subprocess.run(
+                ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if top.returncode != 0:
+                return ("", "")
+            repo_name = Path(top.stdout.strip()).name
+            branch = subprocess.run(
+                ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=3,
+            )
+            branch_name = branch.stdout.strip() if branch.returncode == 0 else ""
+            return repo_name, branch_name
+        except Exception as exc:
+            logger.debug(f"Repo resolution failed for {cwd}: {exc}")
+            return ("", "")
 
     def _enrich_desktop(self, ctx: WorkContext):
         """Add desktop state: active window, open apps, workspaces."""
@@ -359,3 +445,4 @@ class DeepContextEngine:
     def cleanup(self):
         """Release resources."""
         self._wm = None
+        self._repo_cache = {}

@@ -75,6 +75,7 @@ class Objective:
     SURPRISE = "surprise"          # what surprises you
     EVOLVE = "evolve"              # how would you evolve the portfolio
     KNOWLEDGE = "knowledge"        # accumulated engineering knowledge
+    AGENT = "agent"
     CHITCHAT = "chitchat"
     GENERAL = "general"
 
@@ -211,6 +212,11 @@ _PRIORITY: dict[str, dict[str, int]] = {
         "architecture": 5, "themes": 4, "relationships": 4, "components": 4,
         "value": 3, "universe": 3, "insights": 2,
     },
+    Objective.AGENT: {
+        "agent": 10, "action": 9, "execute": 8, "tool": 7,
+        "goal": 6, "description": 5, "decompose": 5,
+        "observation": 3, "recommend": 2,
+    },
 }
 
 
@@ -307,6 +313,9 @@ _CONTRACTS: dict[str, list[str]] = {
         "Accumulated knowledge", "What each project is (current state)",
         "Long-term patterns", "What is not yet determined",
     ],
+    Objective.AGENT: [
+        "Goal", "Plan", "Execution", "Result",
+    ],
 }
 
 
@@ -347,6 +356,7 @@ _OBJECTIVE_CANONICAL_NEED: dict[str, str] = {
     Objective.SURPRISE: "surprise",
     Objective.EVOLVE: "evolve",
     Objective.KNOWLEDGE: "knowledge",
+    Objective.AGENT: "agent",
     Objective.CHITCHAT: "chitchat",
     Objective.GENERAL: "general",
 }
@@ -429,6 +439,7 @@ _LENS_OBJECTIVE: dict[tuple[str, Optional[str]], str] = {
     ("surprise", None): Objective.SURPRISE,
     ("evolve", None): Objective.EVOLVE,
     ("knowledge", None): Objective.KNOWLEDGE,
+    ("agent", None): Objective.AGENT,
     ("chitchat", None): Objective.CHITCHAT,
     ("general", None): Objective.GENERAL,
 }
@@ -462,6 +473,7 @@ _SINGLE_NEED_OBJECTIVE: dict[str, str] = {
     "compare": Objective.COMPARE,
     "describe": Objective.EXPLAIN,
     "knowledge": Objective.KNOWLEDGE,
+    "agent": Objective.AGENT,
     "chitchat": Objective.CHITCHAT,
     "general": Objective.GENERAL,
 }

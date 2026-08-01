@@ -1069,36 +1069,43 @@ def cmd_do(args: argparse.Namespace) -> int:
             print(perror(f"Command returned exit code {rc}"))
         return rc
 
-    # ── Ambiguous: try intent classification, then agentic executor. ────
+    # ── Ambiguous: try agent first, fall back to intent → handler → ask. ─
+    # The AgenticExecutor is the primary path — it can decompose ANY
+    # natural-language request into steps across all tools. Only fall
+    # through to classify_intent if the agent fails gracefully.
+    print(header("agent", text[:80]), file=sys.stderr)
+    print(file=sys.stderr)
+    from .agent import run_agent, format_session
+    session = run_agent(text, workspace=".", persist=True)
+    print(format_session(session))
+    if session.status == "succeeded":
+        return 0
+
+    # Agent failed — fall back to intent classification for specific handlers.
     try:
         handler, ns = classify_intent(text)
         cmd_name = handler.__name__.replace("cmd_", "").replace("_dispatch", "")
     except Exception:
         cmd_name = None
 
-    # If classified as ask, try the agent first (it might be an action).
-    if cmd_name == "ask" or cmd_name is None:
-        print(header("agent", text[:80]), file=sys.stderr)
-        print(file=sys.stderr)
-        from .agent import run_agent, format_session
-        session = run_agent(text, workspace=".", persist=True)
-        print(format_session(session))
-        if session.status == "succeeded":
-            return 0
-        # Agent failed — fall through to ask.
+    # If classified to a specific handler, use it.
+    if cmd_name and cmd_name != "ask":
         print()
-        print(header("ask", "trying Q&A..."), file=sys.stderr)
+        print(header(cmd_name, text[:80]), file=sys.stderr)
         print(file=sys.stderr)
-        handler, ns = _build_ask(text)
         rc = handler(ns)
         if rc != 0:
+            from .presentation.cli_format import error as perror
             print(perror(f"Command returned exit code {rc}"))
         return rc
 
-    # Classified to a specific handler — use it.
-    print(header(cmd_name, text[:80]), file=sys.stderr)
+    # Final fallback: ask.
+    print()
+    print(header("ask", "trying Q&A..."), file=sys.stderr)
     print(file=sys.stderr)
+    handler, ns = _build_ask(text)
     rc = handler(ns)
     if rc != 0:
+        from .presentation.cli_format import error as perror
         print(perror(f"Command returned exit code {rc}"))
     return rc

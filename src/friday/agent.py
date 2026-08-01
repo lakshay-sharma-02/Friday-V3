@@ -337,6 +337,87 @@ def decompose(task: str, workspace: str = ".") -> list[AgentStep]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Self-upgrade detection — route to self-evolution engine
+# ──────────────────────────────────────────────────────────────────────────
+
+_SELF_UPGRADE_PATTERNS = [
+    "make yourself capable",
+    "make yourself able",
+    "make yourself speak",
+    "upgrade yourself",
+    "upgrade friday",
+    "self-upgrade",
+    "self evolve",
+    "self-evolve",
+    "add capability",
+]
+
+_SELF_UPGRADE_CHECKED: set[int] = set()  # guard against repeated check in same session
+
+
+def _is_self_upgrade_task(task: str) -> bool:
+    """Quick keyword check — is this a self-evolution request?"""
+    tl = task.lower().strip()
+    for pat in _SELF_UPGRADE_PATTERNS:
+        if pat in tl:
+            return True
+    return False
+
+
+def _route_to_self_upgrade(task: str, workspace: str = ".") -> Optional[AgentSession]:
+    """Route a self-upgrade task to the self-evolution engine.
+
+    Builds a synthetic argparse.Namespace and calls the upgrade pipeline
+    directly. Returns an AgentSession if routing succeeded or None if the
+    task isn't actually an upgrade request.
+    """
+    if not _is_self_upgrade_task(task):
+        return None
+
+    import argparse
+    from .cli_meta import cmd_upgrade
+
+    ns = argparse.Namespace(
+        action="deploy",
+        request=task,
+        text=[],
+        name="",
+        func=None,
+    )
+
+    session_id = f"agent:upgrade:{uuid.uuid4().hex[:12]}"
+    created_at = now_iso()
+    t0 = time.monotonic()
+
+    exit_code = cmd_upgrade(ns)
+    dur = int((time.monotonic() - t0) * 1000)
+
+    success = exit_code == 0
+    session = AgentSession(
+        session_id=session_id,
+        task=task,
+        workspace=workspace,
+        created_at=created_at,
+        status="succeeded" if success else "failed",
+        summary=f"Self-upgrade {'completed' if success else 'failed'} (exit={exit_code})",
+        duration_ms=dur,
+        steps=[
+            AgentStepResult(
+                index=0,
+                tool="self_upgrade",
+                description=f"Self-evolution engine: {task[:60]}",
+                success=success,
+                stdout=f"Upgrade {'succeeded' if success else 'failed'}",
+                stderr="",
+                exit_code=exit_code,
+                duration_ms=dur,
+            )
+        ],
+    )
+    return session
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Step execution
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -697,6 +778,11 @@ def run_agent(task: str, workspace: str = ".",
     Returns:
         An AgentSession with all step results and a summary.
     """
+    # Check for self-upgrade request first.
+    upgrade_session = _route_to_self_upgrade(task, workspace)
+    if upgrade_session is not None:
+        return upgrade_session
+
     session_id = f"agent:{uuid.uuid4().hex[:12]}"
     created_at = now_iso()
     t0 = time.monotonic()

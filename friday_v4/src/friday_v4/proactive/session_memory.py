@@ -68,6 +68,9 @@ class SessionStore:
                     last_active = datetime.fromisoformat(data.get("last_active", ""))
                     idle = (datetime.now(timezone.utc) - last_active).total_seconds()
                     if idle < 900:  # 15 minutes
+                        # JSON round-trips sets to lists — normalize back to a
+                        # set so in-memory callers can use set operations.
+                        data["repos_active"] = set(data.get("repos_active") or [])
                         self._current = data
                         return
                     else:
@@ -92,53 +95,65 @@ class SessionStore:
             now = datetime.now(timezone.utc)
 
             if self._current is None:
-                self._current = {
-                    "session_id": now.strftime("%Y%m%d_%H%M%S"),
-                    "started_at": now.isoformat(),
-                    "last_active": now.isoformat(),
-                    "apps_used": {},
-                    "repos_active": set(),
-                    "session_count": 0,
-                }
-                # Count sessions today
-                self._current["session_count"] = self._count_sessions_today() + 1
+                self._create_session_locked(now)
+            current = self._current
+            assert current is not None
 
             # Update last active
-            self._current["last_active"] = now.isoformat()
+            current["last_active"] = now.isoformat()
 
             # Track app usage
             if app_class:
-                apps = self._current.setdefault("apps_used", {})
+                apps = current.setdefault("apps_used", {})
                 apps[app_class] = apps.get(app_class, 0) + 1
 
             self._save_current()
-            return dict(self._current)
+            return dict(current)
+
+    def _create_session_locked(self, now: datetime) -> None:
+        """Create a fresh current session. Caller must hold ``_lock``.
+
+        Extracted so ``update_activity`` can create a session without
+        re-acquiring the (non-reentrant) lock — previously it called
+        ``start_session()`` while holding the lock, which deadlocked.
+        """
+        self._current = {
+            "session_id": now.strftime("%Y%m%d_%H%M%S"),
+            "started_at": now.isoformat(),
+            "last_active": now.isoformat(),
+            "apps_used": {},
+            "repos_active": set(),
+            "session_count": 0,
+        }
+        # Count sessions today
+        self._current["session_count"] = self._count_sessions_today() + 1
 
     def end_session(self):
         """End the current session and archive it."""
         with self._lock:
-            if self._current is None:
+            current = self._current
+            if current is None:
                 return
 
             now = datetime.now(timezone.utc)
-            self._current["ended_at"] = now.isoformat()
-            self._current["last_active"] = now.isoformat()
+            current["ended_at"] = now.isoformat()
+            current["last_active"] = now.isoformat()
 
             # Convert repos set to list for JSON
-            repos = self._current.get("repos_active", set())
+            repos = current.get("repos_active", set())
             if isinstance(repos, set):
-                self._current["repos_active"] = list(repos)
+                current["repos_active"] = list(repos)
 
             # Calculate duration
             try:
-                start = datetime.fromisoformat(self._current["started_at"])
-                self._current["duration_minutes"] = int(
+                start = datetime.fromisoformat(current["started_at"])
+                current["duration_minutes"] = int(
                     (now - start).total_seconds() / 60
                 )
             except (ValueError, KeyError):
-                self._current["duration_minutes"] = 0
+                current["duration_minutes"] = 0
 
-            self._archive_session(self._current)
+            self._archive_session(current)
             _SESSION_FILE.unlink(missing_ok=True)
             self._current = None
 
@@ -148,21 +163,29 @@ class SessionStore:
         Call this periodically to keep the session alive and track activity.
         """
         with self._lock:
-            if self._current is None:
-                self.start_session(app_class)
-                return
-
             now = datetime.now(timezone.utc)
-            self._current["last_active"] = now.isoformat()
+
+            if self._current is None:
+                # Create inline (never call start_session() here — it would
+                # re-acquire the non-reentrant _lock and deadlock).
+                self._create_session_locked(now)
+            current = self._current
+            assert current is not None
+
+            current["last_active"] = now.isoformat()
 
             if app_class:
-                apps = self._current.setdefault("apps_used", {})
+                apps = current.setdefault("apps_used", {})
                 apps[app_class] = apps.get(app_class, 0) + 1
 
             if repo:
-                repos = self._current.get("repos_active", set())
+                repos = current.get("repos_active")
+                if not isinstance(repos, set):
+                    # Defensive: a persisted session may have been loaded
+                    # with repos_active as a list (JSON round-trip).
+                    repos = set(repos or [])
+                    current["repos_active"] = repos
                 repos.add(repo)
-                self._current["repos_active"] = repos
 
             self._save_current()
 
@@ -226,13 +249,13 @@ class SessionStore:
         total_minutes = sum(s.get("duration_minutes", 0) for s in sessions)
 
         # Count unique apps across all sessions
-        all_apps = {}
+        all_apps: dict[str, int] = {}
         for s in sessions:
             for app, count in s.get("apps_used", {}).items():
                 all_apps[app] = all_apps.get(app, 0) + count
 
         # Most used app
-        most_used = max(all_apps, key=all_apps.get) if all_apps else ""
+        most_used = max(all_apps, key=all_apps.__getitem__) if all_apps else ""
 
         return {
             "session_count": len(sessions),
@@ -247,7 +270,7 @@ class SessionStore:
         total_minutes = sum(s.get("duration_minutes", 0) for s in sessions)
 
         # Sessions per day
-        days = {}
+        days: dict[str, int] = {}
         for s in sessions:
             try:
                 day = datetime.fromisoformat(s["started_at"]).strftime("%A")

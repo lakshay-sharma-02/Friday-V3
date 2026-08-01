@@ -6,51 +6,65 @@
 
 ---
 
-## Architectural Invariants (from V3, preserved in V4)
+## ⭐ Status: V4 Is the Main Project
 
-All 25 V3 Architecture Laws remain in effect. The following are especially
-critical for V4:
+**V4 is the project being actively built.** V3 is largely built but
+inconsistent — it is NOT the foundation V4 is subordinated to. V4 imports
+only the V3 modules that are properly built and useful (e.g.
+`friday.persona.engine`, `friday.ambient`, `friday.db`) as dependencies.
+If a V3 module is missing or broken, V4 builds its own version instead of
+patching V3 wholesale.
 
-1. **Law 1 — Reality First:** Reality is the only source of truth.
-2. **Law 4 — Knowledge Is Evidence:** Every knowledge entry cites evidence.
-3. **Law 8 — Brain Never Mutates Reality:** Brain reasons; V4 surfaces add
-   new interaction modes but don't give the Brain new mutation powers.
-4. **Law 18 — Single Responsibility:** Every V4 layer owns exactly one
+## Architectural Invariants
+
+Laws carried forward from V3 that V4 chooses to honor (V4 is the main
+project; these are adopted because they're sound, not because V3 mandates
+them):
+
+1. **Reality First:** Reality is the only source of truth.
+2. **Knowledge Is Evidence:** Every knowledge entry cites evidence.
+3. **Reasoning Never Mutates Reality:** Reasoning is deterministic; V4's
+   interaction modes don't mutate the world behind the operator's back.
+4. **Single Responsibility:** Every V4 layer owns exactly one
    responsibility.
-5. **Law 19 — Downward Dependencies Only:** V4 may depend on V3; V3 must
-   never depend on V4.
-6. **Law 21 — Determinism First:** Voice/mobile/desktop are interaction
-   surfaces; the reasoning core remains deterministic.
+5. **Downward Dependencies Only:** V4 may depend on the V3 modules it
+   imports; those modules must never depend on V4.
+6. **Determinism First:** Voice/mobile/desktop are interaction surfaces;
+   the reasoning core remains deterministic.
 
 ---
 
 ## V4-Specific Architecture Decisions
 
-### ADR-1: V4 Lives in a Separate Package
+### ADR-1: V4 Lives in a Separate Package (Main Project)
 
-**Decision:** `friday_v4/` is a separate Python package that imports from
-`friday` (V3). It is NOT a fork or subpackage of V3.
+**Decision:** `friday_v4/` is the main project — a separate Python package
+that selectively imports only properly-built modules from `friday` (V3).
+It is NOT a fork or subpackage of V3, and V4 is NOT built on a "frozen
+core" it must preserve.
 
-**Rationale:** This enforces Law 19 (downward dependencies). V4 can be
-installed alongside V3, removed without affecting V3, and developed with
-its own dependency tree. V3 remains independently testable.
+**Rationale:** V3 is largely built but inconsistent. V4 is developed on its
+own terms with its own roadmap. Only V3 modules that are genuinely solid
+(persona, ambient, db) are reused; everything else is rebuilt properly in
+V4.
 
-**Consequence:** V4 must use V3's public API only. Internal V3 modules
-are not accessible. If V4 needs a new V3 API, it's added to V3's public
-surface — never by reaching into a private module.
+**Consequence:** V4 uses V3's public API only for the modules it reuses.
+If a V3 module is missing or broken, V4 implements it itself — it does not
+wait on V3 or patch V3 wholesale.
 
-### ADR-2: V3 Daemon Becomes V4's Backend
+### ADR-2: V4 Owns Its Daemon; V3 Pieces Reused Where Solid
 
-**Decision:** V4 does NOT replace the V3 daemon. It wraps it. The V4 daemon
-adds voice, desktop, collaboration, and security checks on top of the V3
-cycle. The V3 daemon continues to run the core observation → learning
-pipeline.
+**Decision:** V4 owns its own daemon and services. It may reuse the V3
+daemon's observation → learning pipeline where that code is genuinely
+solid, but V4 is not bound to preserve or wrap V3's daemon — if V3's
+piece is inconsistent, V4 implements its own.
 
-**Rationale:** The V3 daemon is a frozen module with 1,656 passing tests.
-Replacing it risks regression. Wrapping it preserves the frozen contract.
+**Rationale:** V3 is largely built but inconsistent. Reusing only the
+solid pieces (persona, ambient, db) keeps V4's momentum without inheriting
+V3's inconsistencies.
 
-**Consequence:** The V4 daemon starts the V3 daemon as a subprocess and
-adds its own services. When V4 is stopped, V3 daemon continues running.
+**Consequence:** V4's daemon is the product's own; V3 integration points
+are evaluated per-module on merit, not preserved out of duty.
 
 ### ADR-3: Voice Is an Interaction Mode, Not a New Pipeline
 
@@ -202,10 +216,11 @@ friday_v4/
 
 ## Testing Strategy
 
-### V3 Tests (1,656)
-- Never modified by V4
-- Run in every V4 CI pipeline
-- V4 failure is a V4 bug, not a V3 regression
+### V3 Modules (reused selectively)
+- Only the V3 modules V4 actually imports (persona, ambient, db) matter
+- V3's broader suite (1,656 tests) is V3's own concern, not V4's gate
+- A failure in a reused V3 module is fixed at the import boundary in V4,
+  or the module is replaced with a V4 implementation
 
 ### V4 Unit Tests (target: 500+)
 - Mock all V3 dependencies (friday.* modules)
@@ -227,11 +242,11 @@ friday_v4/
 
 ## Error Handling
 
-All V4 modules follow V3's error pattern:
+All V4 modules follow Friday's error pattern:
 
 1. **Never crash the daemon** — wrap all external calls in try/except
 2. **Never fabricate** — if a service is unavailable, report the failure
-3. **Log everything** — use V3's `_log()` for daemon events
+3. **Log everything** — log all daemon events
 
 ### Service Degradation
 

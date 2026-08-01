@@ -420,3 +420,21 @@ class GNOMEAdapter(DesktopAbstraction):
         except Exception as exc:
             logger.warning(f"GNOME screenshot failed: {exc}")
         return None
+
+    def setup_instructions(self) -> str:
+        """Return setup instructions for GNOME desktop control."""
+        missing = []
+        if not self._has_gdbus:
+            missing.append("gdbus (libglib2.0-bin)")
+        if not self._is_wayland and not self._has_wmctrl:
+            missing.append("wmctrl")
+        if not self._is_wayland and not self._has_xdotool:
+            missing.append("xdotool")
+        if not missing:
+            return "GNOME desktop control is ready."
+        return (
+            "GNOME desktop control needs: " + ", ".join(missing) + ".\n"
+            "Install them, e.g. `sudo apt install "
+            + " ".join(m.split(" (")[0] for m in missing)
+            + "`."
+        )

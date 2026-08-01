@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -274,6 +275,11 @@ class TestAdapterRegistry:
         from friday_v4.desktop.wm_abstraction import SUPPORTED_PLATFORMS
         assert SUPPORTED_PLATFORMS == ["hyprland", "gnome", "kde", "macos", "windows"]
 
+    def test_base_setup_instructions(self):
+        from friday_v4.desktop.wm_abstraction import DesktopAbstraction
+        adapter = DesktopAbstraction()
+        assert "not available" in adapter.setup_instructions()
+
 
 # ==========================================================================
 # GNOME / KDE / macOS / Windows adapters (graceful degradation)
@@ -340,6 +346,147 @@ class TestOtherAdapters:
         monkeypatch.setattr("os.name", "posix")
         adapter = WindowsAdapter()
         assert adapter.is_available() is False
+
+    def test_windows_list_windows_extracts_class(self):
+        """Windows enumeration output now includes the window class so
+        focus_smart (which resolves to a class) can work."""
+        from friday_v4.desktop.windows_adapter import WindowsAdapter
+        adapter = WindowsAdapter()
+        with patch.object(WindowsAdapter, "_ps_run") as mock_run:
+            mock_run.return_value = (
+                "0x1|kitty — main.py|kitty|1234|1\n"
+                "0x2|Mozilla Firefox|firefox|5678|0\n"
+            )
+            windows = adapter.list_windows()
+        assert len(windows) == 2
+        assert windows[0].app_class == "kitty"
+        assert windows[0].is_active is True
+        assert windows[1].app_class == "firefox"
+        assert windows[1].pid == 5678
+
+    def test_windows_focus_by_class(self):
+        """focus(by='class') must pass the class to the PowerShell script
+        (not an exact-title lookup) so natural-language focusing works."""
+        from friday_v4.desktop.windows_adapter import WindowsAdapter, _FOCUS_PS
+        adapter = WindowsAdapter()
+        with patch.object(WindowsAdapter, "_ps_run") as mock_run:
+            mock_run.return_value = "OK"
+            assert adapter.focus("firefox", "class") is True
+        script = mock_run.call_args[0][0]
+        assert "%CLASS%" not in script and "firefox" in script
+
+    def test_windows_focus_by_title(self):
+        from friday_v4.desktop.windows_adapter import WindowsAdapter
+        adapter = WindowsAdapter()
+        with patch.object(WindowsAdapter, "_ps_run") as mock_run:
+            mock_run.return_value = "OK"
+            assert adapter.focus("main.py", "title") is True
+        script = mock_run.call_args[0][0]
+        assert "main.py" in script
+
+    def test_setup_instructions_present_for_all_adapters(self):
+        """Every platform adapter must expose setup_instructions() so the
+        CLI can surface graceful setup help when the desktop is unavailable."""
+        from friday_v4.desktop.hyprland_adapter import HyprlandAdapter
+        from friday_v4.desktop.gnome_adapter import GNOMEAdapter
+        from friday_v4.desktop.kde_adapter import KDEAdapter
+        from friday_v4.desktop.macos_adapter import MacOSAdapter
+        from friday_v4.desktop.windows_adapter import WindowsAdapter
+        from friday_v4.desktop.wm_abstraction import DesktopAbstraction
+
+        for adapter in (DesktopAbstraction(), HyprlandAdapter(), GNOMEAdapter(),
+                        KDEAdapter(), MacOSAdapter(), WindowsAdapter()):
+            text = adapter.setup_instructions()
+            assert isinstance(text, str) and len(text) > 0
+
+    def test_create_adapter_sway_uses_hyprland(self):
+        """sway (wlroots IPC) is handled by the Hyprland adapter — the
+        earlier duplicate branch was removed."""
+        from friday_v4.desktop.wm_abstraction import create_adapter
+        with patch("friday_v4.desktop.hyprland_adapter.HyprlandAdapter") as mock_cls:
+            create_adapter("sway")
+            mock_cls.assert_called_once()
+
+
+# ==========================================================================
+# DesktopWatcher — event hooks (plan: on_window_change / on_workspace_change)
+# ==========================================================================
+
+
+class TestDesktopWatcher:
+    def _wm(self, windows, workspace_id=1):
+        """Build a fake WindowManager-like object."""
+        wm = MagicMock()
+        wm.is_available = True
+
+        def get_active_window():
+            return windows[0] if windows else None
+
+        wm.get_active_window.side_effect = get_active_window
+        ws = MagicMock()
+        ws.id = workspace_id
+        wm.get_active_workspace.return_value = ws
+        return wm
+
+    def test_fires_on_app_and_workspace_change(self):
+        from friday_v4.desktop.watcher import DesktopWatcher
+        from friday_v4.desktop.wm_abstraction import WindowInfo
+
+        app_changes = []
+        ws_changes = []
+        window_changes = []
+
+        wm = self._wm([WindowInfo(window_id="w1", app_class="kitty", title="t")], 1)
+        watcher = DesktopWatcher(
+            wm=wm,
+            on_window_change=lambda w: window_changes.append(w),
+            on_app_change=lambda a: app_changes.append(a),
+            on_workspace_change=lambda ws: ws_changes.append(ws.id),
+        )
+        watcher.running = True
+        # Prime state = current window/app/workspace, then poll with a change
+        watcher._capture_state()
+        wm.get_active_window.side_effect = lambda: WindowInfo(
+            window_id="w2", app_class="firefox", title="docs")
+        wm.get_active_workspace.return_value.id = 3
+        watcher.poll_once()
+
+        # window + app changed → both callbacks fired
+        assert len(window_changes) == 1
+        assert window_changes[0].app_class == "firefox"
+        assert app_changes == ["firefox"]
+        # workspace changed → callback fired
+        assert ws_changes == [3]
+
+    def test_no_spurious_first_event(self):
+        """start() primes last-seen state so the already-active window does
+        not fire a change event on the first poll."""
+        from friday_v4.desktop.watcher import DesktopWatcher
+        from friday_v4.desktop.wm_abstraction import WindowInfo
+
+        wm = self._wm([WindowInfo(window_id="w1", app_class="kitty", title="t")], 1)
+        window_changes = []
+        watcher = DesktopWatcher(
+            wm=wm, on_window_change=lambda w: window_changes.append(w))
+        watcher.running = True
+        watcher._capture_state()
+        watcher.poll_once()  # same window — no change
+        assert window_changes == []
+
+    def test_start_stop(self):
+        from friday_v4.desktop.watcher import DesktopWatcher
+        wm = self._wm([], 1)
+        watcher = DesktopWatcher(wm=wm, poll_interval=0.1)
+        assert watcher.start() is True
+        watcher.stop()
+        assert watcher.running is False
+
+    def test_available_false_without_desktop(self):
+        from friday_v4.desktop.watcher import DesktopWatcher
+        wm = MagicMock()
+        wm.is_available = False
+        watcher = DesktopWatcher(wm=wm)
+        assert watcher.available is False
 
 
 # ==========================================================================
@@ -454,3 +601,153 @@ class TestNotifier:
         assert channel.start() is True
         channel.stop()
         assert channel.running is False
+
+
+# ==========================================================================
+# ProactiveSuggestionChannel — get_suggestions → desktop notifications
+# ==========================================================================
+
+
+class TestProactiveSuggestionChannel:
+    def _item(self, text, should_notify=True, should_speak=False, source="pattern"):
+        """Build a PrioritizedItem with the handling flags set."""
+        from friday_v4.proactive.priority import PrioritizedItem
+        return PrioritizedItem(
+            text=text,
+            category="suggestion",
+            priority_score=80 if should_notify else 10,
+            urgency="soon",
+            should_speak=should_speak,
+            should_notify=should_notify,
+            source=source,
+        )
+
+    def _channel(self, engine=None, **kwargs):
+        from friday_v4.desktop.notifier import ProactiveSuggestionChannel
+        channel = ProactiveSuggestionChannel(engine=engine or MagicMock(), **kwargs)
+        channel._notified = {}
+        return channel
+
+    def test_poll_once_notifies_should_notify_items(self):
+        """Items flagged should_notify are raised as desktop notifications;
+        speak-worthy items get critical urgency."""
+        engine = MagicMock()
+        engine.get_suggestions.return_value = [
+            self._item("Open Firefox? You usually browse now", should_speak=True),
+            self._item("After editing, you usually run tests"),
+            self._item("Suppressed: no urgency", should_notify=False),
+        ]
+        notified = []
+        channel = self._channel(
+            engine, notify=lambda t, m, **kw: notified.append((t, m, kw)))
+
+        count = channel.poll_once()
+
+        assert count == 2
+        assert len(notified) == 2
+        titles = {t for t, _m, _kw in notified}
+        assert "Friday · Pattern" in titles
+        # speak-worthy -> critical; plain notify -> normal
+        urgencies = [kw.get("urgency") for _t, _m, kw in notified]
+        assert "critical" in urgencies and "normal" in urgencies
+        # suppressed item never notified
+        assert all("Suppressed" not in m for _t, m, _kw in notified)
+
+    def test_cooldown_dedup(self):
+        """The same suggestion must not re-notify within the cooldown window,
+        but may after it expires."""
+        engine = MagicMock()
+        item = self._item("Switch to kitty?")
+        engine.get_suggestions.return_value = [item]
+        notified = []
+        channel = self._channel(
+            engine, cooldown_seconds=60.0,
+            notify=lambda t, m, **kw: notified.append(m),
+        )
+
+        assert channel.poll_once() == 1
+        assert channel.poll_once() == 0  # within cooldown
+        assert len(notified) == 1
+
+        # Simulate cooldown expiry: backdate the cooldown entry.
+        text = item.text.strip()
+        channel._notified[text] = time.time() - 61.0
+        assert channel.poll_once() == 1
+        assert len(notified) == 2
+
+    def test_poll_once_without_engine_returns_zero(self):
+        """A channel with no usable engine degrades to no notifications."""
+        from friday_v4.desktop.notifier import ProactiveSuggestionChannel
+        channel = ProactiveSuggestionChannel(engine=False)
+        assert channel.poll_once() == 0
+
+    def test_poll_once_engine_error_graceful(self):
+        """An engine failure must not crash the poll — returns 0."""
+        engine = MagicMock()
+        engine.get_suggestions.side_effect = RuntimeError("engine boom")
+        channel = self._channel(engine)
+        assert channel.poll_once() == 0
+
+    def test_start_stop_lifecycle(self):
+        """start/stop work with an injected engine; stop does not crash even
+        when the engine has no cleanup."""
+        from friday_v4.desktop.notifier import ProactiveSuggestionChannel
+        engine = MagicMock()
+        channel = ProactiveSuggestionChannel(engine=engine, poll_interval=0.01)
+        assert channel.start() is True
+        assert channel.running is True
+        channel.stop()
+        assert channel.running is False
+
+    def test_stop_does_not_cleanup_injected_engine(self):
+        """An injected engine belongs to its caller (e.g. the daemon's shared
+        observer) — the channel must NOT call cleanup() on it, or the daemon
+        would end the session twice."""
+        from friday_v4.desktop.notifier import ProactiveSuggestionChannel
+        engine = MagicMock()
+        channel = ProactiveSuggestionChannel(engine=engine, poll_interval=0.01)
+        channel.start()
+        channel.stop()
+        engine.cleanup.assert_not_called()
+
+    def test_stop_cleans_up_lazily_built_engine(self):
+        """A channel that built its own engine owns it — stop() must end the
+        session so the daemon/process shuts down cleanly."""
+        from friday_v4.desktop import notifier as notifier_mod
+
+        built = MagicMock()
+        built.get_suggestions.return_value = []
+        with patch("friday_v4.proactive.anticipation.AnticipationEngine",
+                   return_value=built):
+            channel = notifier_mod.ProactiveSuggestionChannel(
+                engine=None, poll_interval=0.01)
+            assert channel._get_engine() is built
+            assert channel._owns_engine is True
+            channel.start()
+            channel.stop()
+        built.cleanup.assert_called_once()
+
+    def test_daemon_parser_has_suggestion_poll(self):
+        """The daemon subcommand exposes --suggestion-poll so the proactive
+        channel's cadence is configurable."""
+        import argparse
+
+        from friday_v4.cli_desktop import build_desktop_parser
+
+        parser = argparse.ArgumentParser(prog="friday4")
+        subparsers = parser.add_subparsers(dest="command")
+        build_desktop_parser(subparsers)
+        args = parser.parse_args(["desktop", "daemon", "--suggestion-poll", "30"])
+        assert args.suggestion_poll == 30.0
+
+    def test_daemon_parser_default(self):
+        """Default suggestion poll interval is 120s."""
+        import argparse
+
+        from friday_v4.cli_desktop import build_desktop_parser
+
+        parser = argparse.ArgumentParser(prog="friday4")
+        subparsers = parser.add_subparsers(dest="command")
+        build_desktop_parser(subparsers)
+        args = parser.parse_args(["desktop", "daemon"])
+        assert args.suggestion_poll == 120.0

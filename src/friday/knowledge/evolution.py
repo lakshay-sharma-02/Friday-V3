@@ -238,7 +238,7 @@ def evolve(conn, build_at: Optional[str] = None) -> int:
             # New knowledge appeared.
             _record(
                 "knowledge", kid, "Emerged",
-                new_state=k.status.value,
+                previous_state=None, new_state=k.status.value,
                 reason=f"Knowledge emerged with {k.evidence_count} evidence "
                 f"(status {k.status.value}).",
                 metadata=meta,

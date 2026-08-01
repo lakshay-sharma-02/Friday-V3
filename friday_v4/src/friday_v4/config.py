@@ -27,7 +27,7 @@ CONFIG_PATH = Path.home() / ".friday" / "v4_config.json"
 class VoiceConfig:
     enabled: bool = True
     stt_model: str = "base.en"
-    tts_provider: str = "kokoro"
+    tts_provider: str = "piper"
     tts_voice: str = ""
     hotword: str = "hey friday"
     hotword_sensitivity: float = 0.7
@@ -132,7 +132,7 @@ def write_default_config(path: Optional[Path] = None) -> Path:
         "voice": {
             "enabled": True,
             "stt_model": "base.en",
-            "tts_provider": "kokoro",
+            "tts_provider": "piper",
             "tts_voice": "",
             "hotword": "hey friday",
             "hotword_sensitivity": 0.7,
@@ -145,7 +145,7 @@ def write_default_config(path: Optional[Path] = None) -> Path:
         "desktop": {
             "enabled": True,
             "wm": "auto",
-            "system_tray": False,
+            "system_tray": True,
             "global_hotkeys": True,
         },
         "collab": {

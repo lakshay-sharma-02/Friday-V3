@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from .chimes import play_chime
 from .pipeline import VoicePipeline, PipelineState
@@ -48,7 +48,7 @@ class VoiceRouter:
         self._wm = None
         self._suggestions_shown: set[str] = set()
         self._interaction_count = 0
-        self._proactive = None
+        self._proactive: Optional[Any] = None  # AnticipationEngine (lazy import)
 
         if enable_proactive:
             self._init_proactive()
@@ -319,7 +319,7 @@ class VoiceRouter:
             return "I couldn't check your desktop status right now."
 
     def _get_status_response(self) -> str:
-        parts = []
+        parts: list[str] = []
         try:
             if self._conn:
                 status = self._conn.execute(

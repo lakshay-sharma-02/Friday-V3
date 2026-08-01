@@ -207,13 +207,13 @@ class Sandbox:
         finally:
             os.unlink(patch_file)
 
-	    def run_tests(self, test_args: list[str] | None = None) -> dict:
-	        """Run the test suite inside the sandbox. Returns {passed, output, duration_ms}."""
-	        if not self._sandbox_path:
-	            raise RuntimeError("Sandbox not created yet")
-	        args = test_args or ["python", "-m", "pytest", "tests/", "-x", "--tb=short"]
-	        env = self.sandbox_env()
-	        t0 = datetime.now(timezone.utc)
+    def run_tests(self, test_args: list[str] | None = None) -> dict:
+        """Run the test suite inside the sandbox. Returns {passed, output, duration_ms}."""
+        if not self._sandbox_path:
+            raise RuntimeError("Sandbox not created yet")
+        args = test_args or ["python", "-m", "pytest", "tests/", "-x", "--tb=short"]
+        env = self.sandbox_env()
+        t0 = datetime.now(timezone.utc)
         try:
             result = subprocess.run(
                 args, cwd=self._sandbox_path, env=env, capture_output=True,

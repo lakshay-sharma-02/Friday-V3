@@ -219,7 +219,8 @@ def _enabled() -> bool:
     return False
 
 
-def _call(system: str, user: str) -> Optional[str]:
+def _call(system: str, user: str, timeout_per_model: int = 30,
+          timeout_total: int = 45) -> Optional[str]:
     """Single OpenAI-compatible chat call. Returns assistant text, or None on any
     failure (disabled model, network/parse/proxy error) so callers fall back
     deterministically. SSE and single-object responses are both handled.
@@ -227,7 +228,13 @@ def _call(system: str, user: str) -> Optional[str]:
     Uses three speed optimizations:
     1. Response cache — repeated (system, user) pairs return instantly
     2. Parallel model probing — all providers/models fired concurrently
-    3. Tight timeouts — 30s per model, 45s total
+    3. Tight timeouts — 30s per model, 45s total (configurable)
+
+    Args:
+        system: System prompt.
+        user: User message.
+        timeout_per_model: Seconds to wait per individual model request.
+        timeout_total: Overall deadline for the parallel batch.
     """
     if not _enabled():
         return None
@@ -239,7 +246,8 @@ def _call(system: str, user: str) -> Optional[str]:
         return cached
 
     # Parallel probe all providers.
-    result = _parallel_call(system, user, timeout_per_model=30, timeout_total=45)
+    result = _parallel_call(system, user, timeout_per_model=timeout_per_model,
+                            timeout_total=timeout_total)
     if result:
         _cache_set(ck, result)
 
@@ -475,6 +483,8 @@ def _call_structured(
     user: str,
     system_suffix: str = "",
     required_keys: Optional[list[str]] = None,
+    timeout_per_model: int = 30,
+    timeout_total: int = 45,
 ) -> Optional[Any]:
     """Call the LLM and return parsed structured JSON output.
 
@@ -494,6 +504,8 @@ def _call_structured(
             ``"\\n\\nRespond with ONLY valid JSON. No markdown, no explanation."``
         required_keys: If provided, the parsed dict must contain all these
             keys or ``None`` is returned.
+        timeout_per_model: Seconds per individual model request.
+        timeout_total: Overall deadline for the parallel batch.
 
     Returns:
         Parsed JSON (``dict`` or ``list``), or ``None`` on any failure.
@@ -502,7 +514,9 @@ def _call_structured(
     if not system_suffix:
         system_suffix = "\n\nRespond with ONLY valid JSON. No markdown, no explanation."
 
-    raw = _call(system + system_suffix, user)
+    raw = _call(system + system_suffix, user,
+                timeout_per_model=timeout_per_model,
+                timeout_total=timeout_total)
     if not raw:
         return None
 

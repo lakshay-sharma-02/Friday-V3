@@ -1,18 +1,18 @@
-"""CLI commands for `friday desktop` — desktop awareness & control.
+"""CLI commands for `friday4 desktop` — desktop awareness & control.
 
 Usage:
-    friday desktop status               # Show full desktop status
-    friday desktop windows              # List open windows
-    friday desktop switch <ws>          # Switch to workspace
-    friday desktop focus <app>          # Focus an app (natural name or class)
-    friday desktop launch <app>         # Launch an application
-    friday desktop screenshot           # Take a screenshot
-    friday desktop notify <msg>         # Send a desktop notification
-    friday desktop platforms            # List supported platforms + current DE
-    friday desktop tray                 # Start the system tray icon
-    friday desktop hotkeys              # Register global hotkeys
-    friday desktop watch                # Ambient feed → desktop notifications
-    friday desktop daemon               # Tray + hotkeys + notifier, together
+    friday4 desktop status              # Show full desktop status
+    friday4 desktop windows             # List open windows
+    friday4 desktop switch <ws>         # Switch to workspace
+    friday4 desktop focus <app>         # Focus an app (natural name or class)
+    friday4 desktop launch <app>        # Launch an application
+    friday4 desktop screenshot          # Take a screenshot
+    friday4 desktop notify <msg>        # Send a desktop notification
+    friday4 desktop platforms           # List supported platforms + current DE
+    friday4 desktop tray                # Start the system tray icon
+    friday4 desktop hotkeys             # Register global hotkeys
+    friday4 desktop watch               # Ambient feed → desktop notifications
+    friday4 desktop daemon              # Tray + hotkeys + notifier, together
 """
 
 from __future__ import annotations
@@ -22,6 +22,10 @@ import logging
 import sys
 import threading
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import-time only
+    from .desktop.wm_abstraction import WindowManager
 
 logger = logging.getLogger("friday_v4.cli_desktop")
 
@@ -51,7 +55,7 @@ def _require_desktop(wm) -> bool:
     """Print an error and return False if the desktop is unavailable."""
     if not wm.is_available:
         print(f"  {_RED}✗ Desktop not available ({wm.desktop_environment}){_RESET}")
-        print(f"  {_DIM}  Try: friday desktop platforms{_RESET}")
+        print(f"  {_DIM}  Try: friday4 desktop platforms{_RESET}")
         return False
     return True
 
@@ -60,13 +64,13 @@ def _launch_voice_session() -> None:
     """Open an interactive voice session in a new terminal window.
 
     Used by the tray "🎙 Start voice" menu item and the push-to-talk
-    hotkey. Spawns ``friday talk`` in the first available terminal
+    hotkey. Spawns ``friday4 talk`` in the first available terminal
     emulator; falls back to a desktop notification if none is found.
     """
     import shutil
     import subprocess
 
-    cmd = [sys.executable, "-m", "friday_v4.cli_talk", "talk"]
+    cmd = [sys.executable, "-m", "friday_v4.cli_talk", "talk", "--push-to-talk"]
     terminals = [
         ("kitty", ["kitty", "--", *cmd]),
         ("alacritty", ["alacritty", "-e", *cmd]),
@@ -89,11 +93,11 @@ def _launch_voice_session() -> None:
             except OSError as exc:
                 logger.debug(f"Failed to launch voice via {name}: {exc}")
 
-    print(f"  {_DIM}  🎙 Voice: run `friday talk` in a terminal{_RESET}")
+    print(f"  {_DIM}  🎙 Voice: run `friday4 talk` in a terminal{_RESET}")
     try:
         from .desktop.wm_abstraction import WindowManager
         WindowManager.notify(
-            "Friday", "Voice: run `friday talk` in a terminal", "normal"
+            "Friday", "Voice: run `friday4 talk` in a terminal", "normal"
         )
     except Exception:
         pass
@@ -268,7 +272,7 @@ def cmd_desktop_focus(args: argparse.Namespace) -> int:
         return 0
     else:
         print(f"  {_YELLOW}⚠ Couldn't find '{target}'{_RESET}")
-        print(f"  {_DIM}  Try: friday desktop windows{_RESET}")
+        print(f"  {_DIM}  Try: friday4 desktop windows{_RESET}")
         return 1
 
 
@@ -434,6 +438,45 @@ def cmd_desktop_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_desktop_events(args: argparse.Namespace) -> int:
+    """Watch the desktop and print window/app/workspace changes live.
+
+    Implements the plan's desktop event-monitoring API
+    (``on_window_change`` / ``on_workspace_change``) on the CLI — Friday
+    reports what you switch to as it happens.
+    """
+    from .desktop.watcher import DesktopWatcher
+
+    wm = _get_wm()
+    _print_logo()
+
+    if not _require_desktop(wm):
+        return 1
+
+    watcher = DesktopWatcher(
+        wm=wm,
+        poll_interval=max(args.interval, 0.2),
+        on_window_change=lambda win: print(
+            f"  {_CYAN}🪟 Window: {win.app_class} — "
+            f"\"{(win.title or '')[:50]}\"{_RESET}"),
+        on_app_change=lambda app: print(
+            f"  {_GREEN}▶ App: {app}{_RESET}"),
+        on_workspace_change=lambda ws: print(
+            f"  {_YELLOW}⌗ Workspace: {ws.id}{_RESET}"),
+    )
+    watcher.start()
+    print(f"  {_DIM}Watching for desktop changes"
+          f" (every {max(args.interval, 0.2):g}s)... Ctrl+C to stop{_RESET}")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print(f"\n  {_DIM}Stopped watching.{_RESET}\n")
+    finally:
+        watcher.stop()
+    return 0
+
+
 def cmd_desktop_daemon(args: argparse.Namespace) -> int:
     """Run the full desktop presence daemon — tray + hotkeys + notifier.
 
@@ -483,6 +526,29 @@ def cmd_desktop_daemon(args: argparse.Namespace) -> int:
     channel.start(daemon=True)
     print(f"  {_GREEN}  ✓ Watching ambient feed (priority ≥ {args.min_priority}){_RESET}")
 
+    # 4. Proactive pattern observer — feed real desktop activity (app
+    #    switches + focus actions) into the PatternLearner so suggestions
+    #    learn from what the user actually does.
+    observer = None
+    suggestion_channel = None
+    try:
+        from .proactive import AnticipationEngine
+        observer = AnticipationEngine()
+        # Event-driven: DesktopWatcher fires on app switches (~1s detection)
+        # so patterns learn the moment you switch apps.
+        observer.start_observer(interval_seconds=1.0)
+        print(f"  {_GREEN}  ✓ Learning desktop patterns (proactive observer){_RESET}")
+
+        # 5. Proactive suggestions → desktop notifications. Shares the same
+        #    observer engine so notifications reflect freshly-learned patterns.
+        from .desktop.notifier import ProactiveSuggestionChannel
+        suggestion_channel = ProactiveSuggestionChannel(
+            engine=observer, poll_interval=args.suggestion_poll)
+        suggestion_channel.start(daemon=True)
+        print(f"  {_GREEN}  ✓ Suggesting proactively (every {args.suggestion_poll:g}s){_RESET}")
+    except Exception as exc:
+        logger.debug(f"Proactive observer unavailable: {exc}")
+
     if not (tray_started or hotkeys_started):
         print(f"  {_YELLOW}  ○ No tray/hotkeys — ambient notifier still running.{_RESET}")
         print(f"  {_DIM}    Install: pip install friday-v4[desktop]{_RESET}")
@@ -499,6 +565,17 @@ def cmd_desktop_daemon(args: argparse.Namespace) -> int:
     if hotkeys_started:
         hotkeys.stop()
     channel.stop()
+    if suggestion_channel:
+        try:
+            suggestion_channel.stop()
+        except Exception:
+            pass
+    if observer:
+        try:
+            observer.stop_observer()
+            observer.cleanup()
+        except Exception:
+            pass
     return 0
 
 
@@ -508,7 +585,7 @@ def cmd_desktop_daemon(args: argparse.Namespace) -> int:
 
 
 def build_desktop_parser(subparsers) -> None:
-    """Build subparser for `friday desktop` (used by the integrated CLI).
+    """Build subparser for `friday4 desktop` (used by the integrated CLI).
 
     Registers a ``desktop`` subparser on the given subparsers and wires
     all the desktop subcommands onto it.
@@ -525,46 +602,46 @@ def build_desktop_parser(subparsers) -> None:
 
 
 def _build_desktop_subcommands(desktop_sub) -> None:
-    """Register `friday desktop <cmd>` subcommands on a subparsers object.
+    """Register `friday4 desktop <cmd>` subcommands on a subparsers object.
 
     Shared by both the integrated `friday` CLI (via build_desktop_parser)
     and the standalone `python -m friday_v4.cli_desktop` entry point.
     """
 
-    # friday desktop status
+    # friday4 desktop status
     p = desktop_sub.add_parser("status", help="Show full desktop status")
     p.set_defaults(func=cmd_desktop_status)
 
-    # friday desktop windows
+    # friday4 desktop windows
     p = desktop_sub.add_parser("windows", help="List open windows")
     p.set_defaults(func=cmd_desktop_windows)
 
-    # friday desktop switch <workspace>
+    # friday4 desktop switch <workspace>
     p = desktop_sub.add_parser("switch", help="Switch to a workspace")
     p.add_argument("workspace", type=str,
                    help="Workspace ID (e.g., 1, 2) or name (e.g., main)")
     p.set_defaults(func=cmd_desktop_switch)
 
-    # friday desktop focus <app>
+    # friday4 desktop focus <app>
     p = desktop_sub.add_parser("focus", help="Focus a window by name")
     p.add_argument("app", nargs="+",
                    help="App name (e.g., 'code editor', 'browser', 'kitty')")
     p.set_defaults(func=cmd_desktop_focus)
 
-    # friday desktop launch <app>
+    # friday4 desktop launch <app>
     p = desktop_sub.add_parser("launch", help="Launch an application")
     p.add_argument("app", nargs="+", help="App name or command to launch")
     p.add_argument("--path", type=str, default=None,
                    help="Optional working directory / project to open")
     p.set_defaults(func=cmd_desktop_launch)
 
-    # friday desktop screenshot
+    # friday4 desktop screenshot
     p = desktop_sub.add_parser("screenshot", help="Take a screenshot")
     p.add_argument("-o", "--output", type=str, default=None,
                    help="Output path for screenshot")
     p.set_defaults(func=cmd_desktop_screenshot)
 
-    # friday desktop notify
+    # friday4 desktop notify
     p = desktop_sub.add_parser("notify", help="Send a desktop notification")
     p.add_argument("--title", "-t", type=str, default="Friday",
                    help="Notification title (default: Friday)")
@@ -574,22 +651,22 @@ def _build_desktop_subcommands(desktop_sub) -> None:
     p.add_argument("message", nargs="+", help="Notification message")
     p.set_defaults(func=cmd_desktop_notify)
 
-    # friday desktop platforms
+    # friday4 desktop platforms
     p = desktop_sub.add_parser("platforms",
                                help="List supported platforms + current DE")
     p.set_defaults(func=cmd_desktop_platforms)
 
-    # friday desktop tray
+    # friday4 desktop tray
     p = desktop_sub.add_parser("tray", help="Start the system tray icon")
     p.set_defaults(func=cmd_desktop_tray)
 
-    # friday desktop hotkeys
+    # friday4 desktop hotkeys
     p = desktop_sub.add_parser("hotkeys", help="Register global hotkeys")
     p.add_argument("--push-to-talk", type=str, default="ctrl+shift+space",
                    help="Push-to-talk hotkey (default: ctrl+shift+space)")
     p.set_defaults(func=cmd_desktop_hotkeys)
 
-    # friday desktop watch
+    # friday4 desktop watch
     p = desktop_sub.add_parser(
         "watch",
         help="Watch ambient feed → desktop notifications",
@@ -600,10 +677,19 @@ def _build_desktop_subcommands(desktop_sub) -> None:
                    help="Poll interval in seconds (default: 10)")
     p.set_defaults(func=cmd_desktop_watch)
 
-    # friday desktop daemon
+    # friday4 desktop events
+    p = desktop_sub.add_parser(
+        "events",
+        help="Watch for window/app/workspace changes live",
+    )
+    p.add_argument("--interval", type=float, default=1.0,
+                   help="Poll interval in seconds (default: 1)")
+    p.set_defaults(func=cmd_desktop_events)
+
+    # friday4 desktop daemon
     p = desktop_sub.add_parser(
         "daemon",
-        help="Tray + hotkeys + ambient notifier, together",
+        help="Tray + hotkeys + ambient notifier + proactive suggestions, together",
     )
     p.add_argument("--push-to-talk", type=str, default="ctrl+shift+space",
                    help="Push-to-talk hotkey (default: ctrl+shift+space)")
@@ -611,6 +697,8 @@ def _build_desktop_subcommands(desktop_sub) -> None:
                    help="Only notify events with priority >= N (default: 1)")
     p.add_argument("--poll", type=float, default=10.0,
                    help="Poll interval in seconds (default: 10)")
+    p.add_argument("--suggestion-poll", type=float, default=120.0,
+                   help="Proactive-suggestion poll interval in seconds (default: 120)")
     p.set_defaults(func=cmd_desktop_daemon)
 
 
@@ -628,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
     """
     logging.basicConfig(level=logging.WARNING)
 
-    parser = argparse.ArgumentParser(prog="friday desktop")
+    parser = argparse.ArgumentParser(prog="friday4 desktop")
     subparsers = parser.add_subparsers(dest="desktop_command")
     _build_desktop_subcommands(subparsers)
 

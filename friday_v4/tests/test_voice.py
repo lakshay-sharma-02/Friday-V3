@@ -8,6 +8,7 @@ pipeline state, STT, hotword, VAD, audio device listing, and router routing.
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import threading
 import time
@@ -63,7 +64,7 @@ class TestConfig:
         from friday_v4.config import load_config
         config = load_config(Path("/nonexistent/config.json"))
         assert config.voice.enabled is True
-        assert config.voice.tts_provider == "kokoro"
+        assert config.voice.tts_provider == "piper"
         assert config.voice.stt_model == "base.en"
         assert config.voice.vad_mode == 1
 
@@ -87,9 +88,19 @@ class TestConfig:
             path = f.name
         try:
             config = load_config(Path(path))
-            assert config.voice.tts_provider == "kokoro"
+            assert config.voice.tts_provider == "piper"
         finally:
             Path(path).unlink(missing_ok=True)
+
+    def test_write_default_config_matches_dataclass(self, tmp_path):
+        """Regression: write_default_config must agree with DesktopConfig
+        (system_tray True) — previously drifted to False."""
+        from friday_v4.config import write_default_config
+        path = tmp_path / "v4_config.json"
+        write_default_config(path)
+        data = json.loads(path.read_text())
+        assert data["desktop"]["system_tray"] is True
+        assert data["voice"]["tts_provider"] == "piper"
 
 
 # ==========================================================================
@@ -118,6 +129,49 @@ class TestTTSUtils:
             assert result == VoiceMode.WHISPER
         else:
             assert result == VoiceMode.CONVERSATION
+
+    def test_split_sentences_short_text_single_chunk(self):
+        from friday_v4.voice.tts import TextToSpeech
+        tts = TextToSpeech.__new__(TextToSpeech)
+        assert tts._split_sentences("Hello.") == ["Hello."]
+        assert tts._split_sentences("") == []
+
+    def test_split_sentences_caps_at_12_words(self):
+        from friday_v4.voice.tts import TextToSpeech
+        tts = TextToSpeech.__new__(TextToSpeech)
+        long = "word " * 30 + "end."
+        chunks = tts._split_sentences(long)
+        assert len(chunks) >= 2
+        assert all(len(c.split()) <= 12 for c in chunks)
+
+    def test_split_sentences_breaks_on_commas(self):
+        from friday_v4.voice.tts import TextToSpeech
+        tts = TextToSpeech.__new__(TextToSpeech)
+        text = ("The server load is currently at forty percent across "
+                "all three instances, and I have rotated the credentials "
+                "as you asked.")
+        chunks = tts._split_sentences(text)
+        assert len(chunks) >= 2
+
+    def test_auto_provider_prefers_piper(self):
+        """Auto → piper first, then edge, then kokoro."""
+        from friday_v4.voice.tts import TextToSpeech
+        tts = TextToSpeech.__new__(TextToSpeech)
+        tts.config = type("C", (), {"primary_provider": "auto", "speed": 1.0})()
+        tts._providers = []
+        tts._current_provider = None
+        names = TextToSpeech._init_providers(tts)
+        assert names.index("piper") < names.index("edge") < names.index("kokoro")
+
+    def test_provider_priority_order(self):
+        """Default priority: piper > edge > kokoro > pyttsx3."""
+        from friday_v4.voice.tts import TextToSpeech
+        tts = TextToSpeech.__new__(TextToSpeech)
+        tts.config = type("C", (), {"primary_provider": "piper", "speed": 1.0})()
+        tts._providers = []
+        tts._current_provider = None
+        names = TextToSpeech._init_providers(tts)
+        assert names == ["piper", "edge", "kokoro", "pyttsx3"]
 
     def test_chime_generation(self):
         from friday_v4.voice.chimes import get_chime
@@ -165,6 +219,44 @@ class TestChimes:
 # ==========================================================================
 
 
+class TestConfigFromFile:
+    def test_missing_file_yields_defaults(self):
+        """No config file → built-in defaults, never raises."""
+        from friday_v4.voice.core import config_from_file
+        cfg = config_from_file(Path("/nonexistent/v4_config.json"))
+        assert cfg.hotword == "hey friday"
+        assert cfg.tts_provider == "piper"
+        assert cfg.vad_mode == 1
+
+    def test_config_file_fields_wired(self, tmp_path):
+        from friday_v4.voice.core import config_from_file
+        p = tmp_path / "v4_config.json"
+        p.write_text(json.dumps({
+            "voice": {
+                "hotword": "computer",
+                "tts_provider": "edge",
+                "vad_mode": 3,
+                "silence_timeout_seconds": 1.5,
+                "max_utterance_seconds": 20.0,
+                "enable_chimes": False,
+            }
+        }))
+        cfg = config_from_file(p)
+        assert cfg.hotword == "computer"
+        assert cfg.tts_provider == "edge"
+        assert cfg.vad_mode == 3
+        assert cfg.silence_timeout_seconds == 1.5
+        assert cfg.max_utterance_seconds == 20.0
+        assert cfg.enable_chimes is False
+
+    def test_invalid_config_file_yields_defaults(self, tmp_path):
+        from friday_v4.voice.core import config_from_file
+        p = tmp_path / "v4_config.json"
+        p.write_text("not json {{{")
+        cfg = config_from_file(p)
+        assert cfg.hotword == "hey friday"
+
+
 class TestPipelineState:
     def test_state_transition_calls_callback(self):
         from friday_v4.voice.pipeline import VoicePipeline, PipelineState, PipelineConfig
@@ -177,25 +269,6 @@ class TestPipelineState:
         pipeline.on_state_change = on_state
         pipeline.state = PipelineState.LISTENING
         assert PipelineState.LISTENING in states
-
-    def test_interruption_flag_consumed(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
-        pipeline = VoicePipeline(PipelineConfig())
-        with pipeline._interrupted_lock:
-            pipeline._interrupted = True
-        with pipeline._speech_gen_lock:
-            gen = pipeline._speech_gen
-        pipeline._wait_for_speech_end(gen)
-        with pipeline._interrupted_lock:
-            assert pipeline._interrupted is False
-
-    def test_speech_gen_prevents_stale_reset(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
-        pipeline = VoicePipeline(PipelineConfig())
-        with pipeline._speech_gen_lock:
-            pipeline._speech_gen = 2
-        pipeline._wait_for_speech_end(1)  # stale gen → no state reset
-        assert pipeline.state != "idle"
 
     def test_start_stop_lifecycle(self):
         """Pipeline starts and stops without crashing (no mic in CI)."""
@@ -257,6 +330,26 @@ class TestHotword:
         det.set_sensitivity(1.0)
         assert det._threshold >= 0.005
 
+    def test_empty_keyword_disables_hotword(self):
+        """Push-to-talk passes an empty keyword — the hotword must be
+        fully disabled, never silently armed with a default model."""
+        from friday_v4.voice.hotword import HotwordDetector
+        hw = HotwordDetector("", 0.7)
+        assert hw.is_available is False
+        assert hw.provider_name == "none"
+        assert hw.process(np.zeros(480, dtype=np.float32)) is False
+
+    def test_whitespace_keyword_disables_hotword(self):
+        from friday_v4.voice.hotword import HotwordDetector
+        hw = HotwordDetector("   ", 0.7)
+        assert hw.is_available is False
+        assert hw.provider_name == "none"
+
+    def test_openwakeword_empty_keyword_graceful(self):
+        from friday_v4.voice.hotword import OpenWakeWordProvider
+        p = OpenWakeWordProvider("", 0.7)
+        assert p.is_available is False
+
 
 # ==========================================================================
 # VAD tests
@@ -280,6 +373,24 @@ class TestVAD:
         vad = EnergyVAD(threshold=0.01)
         assert not vad.is_speech(np.zeros(480, dtype=np.float32))
         assert vad.is_speech(np.ones(480, dtype=np.float32) * 0.5)
+
+    def test_silero_frame_audio_pads_480_to_512(self):
+        """480-sample mic frames must be padded to whole 512-sample windows."""
+        from friday_v4.voice.vad import SileroVAD
+        vad = SileroVAD()
+        out = vad._frame_audio(np.zeros(480, dtype=np.float32))
+        assert out.shape == (1, 512)
+        # 1440 = 2 whole 512-windows (1024); the 416-sample remainder is
+        # dropped — it is handled by the next streamed frame.
+        out2 = vad._frame_audio(np.zeros(1440, dtype=np.float32))
+        assert out2.shape == (1, 1024)
+
+    def test_silero_is_speech_short_audio_no_crash(self):
+        from friday_v4.voice.vad import SileroVAD
+        vad = SileroVAD()
+        # Even with no model loaded, is_speech must not raise.
+        assert vad.is_speech(np.zeros(480, dtype=np.float32)) is False
+        assert vad.is_speech(np.array([], dtype=np.float32)) is False
 
 
 # ==========================================================================
@@ -378,6 +489,108 @@ class TestRouter:
 
         wm.launch_app.assert_not_called()
         assert "focused" in response.lower()
+
+
+# ==========================================================================
+# Push-to-talk hotkey binding
+# ==========================================================================
+
+
+class TestPushToTalk:
+    def test_bind_push_to_talk_with_keyboard(self):
+        """With the keyboard lib present, press starts recording and
+        release transcribes + routes the text."""
+        from friday_v4.cli_talk import _bind_push_to_talk
+
+        fake_kb = MagicMock()
+        fake_kb.is_pressed.return_value = True
+        with patch.dict(sys.modules, {"keyboard": fake_kb}):
+            pipeline = MagicMock()
+            pipeline.stop_recording_and_process.return_value = "hello friday"
+            on_text = MagicMock()
+
+            assert _bind_push_to_talk(pipeline, on_text) is True
+
+            # handlers were registered for the base key
+            press_handler = fake_kb.on_press_key.call_args[0][1]
+            release_handler = fake_kb.on_release_key.call_args[0][1]
+
+            press_handler(type("Ev", (), {"name": "space"})())
+            pipeline.push_to_talk.assert_called_once()
+
+            release_handler(type("Ev", (), {"name": "space"})())
+            pipeline.stop_recording_and_process.assert_called_once()
+            on_text.assert_called_once_with("hello friday")
+
+    def test_bind_push_to_talk_without_keyboard(self):
+        """Without the keyboard lib, binding fails gracefully (False)."""
+        from friday_v4.cli_talk import _bind_push_to_talk
+
+        with patch.dict(sys.modules, {"keyboard": None}):
+            pipeline = MagicMock()
+            assert _bind_push_to_talk(pipeline, lambda t: None) is False
+            pipeline.push_to_talk.assert_not_called()
+
+    def test_bind_push_to_talk_modifier_required(self):
+        """Press without the modifier must not start recording."""
+        from friday_v4.cli_talk import _bind_push_to_talk
+
+        fake_kb = MagicMock()
+        fake_kb.is_pressed.return_value = False  # ctrl not held
+        with patch.dict(sys.modules, {"keyboard": fake_kb}):
+            pipeline = MagicMock()
+            assert _bind_push_to_talk(pipeline, lambda t: None) is True
+
+            press_handler = fake_kb.on_press_key.call_args[0][1]
+            press_handler(type("Ev", (), {"name": "space"})())
+            pipeline.push_to_talk.assert_not_called()
+
+    def test_bind_push_to_talk_custom_key(self):
+        """--push-to-talk-key must register hooks on the configured base key
+        and honor the extra modifier."""
+        from friday_v4.cli_talk import _bind_push_to_talk
+
+        fake_kb = MagicMock()
+        fake_kb.is_pressed.return_value = True
+        with patch.dict(sys.modules, {"keyboard": fake_kb}):
+            pipeline = MagicMock()
+            pipeline.stop_recording_and_process.return_value = "hi"
+            on_text = MagicMock()
+
+            assert _bind_push_to_talk(
+                pipeline, on_text, key="ctrl+shift+m") is True
+            # hooks registered for the base key, not the full combo
+            assert fake_kb.on_press_key.call_args[0][0] == "m"
+            assert fake_kb.on_release_key.call_args[0][0] == "m"
+
+            press_handler = fake_kb.on_press_key.call_args[0][1]
+            press_handler(type("Ev", (), {"name": "m"})())
+            pipeline.push_to_talk.assert_called_once()
+
+    def test_bind_push_to_talk_processes_when_ctrl_released_first(self):
+        """Releasing Ctrl before Space must still transcribe (no lost audio)."""
+        from friday_v4.cli_talk import _bind_push_to_talk
+
+        fake_kb = MagicMock()
+        fake_kb.is_pressed.return_value = True  # ctrl held at press
+        with patch.dict(sys.modules, {"keyboard": fake_kb}):
+            pipeline = MagicMock()
+            pipeline.stop_recording_and_process.return_value = "hello friday"
+            on_text = MagicMock()
+            assert _bind_push_to_talk(pipeline, on_text) is True
+
+            press_handler = fake_kb.on_press_key.call_args[0][1]
+            release_handler = fake_kb.on_release_key.call_args[0][1]
+
+            press_handler(type("Ev", (), {"name": "space"})())
+            pipeline.push_to_talk.assert_called_once()
+
+            # Ctrl released first — is_pressed now False, but the base key
+            # release must still process the recording.
+            fake_kb.is_pressed.return_value = False
+            release_handler(type("Ev", (), {"name": "space"})())
+            pipeline.stop_recording_and_process.assert_called_once()
+            on_text.assert_called_once_with("hello friday")
 
 
 # ==========================================================================

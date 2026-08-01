@@ -29,6 +29,10 @@ full = [
     "edge-tts>=7.0",
     "pyttsx3",
     "espeakng_loader",
+    # sounddevice 0.5.x mutates `data.shape = -1, channels` in its callback
+    # wrapper, which NumPy >= 2.5 turns into a hard assertion (core dump).
+    # Pin below 2.5 to keep the shape-set a deprecation warning.
+    "numpy>=1.26,<2.5",
 ]
 voice = [
     "kokoro-onnx",
@@ -38,6 +42,8 @@ voice = [
     "edge-tts>=7.0",
     "pyttsx3",
     "espeakng_loader",
+    # See note in `full` — sounddevice + NumPy 2.5 crash.
+    "numpy>=1.26,<2.5",
 ]
 stt = ["faster-whisper"]
 hotword = ["openwakeword", "onnxruntime"]

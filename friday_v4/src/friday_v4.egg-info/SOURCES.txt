@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 src/friday_v4/__init__.py
 src/friday_v4/cli_desktop.py
+src/friday_v4/cli_intelligence.py
 src/friday_v4/cli_proactive.py
 src/friday_v4/cli_talk.py
 src/friday_v4/config.py
@@ -20,10 +21,16 @@ src/friday_v4/desktop/kde_adapter.py
 src/friday_v4/desktop/macos_adapter.py
 src/friday_v4/desktop/notifier.py
 src/friday_v4/desktop/tray.py
+src/friday_v4/desktop/watcher.py
 src/friday_v4/desktop/windows_adapter.py
 src/friday_v4/desktop/wm_abstraction.py
 src/friday_v4/desktop/ide/__init__.py
 src/friday_v4/intelligence/__init__.py
+src/friday_v4/intelligence/anomaly.py
+src/friday_v4/intelligence/drift.py
+src/friday_v4/intelligence/health.py
+src/friday_v4/intelligence/learner.py
+src/friday_v4/intelligence/predictor.py
 src/friday_v4/mobile/__init__.py
 src/friday_v4/network/__init__.py
 src/friday_v4/proactive/__init__.py
@@ -36,6 +43,7 @@ src/friday_v4/security/__init__.py
 src/friday_v4/voice/__init__.py
 src/friday_v4/voice/audio.py
 src/friday_v4/voice/chimes.py
+src/friday_v4/voice/core.py
 src/friday_v4/voice/hotword.py
 src/friday_v4/voice/pipeline.py
 src/friday_v4/voice/router.py
@@ -44,5 +52,8 @@ src/friday_v4/voice/tts.py
 src/friday_v4/voice/utils.py
 src/friday_v4/voice/vad.py
 tests/test_desktop_abstraction.py
+tests/test_intelligence.py
 tests/test_package_imports.py
+tests/test_proactive.py
 tests/test_voice.py
+tests/test_voice_engine.py

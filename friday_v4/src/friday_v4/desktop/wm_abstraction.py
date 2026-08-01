@@ -422,6 +422,18 @@ class DesktopAbstraction:
 
     # ── Notifications ─────────────────────────────────────────────
 
+    def setup_instructions(self) -> str:
+        """Return human-readable setup instructions for this platform.
+
+        Subclasses override this when the desktop environment needs tools,
+        permissions, or configuration before the adapter can work. The CLI
+        surfaces this via ``friday4 desktop platforms`` when unavailable.
+        """
+        return (
+            f"Desktop integration for '{self.name}' is not available on "
+            "this machine. Install the required tools and try again."
+        )
+
     @staticmethod
     def notify(title: str, message: str, urgency: str = "normal") -> bool:
         """Send a desktop notification on the current platform.
@@ -482,6 +494,8 @@ def create_adapter(de: str | None = None) -> DesktopAbstraction:
     """
     key = (de or detect_desktop_environment()).lower()
 
+    # sway uses Hyprland-like wlroots IPC — best-effort via the
+    # Hyprland adapter's hyprctl-style commands.
     if key in ("hyprland", "sway"):
         from .hyprland_adapter import HyprlandAdapter
         return HyprlandAdapter()
@@ -497,11 +511,6 @@ def create_adapter(de: str | None = None) -> DesktopAbstraction:
     if key in ("windows", "win32", "nt"):
         from .windows_adapter import WindowsAdapter
         return WindowsAdapter()
-
-    # sway — Hyprland-like IPC, best-effort via hyprctl-style commands
-    if key == "sway":
-        from .hyprland_adapter import HyprlandAdapter
-        return HyprlandAdapter()
 
     # Generic X11/Wayland/i3: GNOMEAdapter's wmctrl/xdotool fallbacks work
     # on most X11 sessions and Shell Eval on GNOME Wayland.

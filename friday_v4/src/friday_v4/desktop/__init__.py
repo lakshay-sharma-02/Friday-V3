@@ -38,6 +38,7 @@ from .wm_abstraction import (
 from .tray import SystemTray
 from .hotkeys import GlobalHotkeys
 from .notifier import DesktopNotificationChannel
+from .watcher import DesktopWatcher
 
 __all__ = [
     "DesktopAbstraction",
@@ -49,6 +50,7 @@ __all__ = [
     "SystemTray",
     "GlobalHotkeys",
     "DesktopNotificationChannel",
+    "DesktopWatcher",
     "SUPPORTED_PLATFORMS",
     "create_adapter",
     "detect_desktop_environment",

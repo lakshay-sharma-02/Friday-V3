@@ -12,13 +12,23 @@ internal detection threshold.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Protocol, Union
 
 import numpy as np
 
 logger = logging.getLogger("friday_v4.voice.hotword")
 
 # Map our keywords to OpenWakeWord's pre-trained model names
+
+
+class _DetectorProtocol(Protocol):
+    """Minimal interface shared by the OpenWakeWord and energy providers."""
+
+    def process(self, frame: Union[np.ndarray, bytes, list]) -> bool: ...
+
+    def set_sensitivity(self, sensitivity: float) -> None: ...
+
+    def cleanup(self) -> None: ...
 _OPENWAKEWORD_KEYWORDS = {
     "hey friday": "hey_jarvis",
     "hey jarvis": "hey_jarvis",
@@ -48,7 +58,10 @@ class OpenWakeWordProvider:
     _threshold: float = 0.5
 
     def __init__(self, keyword: str = "hey friday", sensitivity: float = 0.7):
-        self.keyword = keyword.lower()
+        self.keyword = keyword.lower().strip() if keyword else ""
+        if not self.keyword:
+            logger.info("OpenWakeWord disabled (empty keyword)")
+            return
         self._model_name = _OPENWAKEWORD_KEYWORDS.get(self.keyword, "hey_jarvis")
         self.set_sensitivity(sensitivity)
         self._try_load()
@@ -152,10 +165,16 @@ class HotwordDetector:
     def __init__(self, keyword: str = "hey friday", sensitivity: float = 0.7):
         self.keyword = keyword
         self.sensitivity = sensitivity
-        self._detector: object = None
+        self._detector: Optional[_DetectorProtocol] = None
         self._init()
 
     def _init(self) -> None:
+        if not self.keyword or not self.keyword.strip():
+            # Push-to-talk mode passes an empty keyword — hotword must be
+            # fully disabled, not silently armed with a default model.
+            logger.info("Hotword disabled (empty keyword)")
+            self._detector = None
+            return
         try:
             oww = OpenWakeWordProvider(self.keyword, self.sensitivity)
             if oww.is_available:
@@ -185,9 +204,9 @@ class HotwordDetector:
 
     def set_sensitivity(self, sensitivity: float) -> None:
         self.sensitivity = sensitivity
-        if hasattr(self._detector, "set_sensitivity"):
+        if self._detector is not None:
             self._detector.set_sensitivity(sensitivity)
 
     def cleanup(self) -> None:
-        if hasattr(self._detector, "cleanup"):
+        if self._detector is not None:
             self._detector.cleanup()

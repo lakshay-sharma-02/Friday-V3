@@ -298,3 +298,17 @@ class HyprlandAdapter(DesktopAbstraction):
             logger.warning(f"Screenshot failed: {exc}")
 
         return None
+
+    def setup_instructions(self) -> str:
+        """Return setup instructions for Hyprland desktop control."""
+        if not self._session:
+            return (
+                "Hyprland desktop control needs an active Hyprland session.\n"
+                "Log into a Hyprland session and run Friday from within it "
+                "(HYPRLAND_INSTANCE_SIGNATURE must be set)."
+            )
+        return (
+            f"hyprctl not found at {_HYPRCTL}.\n"
+            "Install it with your package manager, e.g. "
+            "`sudo pacman -S hyprland` or `apt install hyprland`."
+        )

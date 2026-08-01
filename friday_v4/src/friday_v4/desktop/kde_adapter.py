@@ -251,3 +251,19 @@ class KDEAdapter(DesktopAbstraction):
         except Exception as exc:
             logger.warning(f"KDE screenshot failed: {exc}")
         return None
+
+    def setup_instructions(self) -> str:
+        """Return setup instructions for KDE desktop control."""
+        missing = []
+        if not self._has_qdbus:
+            missing.append("qdbus (qt5-tools / qt6-tools)")
+        if not self._is_wayland and not self._has_wmctrl:
+            missing.append("wmctrl")
+        if not self._is_wayland and not self._has_xdotool:
+            missing.append("xdotool")
+        if not missing:
+            return "KDE desktop control is ready."
+        return (
+            "KDE desktop control needs: " + ", ".join(missing) + ".\n"
+            "Install them with your package manager, then log out and back in."
+        )

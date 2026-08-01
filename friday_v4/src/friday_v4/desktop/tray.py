@@ -133,14 +133,17 @@ class SystemTray:
             logger.warning(f"Failed to build tray icon: {exc}")
             return False
 
+        icon = self._icon
+        if icon is None:
+            return False
         if daemon:
             self._thread = threading.Thread(
-                target=self._icon.run, name="friday-tray", daemon=True,
+                target=icon.run, name="friday-tray", daemon=True,
             )
             self._thread.start()
             logger.info("System tray started (background)")
         else:
-            self._icon.run()
+            icon.run()
         return True
 
     def stop(self) -> None:

@@ -16,6 +16,7 @@ import logging
 import math
 import struct
 import threading
+from typing import Sequence
 
 logger = logging.getLogger("friday_v4.voice.chimes")
 
@@ -27,7 +28,7 @@ _SAMPLE_RATE = 22050
 # ---------------------------------------------------------------------------
 
 
-def _pcm16_wav(samples: list[int], sample_rate: int = _SAMPLE_RATE) -> bytes:
+def _pcm16_wav(samples: Sequence[float], sample_rate: int = _SAMPLE_RATE) -> bytes:
     """Build a 16-bit mono WAV byte stream from integer samples."""
     num_samples = len(samples)
     data_size = num_samples * 2
@@ -46,7 +47,7 @@ def _pcm16_wav(samples: list[int], sample_rate: int = _SAMPLE_RATE) -> bytes:
 
 
 def _tone(freq: float, duration_s: float, volume: float = 0.5,
-          decay: float = 8.0) -> list[int]:
+          decay: float = 8.0) -> list[float]:
     """Sine wave with exponential decay envelope."""
     n = int(_SAMPLE_RATE * duration_s)
     return [
@@ -61,7 +62,7 @@ def _silence(duration_s: float) -> list[int]:
 
 
 def _descend(start_freq: float, end_freq: float, duration_s: float,
-             volume: float = 0.5) -> list[int]:
+             volume: float = 0.5) -> list[float]:
     """A pitch-glide from start_freq down to end_freq."""
     n = int(_SAMPLE_RATE * duration_s)
     return [

@@ -224,10 +224,8 @@ def synthesize(conn, repo_a: str, repo_b: str) -> SynthesisResult:
         b_name_lower in rel.lower() or a_name_lower in rel.lower()
         for rel in ev_a.relationships + ev_b.relationships
     )
-    if not has_shared_tech and not has_rels:
-        # No deterministic evidence of overlap, but LLM can still find
-        # complementary patterns in architecture/component descriptions.
-        pass
+    # No deterministic early-exit: even without shared tech/relationships,
+    # the LLM may find complementary patterns in architecture descriptions.
 
     from .services.llm import _enabled as llm_available
 

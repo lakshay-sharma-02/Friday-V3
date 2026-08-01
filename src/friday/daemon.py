@@ -2470,6 +2470,15 @@ def run_daemon(interval_seconds: int = 900, no_notify: bool = False) -> None:
     except Exception:
         _effective_no_notify = no_notify
 
+    # Startup auto-rollback check: if daemon crashed after a capability deploy,
+    # rollback before entering the main loop.
+    try:
+        conn = connect()
+        _check_auto_rollback(conn)
+        conn.close()
+    except Exception:
+        pass
+
     cycle_count = 0
     write_status(
         state="running",

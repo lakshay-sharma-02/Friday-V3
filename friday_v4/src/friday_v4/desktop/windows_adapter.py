@@ -32,6 +32,7 @@ from .wm_abstraction import (
 logger = logging.getLogger("friday_v4.desktop.windows")
 
 # PowerShell bootstrap: enumerate visible windows via Win32 P/Invoke.
+# Each line: <hwnd>|<title>|<class>|<pid>|<active>
 _ENUM_WINDOWS_PS = r"""
 Add-Type @"
 using System;
@@ -42,6 +43,7 @@ public class WinEnum {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, StringBuilder text, int max);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
@@ -54,8 +56,10 @@ public class WinEnum {
                 if (len > 0) {
                     var t = new StringBuilder(len + 1);
                     GetWindowText(hWnd, t, len + 1);
+                    var c = new StringBuilder(256);
+                    GetClassName(hWnd, c, 256);
                     uint pid; GetWindowThreadProcessId(hWnd, out pid);
-                    sb.Append(hWnd.ToString() + "|" + t.ToString().Replace("|", " ") + "|" + pid + "|" + (hWnd == fg ? "1" : "0") + "\n");
+                    sb.Append(hWnd.ToString() + "|" + t.ToString().Replace("|", " ") + "|" + c.ToString().Replace("|", " ") + "|" + pid + "|" + (hWnd == fg ? "1" : "0") + "\n");
                 }
             }
             return true;
@@ -67,22 +71,48 @@ public class WinEnum {
 [WinEnum]::Dump()
 """
 
+# Focus a window by class and/or title substring. Finds the first visible
+# top-level window whose class matches %CLASS% or whose title contains
+# %TITLE% (case-insensitive), then brings it to the foreground.
 _FOCUS_PS = r"""
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class WinFocus {
+using System.Text;
+public class WinFind {
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
+    [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, StringBuilder text, int max);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    public static string Focus(string cls, string title) {
+        var found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
+            if (found != IntPtr.Zero) return false;
+            if (!IsWindowVisible(hWnd)) return true;
+            int len = GetWindowTextLength(hWnd);
+            if (len == 0) return true;
+            var t = new StringBuilder(len + 1);
+            GetWindowText(hWnd, t, len + 1);
+            var c = new StringBuilder(256);
+            GetClassName(hWnd, c, 256);
+            bool match = false;
+            if (cls.Length > 0 && c.ToString().IndexOf(cls, StringComparison.OrdinalIgnoreCase) >= 0) match = true;
+            if (title.Length > 0 && t.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) match = true;
+            if (match) found = hWnd;
+            return true;
+        }, IntPtr.Zero);
+        if (found == IntPtr.Zero) return "NOTFOUND";
+        ShowWindow(found, 5);
+        SetForegroundWindow(found);
+        return "OK";
+    }
 }
 "@
-$h = [WinFocus]::FindWindow($null, '%TITLE%')
-if ($h -eq [IntPtr]::Zero) { Write-Output "NOTFOUND" } else {
-    [WinFocus]::ShowWindow($h, 5) | Out-Null
-    [WinFocus]::SetForegroundWindow($h) | Out-Null
-    Write-Output "OK"
-}
+[WinFind]::Focus('%CLASS%', '%TITLE%')
 """
 
 _SCREENSHOT_PS = r"""
@@ -144,16 +174,13 @@ class WindowsAdapter(DesktopAbstraction):
         windows = []
         for line in out.splitlines():
             parts = line.split("|")
-            if len(parts) < 4:
+            if len(parts) < 5:
                 continue
-            try:
-                win_id, title, pid, active = parts[0], parts[1], parts[2], parts[3]
-            except ValueError:
-                continue
+            win_id, title, app_class, pid, active = parts[0], parts[1], parts[2], parts[3], parts[4]
             windows.append(WindowInfo(
                 window_id=win_id,
                 title=title,
-                app_class="",
+                app_class=app_class,
                 pid=int(pid) if pid.isdigit() else 0,
                 is_active=(active == "1"),
             ))
@@ -190,7 +217,7 @@ class WindowsAdapter(DesktopAbstraction):
         out = self._ps_run(script)
         if not out:
             return []
-        monitors = []
+        monitors: list[MonitorInfo] = []
         for line in out.splitlines():
             parts = line.split("|")
             if len(parts) < 3:
@@ -209,8 +236,21 @@ class WindowsAdapter(DesktopAbstraction):
     # ── Act ───────────────────────────────────────────────────────
 
     def focus(self, target: str, by: str = "class") -> bool:
-        """Focus a window by title substring (SetForegroundWindow)."""
-        script = _FOCUS_PS.replace("%TITLE%", target.replace("'", "''"))
+        """Focus a window by class or title substring.
+
+        Uses Win32 EnumWindows so ``focus_smart`` (which resolves natural
+        language to a *class* name) works — previously this only did an
+        exact-title lookup and silently failed for class-based targets.
+        """
+        if by not in ("class", "title"):
+            # Windows has no reliable PID→window focus via this API;
+            # fall back to a class lookup (PID strings rarely match titles).
+            by = "class"
+        esc = target.replace("'", "''")
+        if by == "title":
+            script = _FOCUS_PS.replace("%CLASS%", "").replace("%TITLE%", esc)
+        else:
+            script = _FOCUS_PS.replace("%CLASS%", esc).replace("%TITLE%", "")
         out = self._ps_run(script, timeout=8)
         return bool(out and "OK" in out)
 
@@ -252,3 +292,13 @@ class WindowsAdapter(DesktopAbstraction):
         if out and Path(output_path).exists():
             return output_path
         return None
+
+    def setup_instructions(self) -> str:
+        """Return setup instructions for Windows desktop control."""
+        if not self._has_powershell:
+            return (
+                "Windows desktop control needs PowerShell.\n"
+                "PowerShell ships with every Windows install; add it to PATH "
+                "if you launched Friday from a non-standard shell."
+            )
+        return "Windows desktop control uses built-in PowerShell — no setup required."

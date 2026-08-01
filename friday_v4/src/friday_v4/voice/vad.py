@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import struct
 import urllib.error
 import urllib.request
@@ -27,7 +28,14 @@ import numpy as np
 logger = logging.getLogger("friday_v4.voice.vad")
 
 # Silero model — small (~2 MB) ONNX, downloaded once to ~/.friday/models/
-_SILERO_URL = "https://github.com/snakers4/silero-vad/releases/download/v5.1/silero_vad.onnx"
+# The repo ships the ONNX inside the source tree (not as release assets);
+# the release-asset URLs (v5.1/v6.x/silero_vad.onnx) 404.
+_SILERO_URLS = (
+    "https://raw.githubusercontent.com/snakers4/silero-vad/v6.2/"
+    "src/silero_vad/data/silero_vad.onnx",
+    "https://raw.githubusercontent.com/snakers4/silero-vad/v6.2/"
+    "src/silero_vad/data/silero_vad_16k_op15.onnx",
+)
 _SILERO_PATH = Path.home() / ".friday" / "models" / "silero_vad.onnx"
 
 
@@ -37,29 +45,62 @@ _SILERO_PATH = Path.home() / ".friday" / "models" / "silero_vad.onnx"
 
 
 class SileroVAD:
-    """ML-based voice activity detection via ONNX runtime."""
+    """ML-based voice activity detection via ONNX runtime.
 
+    Handles BOTH model generations transparently:
+
+    * **v6.x (stateful)** — inputs ``input``/``state``/``sr``, outputs
+      ``output`` + recurrent ``stateN``. The recurrent state is carried
+      across frames (like a realtime streaming VAD), and ``state`` is
+      reset whenever a silence gap clears the buffer.
+    * **v5.x (stateless)** — single ``input`` tensor, one probability out.
+
+    ``is_speech`` pads whatever it receives to a whole 512-sample window
+    so a 480-sample mic frame can't silently crash inference.
+    ``is_available`` is only set True after a live trial inference
+    succeeds — a file that merely exists but is corrupt/unsupported never
+    claims to be usable.
+    """
+
+    #: ONNX static window for v5/v6 silero_vad.onnx.
+    WINDOW = 512
     is_available = False
     _model = None
 
     def __init__(self, threshold: float = 0.5):
         self.threshold = threshold
+        self._stateful = False
+        self._state: Optional[np.ndarray] = None
         self._try_load()
 
-    def _download_with_retry(self, url: str, path: Path,
+    def _download_with_retry(self, urls, path: Path,
                              retries: int = 3, backoff: float = 2.0) -> bool:
+        """Try each candidate URL in order; atomic tmp→rename on success.
+
+        A partial/interrupted download must never leave a corrupt file at
+        the final path (it would be treated as "already downloaded" and
+        fail to load forever).
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
-        for attempt in range(retries):
-            try:
-                urllib.request.urlretrieve(url, path)
-                return True
-            except (urllib.error.URLError, urllib.error.HTTPError,
-                    OSError, TimeoutError) as exc:
-                logger.warning(
-                    f"Download failed (attempt {attempt+1}/{retries}): {exc}")
-                if attempt < retries - 1:
-                    import time
-                    time.sleep(backoff * (2 ** attempt))
+        tmp = path.with_suffix(path.suffix + ".part")
+        for url in urls:
+            for attempt in range(retries):
+                try:
+                    urllib.request.urlretrieve(url, tmp)
+                    if tmp.exists() and tmp.stat().st_size < 64 * 1024:
+                        raise RuntimeError(
+                            f"Suspiciously small download ({tmp.stat().st_size} bytes)")
+                    tmp.replace(path)
+                    logger.info(f"Silero VAD model downloaded ({path.name})")
+                    return True
+                except (urllib.error.URLError, urllib.error.HTTPError,
+                        OSError, TimeoutError, RuntimeError) as exc:
+                    logger.warning(
+                        f"Download failed ({url}, attempt {attempt+1}): {exc}")
+                    tmp.unlink(missing_ok=True)
+                    if attempt < retries - 1:
+                        import time
+                        time.sleep(backoff * (2 ** attempt))
         return False
 
     def _try_load(self) -> bool:
@@ -72,28 +113,67 @@ class SileroVAD:
         try:
             if not _SILERO_PATH.exists():
                 logger.info("Downloading Silero VAD model...")
-                if not self._download_with_retry(_SILERO_URL, _SILERO_PATH):
+                if not self._download_with_retry(_SILERO_URLS, _SILERO_PATH):
                     logger.warning("Silero VAD download failed")
                     return False
-            self._model = onnxruntime.InferenceSession(
+            session = onnxruntime.InferenceSession(
                 str(_SILERO_PATH), providers=["CPUExecutionProvider"])
+            input_names = {i.name for i in session.get_inputs()}
+            # Trial inference — prove the model actually runs before
+            # claiming availability (existence ≠ loadable).
+            audio = np.zeros((1, self.WINDOW), dtype=np.float32)
+            if "sr" in input_names:
+                self._stateful = True
+                self._state = np.zeros((2, 1, 128), dtype=np.float32)
+                sr = np.array([16000], dtype=np.int64)
+                session.run(None, {"input": audio, "state": self._state, "sr": sr})
+            else:
+                session.run(None, {next(iter(input_names)): audio})
+            self._model = session
             self.is_available = True
-            logger.info("Silero VAD loaded")
+            logger.info("Silero VAD loaded (stateful)" if self._stateful
+                        else "Silero VAD loaded (stateless)")
             return True
         except Exception as exc:
-            logger.debug(f"Silero VAD load failed: {exc}")
+            logger.warning(
+                f"Silero VAD load failed ({exc}) — falling back to "
+                "WebRTC/energy VAD")
             return False
+
+    def _frame_audio(self, audio: np.ndarray) -> np.ndarray:
+        """Convert mono/1-D audio into whole 512-sample windows."""
+        if len(audio.shape) > 1:
+            audio = audio.reshape(-1)
+        n_frames = max(len(audio) // self.WINDOW, 1)
+        padded = np.zeros((1, n_frames * self.WINDOW), dtype=np.float32)
+        padded[0, :min(len(audio), padded.shape[1])] = audio[:padded.shape[1]]
+        return padded
+
+    def _reset_state(self) -> None:
+        """Clear recurrent state (new utterance / silence gap)."""
+        if self._stateful:
+            self._state = np.zeros((2, 1, 128), dtype=np.float32)
 
     def is_speech(self, audio: np.ndarray, sample_rate: int = 16000) -> bool:
         if not self.is_available or self._model is None:
             return False
         try:
-            if len(audio.shape) == 1:
-                audio = audio.reshape(1, -1)
-            inputs = {self._model.get_inputs()[0].name: audio.astype(np.float32)}
-            outputs = self._model.run(None, inputs)
-            prob = float(outputs[0][0][0])
-            return prob > self.threshold
+            if len(audio) == 0:
+                return False
+            audio = self._frame_audio(audio)
+            if self._stateful:
+                sr = np.array([16000], dtype=np.int64)
+                outputs = self._model.run(
+                    None, {"input": audio, "state": self._state, "sr": sr})
+                self._state = np.asarray(outputs[1], dtype=np.float32)
+                probs = np.asarray(outputs[0]).ravel()
+            else:
+                name = self._model.get_inputs()[0].name
+                outputs = self._model.run(None, {name: audio})
+                probs = np.asarray(outputs[0]).ravel()
+            # One probability per 512-window; a frame with multiple windows
+            # counts as speech if ANY window is speech.
+            return float(probs.max()) > self.threshold
         except Exception as exc:
             logger.debug(f"Silero VAD inference failed: {exc}")
             return False

@@ -251,8 +251,6 @@ def audit_evidence_completeness(conn) -> list[dict]:
             gaps.append(f"boilerplate/poor README (quality={r.readme_quality})")
         if not get_architecture(conn, r.id):
             gaps.append("missing architecture profile")
-        if r.id not in {rid for rid in (name_by_id.keys())}:
-            pass
         if r.name not in paired:
             gaps.append("missing relationship evidence (no strong link to another repo)")
         if not obs:

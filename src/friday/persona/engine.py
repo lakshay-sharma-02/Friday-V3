@@ -575,6 +575,17 @@ class IdentityEngine:
             self._extract_memories(text, reply, channel_id)
             return reply
 
+        # Ambiguous — could be either a command or a question.
+        if self._is_ambiguous(text):
+            reply = self._handle_ambiguous(text, channel_id)
+            context.add(text, reply)
+            self._log_exchange(
+                channel_id.split(":")[0], channel_id, text, reply,
+                routing="ambiguous",
+            )
+            self._extract_memories(text, reply, channel_id)
+            return reply
+
         # Action commands.
         if self._is_command(text):
             reply = self._handle_command(text, channel_id)
@@ -584,9 +595,17 @@ class IdentityEngine:
             return reply
 
         # Questions (ask pipeline).
+        if self._is_question(text):
+            reply = self._handle_question(text, channel_id, context)
+            context.add(text, reply)
+            self._log_exchange(channel_id.split(":")[0], channel_id, text, reply, routing="question")
+            self._extract_memories(text, reply, channel_id)
+            return reply
+
+        # Final fallback: treat as question.
         reply = self._handle_question(text, channel_id, context)
         context.add(text, reply)
-        self._log_exchange(channel_id.split(":")[0], channel_id, text, reply, routing="question")
+        self._log_exchange(channel_id.split(":")[0], channel_id, text, reply, routing="question_fallback")
         self._extract_memories(text, reply, channel_id)
         return reply
 
@@ -614,18 +633,122 @@ class IdentityEngine:
     # Routing helpers
     # ------------------------------------------------------------------
 
+    # Expanded action keywords — from the Agentic Action Layer specification.
+    # Includes both prefix-based and full-word action markers.
     _COMMAND_PREFIXES = (
         "deploy", "run ", "execute", "check ", "status of",
         "start ", "stop ", "restart ", "install ", "update ",
         "create ", "delete ", "fix ", "refactor ", "test ",
-        "deploy ", "push ", "pull ", "merge ", "commit ",
+        "push ", "pull ", "merge ", "commit ",
         "build ", "compile ", "migrate ",
+        "copy ", "paste ", "move ", "rename ",
+        "open ", "close ", "launch ", "kill ",
+        "send ", "fetch ", "download ", "upload ",
+        "add ", "remove ", "edit ", "modify ",
+        "enable ", "disable ", "set ", "unset ",
+        "plan ", "graph ", "review ", "repair ",
+        "observe ", "refresh ", "scan ", "mine ",
+        "label ", "form ", "correlate ",
     )
 
+    # Full-word action markers — any occurrence, not just at start.
+    _ACTION_KEYWORDS = frozenset({
+        "clipboard", "deploy", "execute", "refactor", "compile",
+        "migrate", "install", "merge", "commit", "push", "pull",
+        "kill", "reboot", "restart", "launch", "dispatch",
+    })
+
+    # Short imperative action words — used by Tier 3 of _is_command() to
+    # catch brief commands like "test auth" or "deploy now" without falsely
+    # catching noun phrases like "the project structure". Only matches when
+    # the first word is literally one of these.
+    _SHORT_ACTION_WORDS = frozenset({
+        "test", "deploy", "build", "run", "fix", "check", "push",
+        "pull", "merge", "commit", "start", "stop", "show", "list",
+        "find", "open", "close", "create", "make", "add", "remove",
+        "copy", "move", "edit", "set", "get", "go", "do", "kill",
+    })
+
+    # Question/open-ended keywords — indicate Q&A, not action.
+    _QUESTION_PREFIXES = frozenset({
+        "what", "why", "how", "who", "when", "where",
+        "explain", "describe", "tell me", "show me",
+        "can you", "could you", "would you", "do you",
+        "does ", "is there", "are there", "what's",
+        "what is", "how does", "how do", "who is",
+        "list ", "what are",
+    })
+
     def _is_command(self, text: str) -> bool:
-        """Check if the message looks like a command/action request."""
+        """Check if the message looks like a command/action request.
+
+        Uses three tiers:
+        1. Prefix match against ``_COMMAND_PREFIXES`` (startswith).
+        2. Full-word match against ``_ACTION_KEYWORDS`` (anywhere in text).
+        3. Empty / single-word fallback: if the first word is imperative-like
+           (no question words), assume action.
+
+        Returns True if the text is likely an action request.
+        """
         lower = text.lower().strip()
-        return any(lower.startswith(p) for p in self._COMMAND_PREFIXES)
+        # Tier 1: Prefix match.
+        if any(lower.startswith(p) for p in self._COMMAND_PREFIXES):
+            return True
+        # Tier 2: Full-word action keyword present anywhere.
+        words = set(lower.split())
+        if words & self._ACTION_KEYWORDS:
+            return True
+        # Tier 3: Short imperative commands whose first word is a known
+        # action word. "test auth", "deploy now", "fix bug" — but NOT
+        # noun phrases like "the project structure" or "my code".
+        first_word = lower.split()[0] if lower.split() else ""
+        if len(lower.split()) <= 3 and first_word in self._SHORT_ACTION_WORDS:
+            return True
+        return False
+
+    def _is_question(self, text: str) -> bool:
+        """Check if the message looks like a Q&A question.
+
+        Matches question prefixes (what, why, how, explain, etc.)
+        and multi-word question starters (tell me, show me, can you, etc.)
+        """
+        lower = text.lower().strip()
+        # Check prefix-based question starters.
+        if any(lower.startswith(q) for q in self._QUESTION_PREFIXES):
+            return True
+        # Check ends with a question mark (strong indicator).
+        if lower.endswith("?"):
+            return True
+        return False
+
+    def _is_ambiguous(self, text: str) -> bool:
+        """Check if the message could be either a command or a question.
+
+        Returns True when the intent is genuinely unclear:
+        - Contains both action and question keywords.
+        - Starts with an action keyword but ends with "?".
+        - Just a noun phrase or single word not matching any known category.
+        - Uses passive constructions that could be either.
+        """
+        lower = text.lower().strip()
+        words = set(lower.split())
+
+        # Contains both action and question markers.
+        has_action = any(lower.startswith(p) for p in self._COMMAND_PREFIXES)
+        has_action = has_action or bool(words & self._ACTION_KEYWORDS)
+        has_question = any(lower.startswith(q) for q in self._QUESTION_PREFIXES)
+        has_question = has_question or lower.endswith("?")
+
+        if has_action and has_question:
+            return True
+
+        # Single word or very short text that doesn't match anything.
+        # Could be a noun ("deployment?") or an imperative ("test").
+        if len(lower.split()) <= 2 and not has_action and not has_question:
+            if not self._is_chitchat(text):
+                return True
+
+        return False
 
     def _is_chitchat(self, text: str) -> bool:
         """Check if the message is chitchat/greeting (no evidence needed).
@@ -735,6 +858,32 @@ class IdentityEngine:
             return "I'm not sure I have enough context to answer that yet."
         except Exception as exc:
             return f"Sorry, I ran into an error thinking about that: {exc}"
+
+    def _handle_ambiguous(self, text: str, channel_id: str) -> str:
+        """Handle a message that could be either a command or a question.
+
+        Returns a clarifying question asking the user to disambiguate.
+        This is the "unsure? → ask" path from the Agentic Action Layer spec.
+
+        When the LLM is available, it can decide based on personality +
+        context. When the LLM is unavailable, returns a hardcoded prompt.
+        """
+        # Try LLM with personality to resolve ambiguity naturally.
+        try:
+            context = self.get_context(channel_id)
+            llm_reply = self._llm_chat(text, context)
+            if llm_reply is not None:
+                return llm_reply
+        except Exception:
+            pass
+
+        # Hardcoded fallback: ask to clarify.
+        name_part = f", {self._operator_name}" if self._operator_name else ""
+        return (
+            f"I'm not sure if you're asking me a question or telling me to do something{name_part}. "
+            "Do you want me to **answer** that or **do** it? "
+            "For example: 'friday ask ...' or 'friday do ...'"
+        )
 
     def _handle_command(self, text: str, channel_id: str) -> str:
         """Route a command through Friday's execution pipeline.

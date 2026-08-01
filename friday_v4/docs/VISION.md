@@ -6,6 +6,14 @@
 
 ---
 
+## ⭐ Status: V4 Is the Main Project
+
+**V4 is the project being actively built.** V3 is largely built but
+inconsistent. V4 imports only the V3 modules that are properly built and
+useful (persona, ambient, db) — everything else is built properly in V4.
+
+---
+
 ## The Core Difference
 
 **V3 was a powerful CLI tool with 40+ commands that you had to learn.**
@@ -367,21 +375,20 @@ You don't need to learn Friday's language. Friday learns yours.
 | You check the daemon status | Friday speaks up when something changes |
 | You initiate every interaction | Friday initiates when it matters |
 
-### What V3 Did Right (Kept in V4)
+### What V3 Did Right (Reused Selectively in V4)
 
-V3's core is genuinely brilliant. V4 doesn't throw it away — it hides it.
+Some V3 modules are genuinely well-built. V4 imports those pieces where
+they earn their place — and builds the rest itself.
 
-| V3 Engine | V4 Surface |
+| V3 Module (reused) | V4 Surface |
 |-----------|-----------|
-| Observation Engine | Friday notices things automatically |
-| Knowledge Engine | Friday knows your projects |
 | Persona Engine | Friday talks like a partner |
-| Planning Pipeline | Friday breaks down goals |
-| Executors | Friday takes action |
 | Ambient Feed | Friday's memory of events |
-| Memory Engine | Friday remembers what you said |
+| Db Layer | Friday's knowledge base |
 
-**V3 is the brain. V4 is the voice, eyes, and hands.**
+Everything else the vision needs (observation, knowledge, planning,
+executors, memory as V4 surfaces) is built properly in V4 — the main
+project.
 
 ---
 

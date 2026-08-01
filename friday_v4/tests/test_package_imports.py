@@ -38,20 +38,25 @@ class TestPackageImports:
     def test_stub_packages_graceful(self):
         """Stubs construct cleanly and report planned-but-not-built state.
 
-        NOTE: This asserts ``is_available() is False`` as a deliberate
-        stub-state marker — the moment any wave (3/4/5/7) ships, update
-        this test to expect the new capability instead.
+        Wave 4 (intelligence) has shipped, so it now reports available;
+        the remaining waves (3/5/7/network) are still planned-but-not-built
+        and must report ``is_available() is False``.
         """
         for pkg in (
             "friday_v4.mobile",
             "friday_v4.collab",
             "friday_v4.security",
-            "friday_v4.intelligence",
             "friday_v4.network",
         ):
             module = importlib.import_module(pkg)
             assert callable(getattr(module, "is_available"))
             assert module.is_available() is False
+
+    def test_intelligence_available_after_wave4(self):
+        """Wave 4 shipped — the intelligence layer is importable and reports
+        itself as available (stub-state marker flipped)."""
+        module = importlib.import_module("friday_v4.intelligence")
+        assert module.is_available() is True
 
     def test_desktop_exports(self):
         """The desktop package exports the Wave 2 surface."""

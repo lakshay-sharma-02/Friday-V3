@@ -1,11 +1,12 @@
-"""CLI commands for `friday proactive` — proactive intelligence & context awareness.
+"""CLI commands for `friday4 proactive` — proactive intelligence & context awareness.
 
 Usage:
-    friday proactive status        # Show what FRIDAY knows about your context
-    friday proactive suggest       # Get proactive suggestions now
-    friday proactive learn         # Show learning stats and patterns
-    friday proactive brief         # Get a morning/evening briefing
-    friday proactive observe       # Manually trigger an observation
+    friday4 proactive status        # Show what FRIDAY knows about your context
+    friday4 proactive suggest       # Get proactive suggestions now
+    friday4 proactive learn         # Show learning stats and patterns
+    friday4 proactive brief         # Get a morning/evening briefing
+    friday4 proactive observe       # Manually trigger an observation
+    friday4 proactive watch         # Learn patterns + notify suggestions (standalone)
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime
 
 logger = logging.getLogger("friday_v4.cli_proactive")
@@ -243,6 +245,52 @@ def cmd_proactive_brief(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_proactive_watch(args: argparse.Namespace) -> int:
+    """Learn patterns from desktop activity AND surface them as notifications.
+
+    Runs the event-driven proactive observer (app switches → patterns) and,
+    while watching, polls the same engine's suggestions and raises them as
+    desktop notifications — so learning + suggesting run together standalone,
+    without needing the full desktop daemon.
+    """
+    from .proactive import AnticipationEngine
+
+    engine = AnticipationEngine()
+    suggestion_channel = None
+    try:
+        engine.start_observer(interval_seconds=args.interval)
+
+        # Surface what we learn: proactive suggestions → desktop
+        # notifications, sharing the SAME engine (caller owns lifecycle —
+        # the channel never cleans up an injected engine).
+        from .desktop.notifier import ProactiveSuggestionChannel
+        suggestion_channel = ProactiveSuggestionChannel(
+            engine=engine, poll_interval=args.suggestion_poll)
+        suggestion_channel.start(daemon=True)
+
+        _print_logo()
+        print(f"  {_BOLD}Watching desktop activity...{_RESET}")
+        print(f"  {_DIM}  Learning app transitions & focus patterns"
+              f" (event-driven, ~{args.interval:g}s detection).{_RESET}")
+        print(f"  {_DIM}  Suggesting proactively every {args.suggestion_poll:g}s"
+              f" as desktop notifications.{_RESET}")
+        print(f"  {_DIM}  Ctrl+C to stop.{_RESET}\n")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print(f"\n  {_DIM}Stopped watching.{_RESET}\n")
+    finally:
+        if suggestion_channel is not None:
+            try:
+                suggestion_channel.stop()
+            except Exception:
+                pass
+        engine.stop_observer()
+        engine.cleanup()
+    return 0
+
+
 def cmd_proactive_observe(args: argparse.Namespace) -> int:
     """Manually trigger an observation to feed the pattern learner."""
     from .proactive import AnticipationEngine
@@ -273,7 +321,7 @@ def cmd_proactive_observe(args: argparse.Namespace) -> int:
 
 
 def build_proactive_parser(subparsers) -> None:
-    """Build subparser for `friday proactive`."""
+    """Build subparser for `friday4 proactive`."""
     parser = subparsers.add_parser(
         "proactive",
         help="Proactive intelligence & context awareness",
@@ -283,28 +331,39 @@ def build_proactive_parser(subparsers) -> None:
     )
     proactive_sub = parser.add_subparsers(dest="proactive_command")
 
-    # friday proactive status
+    # friday4 proactive status
     p = proactive_sub.add_parser("status", help="Show current context awareness")
     p.set_defaults(func=cmd_proactive_status)
 
-    # friday proactive suggest
+    # friday4 proactive suggest
     p = proactive_sub.add_parser("suggest", help="Get proactive suggestions now")
     p.set_defaults(func=cmd_proactive_suggest)
 
-    # friday proactive learn
+    # friday4 proactive learn
     p = proactive_sub.add_parser("learn", help="Show learning stats and patterns")
     p.set_defaults(func=cmd_proactive_learn)
 
-    # friday proactive brief
+    # friday4 proactive brief
     p = proactive_sub.add_parser("brief", help="Get a context briefing")
     p.set_defaults(func=cmd_proactive_brief)
 
-    # friday proactive observe
+    # friday4 proactive observe
     p = proactive_sub.add_parser("observe", help="Feed an observation to the learner")
     p.add_argument("action", nargs="*", help="Action type and optional context")
     p.add_argument("--app", type=str, default="", help="App class context")
     p.add_argument("--repo", type=str, default="", help="Git repo context")
     p.set_defaults(func=cmd_proactive_observe)
+
+    # friday4 proactive watch
+    p = proactive_sub.add_parser(
+        "watch",
+        help="Learn patterns from desktop activity + notify suggestions",
+    )
+    p.add_argument("--interval", type=float, default=1.0,
+                   help="App-change detection poll interval in seconds (default: 1)")
+    p.add_argument("--suggestion-poll", type=float, default=120.0,
+                   help="Proactive-suggestion notification interval in seconds (default: 120)")
+    p.set_defaults(func=cmd_proactive_watch)
 
 
 # ---------------------------------------------------------------------------
@@ -313,10 +372,10 @@ def build_proactive_parser(subparsers) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Standalone entry point for `friday proactive`."""
+    """Standalone entry point for `friday4 proactive`."""
     logging.basicConfig(level=logging.WARNING)
 
-    parser = argparse.ArgumentParser(prog="friday proactive")
+    parser = argparse.ArgumentParser(prog="friday4 proactive")
     subparsers = parser.add_subparsers(dest="proactive_command")
     build_proactive_parser(subparsers)
     args = parser.parse_args(argv)

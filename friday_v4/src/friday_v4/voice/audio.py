@@ -188,6 +188,7 @@ _player_lock = threading.Lock()
 
 def stop_playback() -> None:
     """Kill any currently-playing audio subprocess (used for interruption)."""
+    clear_play_queue()
     with _player_lock:
         procs = list(_active_player)
         _active_player.clear()
@@ -196,6 +197,61 @@ def stop_playback() -> None:
             p.terminate()
         except Exception:
             pass
+
+
+# ── Streaming playback queue ──────────────────────────────────────────────
+# Plays wav files back-to-back on a single worker thread. TTS synthesizes
+# sentence N+1 while sentence N plays, so the user hears the first words
+# almost immediately instead of waiting for the full response to render.
+
+_play_queue: list = []          # paths of wavs awaiting playback
+_play_queue_lock = threading.Lock()
+_play_queue_cv = threading.Condition(_play_queue_lock)
+_play_thread: Optional[threading.Thread] = None
+
+
+def _play_queue_worker() -> None:
+    """Single worker: pop a wav, play it (interruptible), loop."""
+    while True:
+        with _play_queue_cv:
+            while not _play_queue:
+                _play_queue_cv.wait()
+            path = _play_queue.pop(0)
+        if path is None:  # sentinel → shutdown
+            break
+        try:
+            play_wav_file(path)
+        except Exception:
+            pass
+
+
+def queue_wav(path: str) -> None:
+    """Append a wav file to the streaming playback queue."""
+    global _play_thread
+    with _play_queue_cv:
+        _play_queue.append(path)
+        if not _play_thread or not _play_thread.is_alive():
+            thread = threading.Thread(target=_play_queue_worker,
+                                      name="tts-player", daemon=True)
+            thread.start()
+            _play_thread = thread
+        _play_queue_cv.notify()
+
+
+def flush_play_queue() -> None:
+    """Wait for the streaming queue to drain (blocking, bounded)."""
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        with _play_queue_lock:
+            if not _play_queue:
+                return
+        time.sleep(0.05)
+
+
+def clear_play_queue() -> None:
+    """Drop any queued-but-not-yet-played wavs (used on stop())."""
+    with _play_queue_cv:
+        _play_queue.clear()
 
 
 def _run_player(cmd: list[str]) -> None:
@@ -256,7 +312,7 @@ def play_wav_file(path: str) -> None:
             return
         elif system == "Windows":
             import winsound
-            winsound.PlaySound(path, winsound.SND_FILENAME)
+            winsound.PlaySound(path, winsound.SND_FILENAME)  # type: ignore[attr-defined]
             return
 
         # Universal fallback
@@ -357,7 +413,7 @@ class AudioStream:
                     logger.debug(f"Audio callback error: {exc}")
 
         try:
-            self._stream = sd.InputStream(
+            stream = sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=1,
                 dtype="float32",
@@ -365,7 +421,8 @@ class AudioStream:
                 device=device_idx,
                 callback=_sd_callback,
             )
-            self._stream.start()
+            self._stream = stream
+            stream.start()
             logger.info("Audio stream started (sounddevice)")
             return True
         except Exception as exc:
@@ -429,7 +486,7 @@ class AudioStream:
 
         try:
             self._pyaudio = p
-            self._stream = p.open(
+            stream = p.open(
                 format=pyaudio.paInt16,
                 channels=1,
                 rate=self.sample_rate,
@@ -438,7 +495,8 @@ class AudioStream:
                 frames_per_buffer=self.frame_size,
                 stream_callback=_py_callback,
             )
-            self._stream.start_stream()
+            self._stream = stream
+            stream.start_stream()
             logger.info("Audio stream started (pyaudio)")
             return True
         except Exception as exc:

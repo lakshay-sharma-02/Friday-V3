@@ -53,6 +53,7 @@ class FasterWhisperProvider:
     is_available = False
     _model = None
     _load_lock = threading.Lock()
+    _load_thread: Optional[threading.Thread] = None
 
     MODEL_SIZE = os.environ.get("FRIDAY_STT_MODEL", "base.en")
 
@@ -82,6 +83,7 @@ class FasterWhisperProvider:
                 result_q.put(("error", exc))
 
         t = threading.Thread(target=_load, daemon=True)
+        self._load_thread = t
         t.start()
 
         # Brief non-blocking wait for a cached model; else finish async.
@@ -128,15 +130,25 @@ class FasterWhisperProvider:
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000
                    ) -> STTResult:
-        if not self.is_available or self._model is None:
+        if self._model is None:
             if not self._try_load_sync():
                 return STTResult(error="faster-whisper not loaded")
+        model = self._model
+        if model is None:
+            return STTResult(error="faster-whisper not loaded")
         try:
-            segments, info = self._model.transcribe(
+            # faster-whisper returns a LAZY generator of segments — it must be
+            # materialized once before iterating, otherwise the second pass
+            # (confidence extraction) sees an exhausted iterator, yielding an
+            # empty confidences list → avg_confidence 0.0 → every real
+            # transcription rejected as "low confidence". (Tests used lists,
+            # which masked this.)
+            segments_gen, info = model.transcribe(
                 audio, beam_size=3, language="en",
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=500, threshold=0.5),
             )
+            segments = list(segments_gen)
             result_text = " ".join(seg.text for seg in segments)
             confidences = [getattr(seg, "avg_logprob", 0) for seg in segments]
             avg_confidence = (np.exp(sum(confidences) / len(confidences))
@@ -272,33 +284,33 @@ class SpeechToText:
     """Friday's ears — transcribe speech to text with automatic fallback."""
 
     def __init__(self, model: str | None = None):
-        self._providers: list = []
+        self._providers: list[object] = []
         self._active: object | None = None
         self._init_providers(model)
         self._promote_async_loads()
 
     def _init_providers(self, model: str | None) -> None:
         try:
-            p = FasterWhisperProvider(model=model)
-            self._providers.append(p)
-            if p.is_available:
-                self._active = p
+            faster = FasterWhisperProvider(model=model)
+            self._providers.append(faster)
+            if faster.is_available:
+                self._active = faster
         except Exception as exc:
             logger.debug(f"faster-whisper init failed: {exc}")
 
         try:
-            p = WhisperCPPProvider()
-            self._providers.append(p)
-            if p.is_available and self._active is None:
-                self._active = p
+            cpp = WhisperCPPProvider()
+            self._providers.append(cpp)
+            if cpp.is_available and self._active is None:
+                self._active = cpp
         except Exception:
             pass
 
         try:
-            p = SpeechRecognitionProvider()
-            self._providers.append(p)
-            if p.is_available and self._active is None:
-                self._active = p
+            sr = SpeechRecognitionProvider()
+            self._providers.append(sr)
+            if sr.is_available and self._active is None:
+                self._active = sr
         except Exception:
             pass
 
@@ -325,7 +337,7 @@ class SpeechToText:
 
     @property
     def active_provider(self) -> str:
-        return self._active.name if self._active else "none"
+        return getattr(self._active, "name", "none") if self._active else "none"
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000
                    ) -> STTResult:
@@ -368,5 +380,6 @@ class SpeechToText:
         return self.transcribe(audio, sr)
 
     def list_providers(self) -> list[dict]:
-        return [{"name": p.name, "available": p.is_available}
+        return [{"name": getattr(p, "name", "?"),
+                 "available": getattr(p, "is_available", False)}
                 for p in self._providers]

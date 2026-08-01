@@ -33,22 +33,62 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from .audio import play_wav_file, stop_playback
+from .audio import (
+    clear_play_queue,
+    flush_play_queue,
+    play_wav_file,
+    queue_wav,
+    stop_playback,
+)
 from .utils import write_wav
 
 logger = logging.getLogger("friday_v4.voice.tts")
 
+
+def _setup_espeak() -> None:
+    """Point phonemizer at the espeak-ng data directory.
+
+    kokoro-onnx pipes text through phonemizer, which shells out to
+    espeak-ng. Without ESPEAK_DATA_PATH it degrades to a slow fallback
+    (~4x synthesis time). Set once, before any provider synthesizes.
+    """
+    if os.environ.get("ESPEAK_DATA_PATH"):
+        return
+    try:
+        import espeakng_loader
+        os.environ["ESPEAK_DATA_PATH"] = espeakng_loader.get_data_path()
+    except ImportError:
+        pass
+
+
+# Piper voice — "Jenny" (UK/Irish female, natural, offline, ~63 MB).
+# Runs in-process via the `piper` Python API (piper-v1 ONNX format that
+# sherpa-onnx's VITS path cannot read). Source: agentvibes/piper-custom-voices
+# (Apache-2.0), voice trained by Bryce Beattie on the Dioco dataset.
+_PIPER_BASE = Path.home() / ".friday" / "models" / "piper"
+_PIPER_MODEL = _PIPER_BASE / "jenny.onnx"
+_PIPER_TOKENS = _PIPER_BASE / "jenny.onnx.json"
+_PIPER_MODEL_URL = (
+    "https://huggingface.co/agentvibes/piper-custom-voices/resolve/main/jenny.onnx"
+)
+_PIPER_TOKENS_URL = (
+    "https://huggingface.co/agentvibes/piper-custom-voices/resolve/main/jenny.onnx.json"
+)
+
 # Kokoro-ONNX model files (downloaded once to ~/.friday/models/kokoro/)
+# model-files-v1.0 release: kokoro-v1.0.onnx + voices-v1.0.bin. The voices
+# file MUST be the numpy .bin (kokoro_onnx does np.load on it), and the
+# pip package validates against these exact asset names.
 _KOKORO_BASE = Path.home() / ".friday" / "models" / "kokoro"
-_KOKORO_MODEL = _KOKORO_BASE / "kokoro-v0.19.onnx"
-_KOKORO_VOICES = _KOKORO_BASE / "voices.json"
+_KOKORO_MODEL = _KOKORO_BASE / "kokoro-v1.0.onnx"
+_KOKORO_VOICES = _KOKORO_BASE / "voices-v1.0.bin"
 _KOKORO_MODEL_URL = (
     "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
-    "model-files-v1.0/kokoro-v0.19.onnx"
+    "model-files-v1.0/kokoro-v1.0.onnx"
 )
 _KOKORO_VOICES_URL = (
     "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
-    "model-files-v1.0/voices.json"
+    "model-files-v1.0/voices-v1.0.bin"
 )
 
 
@@ -98,6 +138,9 @@ class VoiceProvider:
     requires_internet: bool = False
     is_available: bool = False
     latency_ms: int = 0
+    #: Speech rate multiplier (1.0 = natural). Higher shortens both
+    #: synthesis compute and audio duration.
+    speed: float = 1.0
 
     def synthesize(self, text: str, output_path: str,
                    voice: str = "", mode: VoiceMode = VoiceMode.CONVERSATION
@@ -106,6 +149,125 @@ class VoiceProvider:
 
     def get_voices(self) -> list[str]:
         return []
+
+
+# ---------------------------------------------------------------------------
+# Piper provider
+# ---------------------------------------------------------------------------
+
+
+class PiperProvider(VoiceProvider):
+    """Piper neural TTS via the in-process `piper` Python API.
+
+    The "Jenny" voice (UK/Irish female) runs in-process — no subprocess,
+    no internet. Measured on a 2-core CPU: 0.14 s first audio for short
+    replies, ~1.1 s for a sentence. Faster than edge-tts and kokoro,
+    natural-sounding, offline, ~63 MB model.
+
+    Model is auto-downloaded to ~/.friday/models/piper/ on first use
+    (atomic, retried, never corrupt).
+    """
+
+    name = "piper"
+    quality = "high"
+    requires_internet = False
+    latency_ms = 100
+
+    VOICE_MAP = {
+        VoiceMode.CONVERSATION: "jenny",
+        VoiceMode.BRIEFING: "jenny",
+        VoiceMode.ALERT: "jenny",
+        VoiceMode.WHISPER: "jenny",
+    }
+
+    _voice = None
+    _load_thread: Optional[threading.Thread] = None
+
+    def __init__(self):
+        self.is_available = False
+        try:
+            import importlib.util
+            if importlib.util.find_spec("piper") is None:
+                logger.debug("piper not installed — skipping load")
+                return
+            self._start_load()
+        except Exception as exc:
+            logger.debug(f"Piper init failed: {exc}")
+
+    def _start_load(self) -> None:
+        def _load():
+            try:
+                _PIPER_BASE.mkdir(parents=True, exist_ok=True)
+                if not _PIPER_MODEL.exists():
+                    self._download(_PIPER_MODEL_URL, _PIPER_MODEL)
+                if not _PIPER_TOKENS.exists():
+                    self._download(_PIPER_TOKENS_URL, _PIPER_TOKENS)
+                from piper import PiperVoice
+                self._voice = PiperVoice.load(str(_PIPER_MODEL))
+                self.is_available = True
+                logger.info("Piper voice loaded (async complete)")
+            except Exception as exc:
+                logger.warning(f"Piper load failed: {exc}")
+
+        self._load_thread = threading.Thread(target=_load, daemon=True)
+        self._load_thread.start()
+
+    @staticmethod
+    def _download(url: str, path: Path) -> None:
+        """Download with retries (3 attempts, exponential backoff), atomic."""
+        import urllib.error
+        import urllib.request
+        import time as _time
+        last_exc = None
+        tmp = path.with_suffix(path.suffix + ".part")
+        for attempt in range(3):
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                urllib.request.urlretrieve(url, tmp)
+                if tmp.exists() and tmp.stat().st_size < 64 * 1024:
+                    raise RuntimeError(
+                        f"Suspiciously small download ({tmp.stat().st_size} bytes)")
+                tmp.replace(path)
+                return
+            except (urllib.error.URLError, urllib.error.HTTPError,
+                    OSError, TimeoutError, RuntimeError) as exc:
+                last_exc = exc
+                tmp.unlink(missing_ok=True)
+                _time.sleep(2 ** attempt)
+        raise last_exc if last_exc else RuntimeError(f"Failed to download {url}")
+
+    def _wait_loaded(self, timeout: float = 600.0) -> bool:
+        if self.is_available and self._voice is not None:
+            return True
+        if self._load_thread is not None:
+            self._load_thread.join(timeout=timeout)
+        return self.is_available and self._voice is not None
+
+    def synthesize(self, text: str, output_path: str,
+                   voice: str = "", mode: VoiceMode = VoiceMode.CONVERSATION
+                   ) -> bool:
+        if not self._wait_loaded():
+            return False
+        piper = self._voice
+        if piper is None:
+            return False
+        try:
+            import numpy as np
+            audio = piper.synthesize(text)
+            chunks = [np.frombuffer(c.audio_int16_bytes, dtype=np.int16)
+                      for c in audio]
+            if not chunks:
+                return False
+            samples = np.concatenate(chunks)
+            write_wav(output_path, samples.astype(np.float32) / 32768.0,
+                      int(piper.config.sample_rate))
+            return True
+        except Exception as exc:
+            logger.warning(f"Piper synthesis failed: {exc}")
+            return False
+
+    def get_voices(self) -> list[str]:
+        return ["jenny"]
 
 
 # ---------------------------------------------------------------------------
@@ -168,20 +330,33 @@ class KokoroONNXProvider(VoiceProvider):
 
     @staticmethod
     def _download(url: str, path: Path) -> None:
-        """Download with retries (3 attempts, exponential backoff)."""
+        """Download with retries (3 attempts, exponential backoff).
+
+        Downloads to a temp file and atomically renames on success so a
+        partial/interrupted download can never leave a corrupt model at
+        the final path (which would be treated as "already downloaded"
+        and fail to load forever).
+        """
         last_exc = None
+        tmp = path.with_suffix(path.suffix + ".part")
         for attempt in range(3):
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                urllib.request.urlretrieve(url, path)
+                urllib.request.urlretrieve(url, tmp)
+                # Sanity: a truncated download (e.g. connection dropped)
+                # yields a small file — refuse to keep it.
+                if tmp.exists() and tmp.stat().st_size < 1024 * 1024:
+                    raise RuntimeError(f"Suspiciously small download ({tmp.stat().st_size} bytes)")
+                tmp.replace(path)
                 return
             except (urllib.error.URLError, urllib.error.HTTPError,
-                    OSError, TimeoutError) as exc:
+                    OSError, TimeoutError, RuntimeError) as exc:
                 last_exc = exc
+                tmp.unlink(missing_ok=True)
                 time.sleep(2 ** attempt)
         raise last_exc if last_exc else RuntimeError(f"Failed to download {url}")
 
-    def _wait_loaded(self, timeout: float = 180.0) -> bool:
+    def _wait_loaded(self, timeout: float = 600.0) -> bool:
         if self.is_available and self._kokoro is not None:
             return True
         if self._load_thread is not None:
@@ -193,10 +368,13 @@ class KokoroONNXProvider(VoiceProvider):
                    ) -> bool:
         if not self._wait_loaded():
             return False
+        kokoro = self._kokoro
+        if kokoro is None:
+            return False
         voice = voice or self.VOICE_MAP.get(mode, "af_bella")
         try:
-            samples, sample_rate = self._kokoro.create(
-                text, voice=voice, speed=1.0, lang="en-us")
+            samples, sample_rate = kokoro.create(
+                text, voice=voice, speed=self.speed, lang="en-us")
             if samples is None or len(samples) == 0:
                 return False
             write_wav(output_path, np.asarray(samples, dtype=np.float32),
@@ -278,11 +456,6 @@ class PyTTSProvider(VoiceProvider):
     def __init__(self):
         try:
             import pyttsx3
-            try:
-                import espeakng_loader
-                os.environ["ESPEAK_DATA_PATH"] = espeakng_loader.get_data_path()
-            except ImportError:
-                pass
             self._engine = pyttsx3.init()
             self._engine.setProperty("rate", 180)
             self._engine.setProperty("volume", 0.9)
@@ -340,6 +513,7 @@ class TextToSpeech:
         self._current_provider: Optional[VoiceProvider] = None
         self._speak_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        _setup_espeak()
         self._init_providers()
 
         if self.config.cache_enabled:
@@ -350,19 +524,40 @@ class TextToSpeech:
 
         logger.info(f"TTS initialized. Active provider: {self.active_provider_name}")
 
-    def _init_providers(self) -> None:
+    @staticmethod
+    def _probe_internet(timeout: float = 2.0) -> bool:
+        """Best-effort connectivity check for auto provider selection."""
+        import socket
+        try:
+            socket.setdefaulttimeout(timeout)
+            socket.create_connection(("8.8.8.8", 53))
+            return True
+        except Exception:
+            return False
+        finally:
+            socket.setdefaulttimeout(None)
+
+    def _init_providers(self) -> list[str]:
         preferred = self.config.primary_provider
         _REGISTRY: dict[str, type[VoiceProvider]] = {
-            "kokoro": KokoroONNXProvider,
+            "piper": PiperProvider,
             "edge": EdgeTTSProvider,
+            "kokoro": KokoroONNXProvider,
             "pyttsx3": PyTTSProvider,
         }
+        # "auto" → piper (offline, instant, natural); falls back naturally
+        # to edge when piper can't load.
+        if preferred == "auto":
+            preferred = "piper"
+            logger.info(f"Auto TTS provider → {preferred}")
         order = [preferred] if preferred in _REGISTRY else []
-        order += [n for n in ("kokoro", "edge", "pyttsx3") if n not in order]
+        order += [n for n in ("piper", "edge", "kokoro", "pyttsx3")
+                  if n not in order]
 
         for name in order:
             try:
                 provider = _REGISTRY[name]()
+                provider.speed = self.config.speed
                 self._providers.append(provider)
                 if provider.is_available:
                     self._current_provider = provider
@@ -373,20 +568,35 @@ class TextToSpeech:
 
         if not self._current_provider:
             logger.warning("No TTS provider available — speech disabled")
+        return list(order)
 
     def _ensure_primary_loaded(self) -> None:
         """Block once (max 180s) for the primary kokoro model if it is still
         downloading. Called lazily on the first speak(), NOT in __init__, so
         `voice status` / `voice setup` never hang on a model download.
         """
-        if self._current_provider is not None:
-            return
+        # If a fallback (edge/pyttsx3) won the init race while the primary
+        # was still loading async, promote the primary once it's ready —
+        # otherwise the configured provider is never used.
+        preferred = self.config.primary_provider
+        if preferred == "auto":
+            preferred = "piper"
         for p in self._providers:
-            if isinstance(p, KokoroONNXProvider):
-                p._wait_loaded()
-                if p.is_available:
-                    self._current_provider = p
-                break
+            if p.name != preferred:
+                continue
+            # Duck-type instead of isinstance(): the provider may be a
+            # test mock (or a future drop-in), so probe for the capability
+            # marker (_wait_loaded) rather than the concrete class.
+            wait = getattr(p, "_wait_loaded", None)
+            if not callable(wait):
+                return
+            try:
+                wait()
+            except Exception:
+                pass
+            if getattr(p, "is_available", False):
+                self._current_provider = p
+            return
 
     @property
     def active_provider_name(self) -> str:
@@ -404,8 +614,9 @@ class TextToSpeech:
         """Speak text aloud. Non-blocking; interrupts current speech."""
         if not text:
             return False
-        if not self._current_provider:
-            self._ensure_primary_loaded()  # blocks once for kokoro download
+        # Promote the primary provider when it's ready (blocks once for a
+        # model download); if it never loads, keep the current fallback.
+        self._ensure_primary_loaded()
         if not self._current_provider:
             return False
         self.stop()
@@ -449,12 +660,110 @@ class TextToSpeech:
             play_wav_file(cached)
             return
 
+        chunks = self._split_sentences(text)
+        # Single-sentence text → old behaviour: synth, play, cache.
+        if len(chunks) <= 1:
+            self._synthesize_and_play(text, mode, cache_key)
+            return
+
+        # Multi-sentence → stream: synthesize each chunk, queue for
+        # immediate playback so the first words play while later chunks
+        # are still rendering. NOTE: multi-sentence responses are NOT
+        # cached — caching only the first chunk under the full-text key
+        # would replay just the first sentence on the next identical ask.
+        synth_ok = False
+        for chunk in chunks:
+            if self._stop_event.is_set():
+                break
+            wav = self._synthesize_chunk(chunk, mode)
+            if wav is None:
+                continue
+            synth_ok = True
+            queue_wav(wav)
+        flush_play_queue()
+        if not synth_ok:
+            # Every chunk failed → fall back to another provider.
+            self._fallback_speak(text, mode)
+
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        """Split text into TTS-sized chunks for streaming playback.
+
+        Rules:
+          - Break on sentence punctuation (. ! ?) first.
+          - Break long clauses on commas.
+          - Cap every chunk at ~12 words so the first chunk stays small
+            (bounds time-to-first-sound) without multiplying the fixed
+            per-synthesis overhead (~1.5 s/call) too many times.
+        """
+        import re
+
+        def _break_commas(s: str) -> list[str]:
+            parts = [p.strip() for p in re.split(r',\s+', s)]
+            return [p for p in parts if p]
+
+        parts = re.split(r'(?<=[.!?])\s+(?=[A-Z0-9])', text.strip())
+        out = []
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            words = p.split()
+            if len(words) <= 12:
+                out.append(p)
+                continue
+            # Long sentence → split on commas first.
+            sub = _break_commas(p)
+            if len(sub) <= 1:
+                sub = p.split()
+                while sub:
+                    out.append(" ".join(sub[:12]))
+                    sub = sub[12:]
+            else:
+                cur = ""
+                for clause in sub:
+                    test = (cur + " " + clause).strip()
+                    if len(test.split()) > 12 and cur:
+                        out.append(cur)
+                        cur = clause
+                    else:
+                        cur = test
+                if cur:
+                    out.append(cur)
+        return out
+
+    def _synthesize_chunk(self, text: str, mode: VoiceMode) -> Optional[str]:
+        """Synthesize one chunk to a temp wav; return its path or None."""
+        provider = self._current_provider
+        if provider is None:
+            return None
+        import tempfile
+        output_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                output_path = f.name
+            if provider.synthesize(
+                    text=text, output_path=output_path,
+                    voice=self.config.voice, mode=mode):
+                return output_path
+            return None
+        except Exception as exc:
+            logger.error(f"Chunk synthesis failed: {exc}")
+            return None
+
+    def _synthesize_and_play(self, text: str, mode: VoiceMode,
+                             cache_key: str) -> None:
+        """Synthesize a whole short utterance, play it, and cache it."""
+        provider = self._current_provider
+        if provider is None:
+            self._fallback_speak(text, mode)
+            return
         output_path = None
         try:
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 output_path = f.name
-            success = self._current_provider.synthesize(
+            success = provider.synthesize(
                 text=text, output_path=output_path,
                 voice=self.config.voice, mode=mode)
             if success and not self._stop_event.is_set():

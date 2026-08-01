@@ -368,6 +368,100 @@ class MissionEngine:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
+    def create_mission_from_steps(
+        self,
+        goal: str,
+        steps: list[dict],
+        mission_id: Optional[str] = None,
+    ) -> PersistentMission:
+        """Create a persistent mission from pre-defined agent steps.
+
+        This is the Agentic Action Layer integration point. When the
+        AgenticExecutor decomposes a complex task into steps, this method
+        creates a PersistentMission that can span multiple daemon cycles.
+
+        Args:
+            goal: The overall mission goal (natural language).
+            steps: List of step dicts, each with:
+                - ``description``: Human-readable step description.
+                - ``action_type``: One of ``"shell"``, ``"git"``,
+                  ``"filesystem"``, ``"python"``, ``"skill_execute"``.
+                - ``payload``: The command or operation spec.
+                - ``worker_id``: (optional) Worker to use, defaults to
+                  ``"worker:shell"``.
+                - ``tool``: (optional, alternative field) The tool name
+                  from the AgenticExecutor (e.g. ``"shell"``, ``"git"``).
+                  Auto-mapped to ``action_type``.
+            mission_id: (optional) Override the auto-generated mission ID.
+                Useful when linking back to an agent session.
+
+        Returns:
+            The newly created ``PersistentMission``.
+        """
+        import uuid
+        now = now_iso()
+        mid = mission_id or f"mission:{uuid.uuid4().hex[:12]}"
+
+        mission_steps: list[MissionStep] = []
+        for i, s in enumerate(steps):
+            desc = str(s.get("description", s.get("prompt", f"Step {i}")))[:80]
+            # Map tool name to action_type (agent executor format → mission format).
+            tool = s.get("tool") or s.get("action_type", "shell")
+            _TOOL_MAP = {
+                "shell": "shell",
+                "git": "git",
+                "filesystem": "filesystem",
+                "python": "python",
+                "skill_execute": "skill_execute",
+                "claude_code": "shell",  # treat as shell
+                "browser": "shell",  # treat as shell
+                "clipboard": "shell",  # treat as shell
+                "search": "shell",  # treat as shell
+                "impact": "shell",  # treat as shell
+                "narrative": "shell",  # treat as shell
+                "mission": "skill_execute",
+            }
+            action_type = _TOOL_MAP.get(tool, "shell")
+            payload = str(s.get("payload", s.get("command", f"echo '{desc}'")))[:500]
+            worker_id = str(s.get("worker_id", "worker:shell"))[:30]
+
+            mission_steps.append(MissionStep(
+                index=i,
+                description=desc,
+                action_type=action_type,
+                payload=payload,
+                worker_id=worker_id,
+            ))
+
+        total = len(mission_steps)
+        mission = PersistentMission(
+            mission_id=mid,
+            goal=goal,
+            status="active",
+            created_at=now,
+            updated_at=now,
+            total_steps=total,
+            steps=mission_steps,
+        )
+        self._save(mission)
+
+        # Push ambient event.
+        try:
+            from .ambient import push_event, AmbientEvent
+            push_event(self.conn, AmbientEvent(
+                timestamp=now,
+                event_type="mission_created_from_agent",
+                title=f"Agent mission: {goal[:60]}",
+                detail=f"{total} pre-defined steps imported from agent. Will advance each daemon cycle.",
+                priority=2,
+                category="execution",
+                actionable=False,
+            ))
+        except Exception:
+            pass
+
+        return mission
+
     def start_mission(self, goal: str) -> PersistentMission:
         """Create and persist a new persistent mission.
 

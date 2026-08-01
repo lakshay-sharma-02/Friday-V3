@@ -19,13 +19,13 @@ import pytest
 from src.friday.context.models import EngineeringSession, SessionActivity
 from src.friday.db import (
     connect,
-    evolution_events_all,
     insert_observations,
     insert_sessions,
     knowledge_history_for,
     latest_knowledge_snapshot,
     update_knowledge_status,
 )
+from src.friday.knowledge.evolution import evolution_timeline
 from src.friday.knowledge import (
     Knowledge,
     KnowledgeConfidence,
@@ -99,8 +99,8 @@ def test_confidence_growth_emits_strengthened(db):
         for i in range(5, 45)
     ])
     r2, n2 = build(db)
-    ev = evolution_events_all(db)
-    assert any(e.event_type == "Strengthened" for e in ev)
+    ev = evolution_timeline(db)
+    assert any(e["event_type"] == "Strengthened" for e in ev)
     py = [k for k in KnowledgeEngine(db).all_knowledge() if k.subject == "Python"]
     assert py and py[0].confidence == KnowledgeConfidence.STRONG
 
@@ -130,8 +130,8 @@ def test_confidence_decay_requires_contradicting_evidence(db):
         obs("git", "Python", "language", "removed", now.isoformat())
     ])
     build(db)
-    ev = evolution_events_all(db)
-    assert any(e.event_type in ("Weakened", "Contradicted", "Dormant") for e in ev)
+    ev = evolution_timeline(db)
+    assert any(e["event_type"] in ("Weakened", "Contradicted", "Dormant") for e in ev)
 
 
 # --- Part M: history preservation + append-only ------------------------------
@@ -196,7 +196,7 @@ def test_retirement_requires_removal_evidence(db):
     # Explicit deprecation with NO active usage -> Retired, but still queryable.
     assert flask[0].status == KnowledgeStatus.RETIRED
     assert flask[0] in KnowledgeEngine(db).all_knowledge()  # queryable
-    assert any(e.event_type == "Retired" for e in evolution_events_all(db))
+    assert any(e["event_type"] == "Retired" for e in evolution_timeline(db))
 
     # Contrast: a subject used heavily then left idle (no new obs) must NOT retire.
     insert_observations(db, [
@@ -229,8 +229,8 @@ def test_contradiction_records_does_not_overwrite(db):
         obs("git", "Python", "language", "unused", now.isoformat())
     ])
     build(db)
-    ev = evolution_events_all(db)
-    assert any(e.event_type == "Contradicted" for e in ev)
+    ev = evolution_timeline(db)
+    assert any(e["event_type"] == "Contradicted" for e in ev)
     # History still contains the early Python statement (never overwritten).
     pid = [k for k in KnowledgeEngine(db).all_knowledge() if k.subject == "Python"][0].id
     hist = knowledge_history_for(db, pid)
@@ -261,11 +261,14 @@ def test_merge_event_links_parents(db):
         for i in range(20)
     ])
     build(db)
-    ev = evolution_events_all(db)
-    merged = [e for e in ev if e.event_type == "Merged"]
+    import json
+    ev = evolution_timeline(db)
+    merged = [e for e in ev if e["event_type"] == "Merged"]
     assert merged, "expected a Merged event"
-    assert "rust" in merged[0].related_ids.lower()
-    assert "cargo" in merged[0].related_ids.lower()
+    meta = json.loads(merged[0]["metadata"]) if isinstance(merged[0]["metadata"], str) else {}
+    related = meta.get("related", "").lower()
+    assert "rust" in related
+    assert "cargo" in related
     # Parents remain.
     subs = {k.subject for k in KnowledgeEngine(db).all_knowledge()}
     assert "Rust" in subs and "Cargo" in subs
@@ -294,8 +297,8 @@ def test_split_event_on_divergence(db):
         for i in range(10)
     ])
     build(db)
-    ev = evolution_events_all(db)
-    assert any(e.event_type == "Split" for e in ev)
+    ev = evolution_timeline(db)
+    assert any(e["event_type"] == "Split" for e in ev)
 
 
 # --- Part M: dormant (evidence-driven, NOT clock) -----------------------------
@@ -318,7 +321,7 @@ def test_dormant_requires_inactive_observation(db):
     build(db)
     vue = [k for k in KnowledgeEngine(db).all_knowledge() if k.subject == "Vue"][0]
     assert vue.status == KnowledgeStatus.DORMANT
-    assert any(e.event_type == "Dormant" for e in evolution_events_all(db))
+    assert any(e["event_type"] == "Dormant" for e in evolution_timeline(db))
 
 
 def test_reactivated_on_new_usage(db):
@@ -338,7 +341,7 @@ def test_reactivated_on_new_usage(db):
     build(db)
     vue = [k for k in KnowledgeEngine(db).all_knowledge() if k.subject == "Vue"][0]
     assert vue.status == KnowledgeStatus.OBSERVED
-    assert any(e.event_type == "Reactivated" for e in evolution_events_all(db))
+    assert any(e["event_type"] == "Reactivated" for e in evolution_timeline(db))
 
 
 # --- Part M: brain compatibility ---------------------------------------------
@@ -373,7 +376,7 @@ def test_cold_start_no_events(db):
     r, n = build(db)
     assert r.total == 0
     assert n == 0
-    assert evolution_events_all(db) == []
+    assert evolution_timeline(db) == []
 
 
 # --- Part M: idempotency + repeated builds -----------------------------------
@@ -388,14 +391,14 @@ def test_repeated_build_idempotent_no_duplicate_events(db):
     build(db)
     build(db)  # identical data
     build(db)
-    ev = evolution_events_all(db)
+    ev = evolution_timeline(db)
     # Each (build_at, type, kid) is unique -> no duplicate events across builds.
-    ids = [(e.build_at, e.id) for e in ev]
+    ids = [(e["recorded_at"], e["id"]) for e in ev]
     assert len(ids) == len(set(ids))
     # Total distinct event ids stable across re-runs.
     n1 = len(ev)
     build(db)
-    assert len(evolution_events_all(db)) == n1
+    assert len(evolution_timeline(db)) == n1
 
 
 # --- Part M: out-of-order timestamps -----------------------------------------
