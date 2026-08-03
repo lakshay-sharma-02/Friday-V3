@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Roadmap</h1>
+<h1>Friday V4 — Refined Roadmap</h1>
+<blockquote><strong>Context:</strong> Solo developer, no deadline, full-stack vision, multi-platform.</blockquote>
+<blockquote><strong>Total estimate:</strong> 13–17 months for Waves 1–8; <strong>~18–22 months</strong> including the</blockquote>
+<blockquote>Wave 9–11 Agency Core (the brain — reasoning, memory, execution, research).</blockquote>
+<blockquote><strong>Strategy:</strong> Shippable waves — every wave delivers visible MCU-Friday value.</blockquote>
+<blockquote><strong>Minimum MCU Friday (Voice + Desktop): ~3.5–5 months.</strong></blockquote>
+<hr>
+<h2>The Honest Math</h2>
+<p>Building a production-quality voice interface, cross-platform desktop control,</p>
+<p>collaboration layer, security scanner, IDE integration, mobile app, proactive</p>
+<p>intelligence — <strong>plus the agency core (reasoning, memory, execution, research)</strong></p>
+<p>— solo — is an <strong>~18–22 month endeavor</strong> (Waves 1–8 ≈ 13–17 months; Waves 9–11</p>
+<p>≈ 4–5 months more). That&#x27;s not scary — it&#x27;s liberating. No deadline means we</p>
+<p>build it right, ship waves that feel like progress, and never crunch.</p>
+<p><strong>But here&#x27;s the secret:</strong> You stop after any wave and you have something real.</p>
+<ul><li>Stop after <strong>Wave 1</strong>: You have a voice-controlled Friday. That&#x27;s already MCU-level.</li><li>Stop after <strong>Wave 2</strong>: You have voice + desktop. That&#x27;s Iron Man&#x27;s lab.</li><li>Keep going to <strong>Wave 12</strong>: You have the complete Friday — surfaces *and* brain.</li></ul>
+<hr>
+<h2>Wave Strategy</h2>
+<pre><code class="language-">Wave 1: VOICE ─────&gt; &quot;Hey Friday, what&#x27;s new?&quot; ─────────&gt; ✅ SHIPPED
+Wave 2: DESKTOP ───&gt; Friday controls your environment ──&gt; ✅ SHIPPED
+Wave 3: SECURITY ──&gt; Friday protects your code ─────────&gt; ✅ SHIPPED
+Wave 4: SMART ─────&gt; Friday anticipates your needs ─────&gt; ✅ SHIPPED
+Wave 5: COLLAB ────&gt; Friday works with teams ───────────&gt; ✅ SHIPPED
+Wave 6: IDE ───────&gt; Friday lives in your editor ───────&gt; ✅ SHIPPED (2026-08)
+Wave 7: MOBILE ────&gt; Friday in your pocket ─────────────&gt; 10-12 weeks
+Wave 9: AGENCY ────&gt; Friday actually does things ───────&gt; ✅ SHIPPED
+Wave 10: IDENTITY ─&gt; Friday knows you ──────────────────&gt; ✅ SHIPPED
+Wave 11: RESEARCH ─&gt; Friday reasons across your world ──&gt; ✅ SHIPPED
+Wave 12: POLISH ───&gt; Production-ready ──────────────────&gt; ✅ SHIPPED
+Wave 13: THINKING CORE ──&gt; LLM synthesis over evidence ──&gt; ✅ SHIPPED
+Wave 13a: ONE NLU POINT ──&gt; LLM-first resolve(), rules fallback ──&gt; ✅ SHIPPED
+Wave 14: WATCH ME ──────&gt; demonstration capture ─────────────────&gt; ✅ SHIPPED</code></pre>
+<blockquote><strong>Renumbering note:</strong> the original Wave 8 slot (&quot;Polish &amp; Scale&quot;) is now</blockquote>
+<blockquote><strong>Wave 12</strong>; Waves 9–11 are the new Agency Core (the brain). IDE (6) and</blockquote>
+<blockquote>Mobile (7) keep their numbers — <strong>Wave 8 is intentionally left unused</strong> to</blockquote>
+<blockquote>keep the new brain waves at 9–11 (matching the WAVE doc filenames). Full</blockquote>
+<blockquote>designs: <code>WAVE_9_AGENCY_CORE.md</code>, <code>WAVE_10_MEMORY_IDENTITY.md</code>,</blockquote>
+<blockquote><code>WAVE_11_RESEARCH_REFLECTION.md</code>.</blockquote>
+<p>**Total: ~18–22 months solo (the original 8-wave scope ≈ 13–17 months + ~4–5</p>
+<p>for Waves 9–11).** Each wave ships independently.</p>
+<hr>
+<h2>Wave 1: Voice Interaction ✅ SHIPPED (2026-08)</h2>
+<p><strong>Status:</strong> Built. <code>friday4 talk</code> (hotword + push-to-talk), <code>friday4 voice setup/status/test</code>.</p>
+<p>TTS: kokoro-onnx / piper / edge-tts / pyttsx3 with auto-fallback. STT: faster-whisper.</p>
+<p>VAD: Silero/WebRTC. Hotword: openwakeword (<code>hey_jarvis</code> ≈ &quot;hey friday&quot; — custom</p>
+<p>retraining deferred). Barge-in interruption, voice modes, chimes, caching — all in.</p>
+<p><strong>Goal:</strong> Walk up to your dev environment, say &quot;Hey Friday, what&#x27;s going on?&quot;</p>
+<p>and hear Friday respond aloud. This is the single most transformative feature.</p>
+<h3>What We Build</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>T</th><th>i</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>r</th><th>e</th><th>r</th><th>e</th><th>q</th><th>u</th><th>i</th><th>s</th><th>i</th><th>t</th><th>e</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>SpeechToText</code></td><td><code>voice/stt.py</code></td><td>5 days</td><td>Faster-Whisper (model download: ~2GB for small)</td><td></td></tr><tr><td></td><td><code>TextToSpeech</code></td><td><code>voice/tts.py</code></td><td>3 days</td><td>Piper voice models (~50MB download)</td><td></td></tr><tr><td></td><td><code>VoiceActivityDetector</code></td><td><code>voice/vad.py</code></td><td>2 days</td><td>webrtcvad</td><td></td></tr><tr><td></td><td><code>HotwordDetector</code></td><td><code>voice/hotword.py</code></td><td>3 days</td><td><strong>Porcupine API key</strong> (free account)</td><td></td></tr><tr><td></td><td><code>AudioStream</code></td><td><code>voice/audio.py</code></td><td>2 days</td><td><strong>portaudio19-dev</strong> (Linux), brew install portaudio (macOS)</td><td></td></tr><tr><td></td><td><code>VoicePipeline</code></td><td><code>voice/pipeline.py</code></td><td>6 days</td><td>❗ <strong>Hardest part</strong> — threading, buffering, state machine</td><td></td></tr><tr><td></td><td><code>VoiceRouter</code></td><td><code>voice/router.py</code></td><td>2 days</td><td>V3 IdentityEngine</td><td></td></tr><tr><td></td><td><code>friday talk</code> CLI</td><td><code>cli_talk.py</code></td><td>3 days</td><td>V3 CLI framework</td><td></td></tr><tr><td></td><td><code>friday voice setup</code></td><td><code>cli_voice_setup.py</code></td><td>2 days</td><td>—</td><td></td></tr><tr><td></td><td>Setup wizard</td><td><code>voice/setup.py</code></td><td>2 days</td><td>—</td><td></td></tr><tr><td></td><td>Caching</td><td><code>voice/cache.py</code></td><td>2 days</td><td>LRU, disk cache</td><td></td></tr><tr><td></td><td>Interruption handling</td><td>(in pipeline)</td><td>4 days</td><td>❗ Thread sync, audio buffer mgmt</td><td></td></tr></tbody></table>
+<p><strong>Total: ~36 days → 7-9 weeks (including buffer)</strong></p>
+<h3>Hidden Complexity (callout)</h3>
+<ul><li><strong>Audio pipeline threading</strong> is the real challenge. VAD runs on audio frames,</li></ul>
+<p>hotword detection runs on the same frames, STT needs utterance boundaries,</p>
+<p>and TTS needs its own output stream. Synchronizing all of this requires a</p>
+<p>well-designed state machine. Test with real microphone input, not just files.</p>
+<ul><li><strong>Piper setup</strong> requires a compiled binary or prebuilt download. Not a pip</li></ul>
+<p>install — it&#x27;s a C++ inference engine with Python bindings.</p>
+<ul><li><strong>Porcupine</strong> needs a free API key from Picovoice console. Account creation</li></ul>
+<p>+ key retrieval takes ~15 minutes but blocks the hotword feature.</p>
+<h3>File Count</h3>
+<ul><li><strong>15 source files</strong> + 10 test files = 25 files total for this wave.</li><li>Each file needs: docstrings, type hints, error handling, tests.</li><li>File creation alone takes ~20% of the wave time.</li></ul>
+<h3>Multi-Platform Status</h3>
+<table><thead><tr><th>|</th><th></th><th>P</th><th>l</th><th>a</th><th>t</th><th>f</th><th>o</th><th>r</th><th>m</th><th></th><th>|</th><th></th><th>E</th><th>f</th><th>f</th><th>o</th><th>r</th><th>t</th><th></th><th>|</th><th></th><th>D</th><th>e</th><th>p</th><th>e</th><th>n</th><th>d</th><th>e</th><th>n</th><th>c</th><th>i</th><th>e</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Linux</td><td>✅ 1 day</td><td><code>apt install portaudio19-dev python3-pyaudio</code></td><td></td></tr><tr><td></td><td>macOS</td><td>✅ 2 days</td><td><code>brew install portaudio</code>; Piper via pip</td><td></td></tr><tr><td></td><td>Windows</td><td>✅ 2 days</td><td>pyaudio via pip (pre-built wheels available)</td><td></td></tr></tbody></table>
+<h3>What You Can Skip (Defer)</h3>
+<ul><li>Voice cloning, emotion detection, multi-language support</li><li>Custom wake word training (use Porcupine&#x27;s built-in &quot;hey friday&quot;)</li><li>Real-time streaming STT (process whole utterance at once)</li></ul>
+<h3>MCU Friday Feel</h3>
+<pre><code class="language-">🎤 [You]: &quot;Hey Friday, what&#x27;s the status of my projects?&quot;
+🎧 [Friday]: &quot;3 repositories changed since your last observation.
+             codebuff has 12 new commits, vivaha has 3.&quot;
+             → You feel like you&#x27;re in the lab. This is it.</code></pre>
+<hr>
+<h2>Wave 2: Desktop Presence ✅ SHIPPED (2026-08)</h2>
+<p><strong>Status:</strong> Built. WM abstraction + 5 adapters (Hyprland/GNOME/KDE/macOS/Windows),</p>
+<p>system tray, global hotkeys, desktop watcher, V3 ambient → desktop notification</p>
+<p>channel, proactive suggestion channel. `friday4 desktop status/windows/switch/</p>
+<p>focus/launch/screenshot/platforms<code>. <strong></code>friday4 daemon start [--voice]`</strong> runs the</p>
+<p>whole ambient stack (observer + notifier + sampler) as one process.</p>
+<p><strong>Goal:</strong> Friday controls your desktop environment — windows, workspaces, apps,</p>
+<p>system tray — on every platform you use.</p>
+<h3>What We Build</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>T</th><th>i</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>L</th><th>e</th><th>a</th><th>r</th><th>n</th><th>i</th><th>n</th><th>g</th><th></th><th>C</th><th>u</th><th>r</th><th>v</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>DesktopAbstraction</code> (interface)</td><td><code>desktop/wm_abstraction.py</code></td><td>3 days</td><td>Low — API design</td><td></td></tr><tr><td></td><td><code>HyprlandAdapter</code></td><td><code>desktop/hyprland_adapter.py</code></td><td>2 days</td><td>Low — port from V3</td><td></td></tr><tr><td></td><td><code>GNOMEAdapter</code></td><td><code>desktop/gnome_adapter.py</code></td><td>7 days</td><td><strong>Medium</strong> — D-Bus introspection, GNOME Shell API</td><td></td></tr><tr><td></td><td><code>KDEAdapter</code></td><td><code>desktop/kde_adapter.py</code></td><td>5 days</td><td>Medium — KWin scripting, qdbus</td><td></td></tr><tr><td></td><td><code>macOSAdapter</code></td><td><code>desktop/macos_adapter.py</code></td><td><strong>12-14 days</strong></td><td><strong>HIGH</strong> — Accessibility API, privacy perms, entitlements</td><td></td></tr><tr><td></td><td><code>WindowsAdapter</code></td><td><code>desktop/windows_adapter.py</code></td><td>7-10 days</td><td>Medium — Win32 API, COM</td><td></td></tr><tr><td></td><td><code>SystemTray</code></td><td><code>desktop/tray.py</code></td><td>3 days</td><td>Low — pystray</td><td></td></tr><tr><td></td><td><code>GlobalHotkeys</code></td><td><code>desktop/hotkeys.py</code></td><td>3 days</td><td>Low — keyboard library</td><td></td></tr><tr><td></td><td><code>friday desktop</code> CLI</td><td><code>cli_desktop.py</code></td><td>3 days</td><td>Low</td><td></td></tr></tbody></table>
+<p><strong>Total: ~25 days for first platform + 7-14 days per additional platform</strong></p>
+<h3>Strategy: Progressive Platform Support</h3>
+<p><strong>Recommendation for solo dev:</strong> Build adapters in this order:</p>
+<p>1. <strong>Hyprland</strong> (2 days — reuse V3 code)</p>
+<p>2. <strong>GNOME</strong> (7 days — most common Linux DE)</p>
+<p>3. <strong>macOS</strong> (12-14 days — common dev platform, but HIGH learning curve)</p>
+<p>4. <strong>Windows</strong> (7-10 days — largest user base)</p>
+<p>5. <strong>KDE</strong> (5 days — lower priority, smaller user base)</p>
+<p>Each adapter is independent. You can stop after Hyprland + GNOME and still</p>
+<p>have a cross-platform desktop Friday for 80% of Linux users.</p>
+<h3>Multi-Platform Test Strategy (for a solo dev)</h3>
+<table><thead><tr><th>|</th><th></th><th>P</th><th>l</th><th>a</th><th>t</th><th>f</th><th>o</th><th>r</th><th>m</th><th></th><th>|</th><th></th><th>H</th><th>o</th><th>w</th><th></th><th>t</th><th>o</th><th></th><th>T</th><th>e</th><th>s</th><th>t</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Hyprland</td><td>✅ You&#x27;re on it</td><td></td></tr><tr><td></td><td>GNOME</td><td>VM or dual boot</td><td></td></tr><tr><td></td><td>macOS</td><td>Borrow a Mac, or CI with macOS runner (GitHub Actions)</td><td></td></tr><tr><td></td><td>Windows</td><td>VM or CI with Windows runner</td><td></td></tr><tr><td></td><td>KDE</td><td>Docker with KDE Neon image, or CI</td><td></td></tr></tbody></table>
+<h3>Hidden Complexity</h3>
+<ul><li><strong>macOS Accessibility API</strong> requires the user to manually grant permissions</li></ul>
+<p>in System Settings → Privacy &amp; Security → Accessibility. This can NOT be</p>
+<p>automated. Your adapter code must handle the permission-denied case</p>
+<p>gracefully and show setup instructions.</p>
+<ul><li><strong>GNOME Shell version fragmentation</strong> — the D-Bus interface changed between</li></ul>
+<p>GNOME 42, 43, and 44. Your adapter needs to detect the version and adapt.</p>
+<ul><li><strong>Wayland vs X11</strong> — Some APIs work differently (or not at all) under Wayland.</li></ul>
+<p>Hyprland is Wayland-native, but GNOME on Wayland has different D-Bus paths.</p>
+<h3>What You Can Skip (Defer)</h3>
+<ul><li>Full window management (start with: get active window, switch workspace)</li><li>Multi-monitor orchestration</li><li>IDE integration (that&#x27;s Wave 6)</li></ul>
+<h3>MCU Friday Feel</h3>
+<pre><code class="language-">🎤 [You]: &quot;Friday, switch to my coding workspace.&quot;
+🎧 [Friday]: &quot;Switching to workspace 3.&quot;
+             [Hyprland switches to workspace 3 where VS Code is open]
+             → You just commanded your desktop by voice.</code></pre>
+<hr>
+<h2>Wave 3: Security &amp; Quality ✅ SHIPPED (2026-08)</h2>
+<p><strong>Status:</strong> Built. <code>VulnerabilityScanner</code> + <code>DependencyAuditor</code> + <code>SecretDetector</code></p>
+<p>+ <code>QualityGate</code> + <code>SecurityReport</code> in <code>security/</code>. Every scanner has a</p>
+<p><strong>built-in, pure-stdlib implementation that always works</strong> plus **optional</p>
+<p>subprocess integrations** (pip-audit, trufflehog, ruff, mypy, bandit) that are</p>
+<p>discovered <strong>venv-aware</strong> via <code>security/tooling.py</code> — tools installed in the</p>
+<p>active venv&#x27;s <code>bin/</code> are found even when they&#x27;re not on PATH, so `security</p>
+<p>status<code> / </code>doctor<code> report them truthfully. </code>friday4 security scan [path]</p>
+<p>[--json] [--threshold N] [--no-deps|--no-secrets|--no-quality]<code>, </code>friday4</p>
+<p>security status`. Findings stay V4-native (CLI output + exit code + daemon</p>
+<p>state file + web dashboard; no V3 DB writes, per the V3-boundary decision).</p>
+<p><strong>Goal:</strong> Friday actively scans your projects for vulnerabilities, exposed</p>
+<p>secrets, and code quality issues — and tells you about them proactively.</p>
+<h3>What We Build</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>T</th><th>i</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>T</th><th>o</th><th>o</th><th>l</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>VulnerabilityScanner</code></td><td><code>security/scanner.py</code></td><td>4 days</td><td>pip-audit (subprocess)</td><td></td></tr><tr><td></td><td><code>DependencyAuditor</code></td><td><code>security/deps.py</code></td><td>3 days</td><td>pip-audit / safety CLI</td><td></td></tr><tr><td></td><td><code>SecretDetector</code></td><td><code>security/secrets.py</code></td><td>3 days</td><td>truffleHog (subprocess)</td><td></td></tr><tr><td></td><td><code>QualityGate</code></td><td><code>security/quality.py</code></td><td>3 days</td><td>ruff / mypy (subprocess)</td><td></td></tr><tr><td></td><td><code>SecurityReport</code></td><td><code>security/reporter.py</code></td><td>2 days</td><td>—</td><td></td></tr><tr><td></td><td><code>friday security scan</code> CLI</td><td><code>cli_security.py</code></td><td>2 days</td><td>—</td><td></td></tr><tr><td></td><td>V3 ambient feed integration</td><td>—</td><td>2 days</td><td>V3 ambient.push_event</td><td></td></tr></tbody></table>
+<p><strong>Total: ~19 days → 4 weeks</strong></p>
+<h3>Why Subprocess-Based Scanning</h3>
+<ul><li><strong>pip-audit</strong> — best-in-class Python dependency scanner. CLI tool, parse JSON.</li><li><strong>truffleHog</strong> — best-in-class secret scanner. CLI tool, parse JSON.</li><li><strong>ruff</strong> — fastest Python linter. CLI tool, parse JSON.</li><li>Running these as subprocesses avoids dependency hell and lets you use the</li></ul>
+<p>best tools for each job.</p>
+<h3>File Count</h3>
+<ul><li><strong>8 source files</strong> + 5 test files = 13 files. Low complexity wave.</li></ul>
+<h3>Multi-Platform Status</h3>
+<table><thead><tr><th>|</th><th></th><th>P</th><th>l</th><th>a</th><th>t</th><th>f</th><th>o</th><th>r</th><th>m</th><th></th><th>|</th><th></th><th>E</th><th>f</th><th>f</th><th>o</th><th>r</th><th>t</th><th></th><th>|</th><th></th><th>N</th><th>o</th><th>t</th><th>e</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Linux</td><td>✅</td><td>All tools available</td><td></td></tr><tr><td></td><td>macOS</td><td>✅</td><td>All tools available</td><td></td></tr><tr><td></td><td>Windows</td><td>✅</td><td>All tools available</td><td></td></tr></tbody></table>
+<h3>MCU Friday Feel</h3>
+<pre><code class="language-">🎤 [Friday]: &quot;I found 3 vulnerabilities in your dependencies.
+             CVE-2024-XXXX in requests v2.31.0 — HIGH severity.
+             I&#x27;ve opened an initiative to fix these.&quot;
+             → Friday is your code guardian.</code></pre>
+<hr>
+<h2>Wave 4: Proactive Intelligence ✅ SHIPPED (2026-08)</h2>
+<p><strong>Status:</strong> Built. Drift detection, anomaly detection, code health diagnostics,</p>
+<p>anticipation engine (context + patterns + session + priority), continuous</p>
+<p>learner. Wired into V3&#x27;s DB via <code>V3DataSource</code> (observations/actions/ambient —</p>
+<p>graceful fallback when V3 absent). `friday4 proactive status/suggest/learn/brief/</p>
+<p>observe<code>, </code>friday4 intelligence status/drift/anomaly/health/predict`. Plus</p>
+<p><code>friday4 doctor</code> / <code>friday4 status</code> ops tooling.</p>
+<p><strong>Goal:</strong> Friday doesn&#x27;t just react — it anticipates. It notices patterns in</p>
+<p>your behavior, predicts what you&#x27;ll need, and offers help before you ask.</p>
+<h3>What We Build</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>T</th><th>i</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>C</th><th>o</th><th>m</th><th>p</th><th>l</th><th>e</th><th>x</th><th>i</th><th>t</th><th>y</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>DriftPredictor</code></td><td><code>intelligence/drift.py</code></td><td>5 days</td><td>Medium — moving avg + std-dev</td><td></td></tr><tr><td></td><td><code>AnomalyDetector</code></td><td><code>intelligence/anomaly.py</code></td><td>5 days</td><td>Medium — statistical thresholding</td><td></td></tr><tr><td></td><td><code>CodeHealthDiagnostics</code></td><td><code>intelligence/health.py</code></td><td>4 days</td><td>Low — metric collection</td><td></td></tr><tr><td></td><td><code>AnticipationEngine</code></td><td><code>proactive/anticipation.py</code></td><td><strong>12 days</strong></td><td><strong>HIGH</strong> — pattern matching, freq analysis</td><td></td></tr><tr><td></td><td><code>PriorityInference</code></td><td><code>proactive/priority.py</code></td><td>4 days</td><td>Medium — rule-based</td><td></td></tr><tr><td></td><td><code>friday health</code> CLI</td><td><code>cli_health.py</code></td><td>2 days</td><td>Low</td><td></td></tr></tbody></table>
+<p><strong>Total: ~32 days → 6-8 weeks</strong></p>
+<h3>Why the Anticipation Engine Takes 12 Days</h3>
+<p>It&#x27;s not a simple lookup. It needs to:</p>
+<p>1. Query V3 action_log for recent user actions</p>
+<p>2. Query V3 working_memory for current context</p>
+<p>3. Build frequency distributions: &quot;when action X happens, action Y follows</p>
+<p>with probability Z&quot;</p>
+<p>4. Query calendar for upcoming events</p>
+<p>5. Query desktop for current app/window</p>
+<p>6. Combine all signals into ranked predictions</p>
+<p>7. Format predictions as natural suggestions</p>
+<p>8. Test that predictions are actually useful (not noise)</p>
+<h3>Data Dependency</h3>
+<p>The anticipation engine needs history to make predictions. If the V3 daemon</p>
+<p>hasn&#x27;t been running long, there won&#x27;t be enough data. The engine should</p>
+<p>gracefully report &quot;I&#x27;m still learning your patterns&quot; when data is insufficient.</p>
+<h3>File Count</h3>
+<ul><li><strong>8 source files</strong> + 8 test files = 16 files. Medium complexity.</li></ul>
+<h3>MCU Friday Feel</h3>
+<pre><code class="language-">🎤 [Friday]: (after you open main.py)
+             &quot;You&#x27;re about to edit main.py — I ran the tests for you.
+              All 156 pass. Would you like me to also run the linter?&quot;
+             → Friday saw what you were about to do and prepared.</code></pre>
+<hr>
+<h2>Wave 5: Collaboration ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> Multiple Friday instances can observe, sync, and coordinate. Team</p>
+<p>workspaces share observations while keeping local control.</p>
+<p><strong>What shipped:</strong> `<code>collab/</code><code> (</code><code>crdt.py</code>` LWW observation CRDT,</p>
+<p>`<code>peer.py</code><code> discovery, </code><code>sync.py</code><code> sync, </code><code>coordinator.py</code>`,</p>
+<p>`<code>permissions.py</code><code> ACLs) plus the </code><code>friday4 collab</code>` CLI (start / status /</p>
+<p>peers / observations / add / share / perms). <strong>Pure stdlib</strong>: discovery is</p>
+<p>UDP JSON beacons and sync is a TCP JSON-lines protocol — the roadmap&#x27;s</p>
+<p>zeroconf/WebSocket choices were replaced deliberately to honor V4&#x27;s</p>
+<p>&quot;pure-stdlib, always works&quot; law (no new dependencies).</p>
+<h3>What We Build</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>T</th><th>i</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>N</th><th>o</th><th>t</th><th>e</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>ObservationCRDT</code></td><td><code>collab/crdt.py</code></td><td>5 days</td><td>Simple LWW CRDT (append-only obs)</td><td></td></tr><tr><td></td><td><code>PeerDiscovery</code></td><td><code>collab/peer.py</code></td><td>3 days</td><td>mDNS via zeroconf</td><td></td></tr><tr><td></td><td><code>Coordinator</code></td><td><code>collab/coordinator.py</code></td><td>5 days</td><td>Peer management, state</td><td></td></tr><tr><td></td><td><code>SyncEngine</code></td><td><code>collab/sync.py</code></td><td>4 days</td><td>WebSocket server + client</td><td></td></tr><tr><td></td><td><code>PermissionManager</code></td><td><code>collab/permissions.py</code></td><td>3 days</td><td>Simple ACLs</td><td></td></tr><tr><td></td><td><code>friday collab</code> CLI</td><td><code>cli_collab.py</code></td><td>3 days</td><td>—</td><td></td></tr></tbody></table>
+<p><strong>Total: ~23 days → 5 weeks</strong></p>
+<h3>Why CRDT for Solo Dev?</h3>
+<p>V3 observations are append-only with deterministic IDs (Law 20). This makes</p>
+<p>Last-Writer-Wins CRDT trivial — no conflict resolution library needed. You can</p>
+<p>implement it in a single file.</p>
+<h3>Firewall Consideration</h3>
+<p>WebSocket sync requires network port access. The sync engine should:</p>
+<ul><li>Default to port 9876 (configurable)</li><li>Support LAN-only binding</li><li>Handle port conflicts gracefully</li></ul>
+<h3>File Count</h3>
+<ul><li><strong>7 source files</strong> + 6 test files = 13 files. Low-medium complexity.</li></ul>
+<h3>MCU Friday Feel</h3>
+<pre><code class="language-">[Two instances sync]
+🎤 [Friday A]: &quot;Your colleague&#x27;s Friday noticed similar patterns in
+               their repo. Want me to share the correlation?&quot;
+               → Friday is networked. Just like the Iron Legion.</code></pre>
+<hr>
+<h2>Wave 6: IDE Integration ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> Friday lives inside your editor — it knows which editor is</p>
+<p>present, adapts to it, analyzes your code with a real language server,</p>
+<p>and controls the editor (open / reveal / run). <strong>Design:</strong></p>
+<p><code>WAVE_6_IDE.md</code>.</p>
+<h3>What Actually Shipped</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>N</th><th>o</th><th>t</th><th>e</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Editor detection</td><td><code>desktop/ide/detection.py</code></td><td>VS Code / JetBrains / Neovim / Sublime / Emacs from env (<code>TERM_PROGRAM</code>, <code>VSCODE_*</code>, <code>NVIM</code>), processes, and config dirs — adapts launcher argv per kind</td><td></td></tr><tr><td></td><td>LSP client</td><td><code>desktop/ide/lsp_client.py</code></td><td><strong>Pure stdlib</strong> JSON-RPC 2.0 over stdio: initialize, didOpen, <code>textDocument/diagnostic</code> pull + publishDiagnostics fallback, documentSymbol. No pygls</td><td></td></tr><tr><td></td><td>Always-on analyzer</td><td><code>desktop/ide/ast_analyzer.py</code></td><td><code>ast</code> fallback: syntax errors, undefined names, unused imports, shadowed builtins — Friday *always* has an opinion</td><td></td></tr><tr><td></td><td>Editor control</td><td><code>desktop/ide/controller.py</code></td><td>open / reveal / run, argv adapted per editor (<code>code -r -g file:line</code>, <code>idea --line</code>, <code>nvim +line</code>, <code>subl file:line</code>, <code>emacs +line</code>) + OS opener fallback</td><td></td></tr><tr><td></td><td>NL path</td><td><code>Intent.IDE</code> + <code>nl_router._ide_response</code></td><td>&quot;what&#x27;s wrong with src/main.py&quot;, &quot;diagnose auth.py&quot;, &quot;lint X&quot;, &quot;why won&#x27;t this compile&quot; → diagnostics on every surface (talk / voice / web)</td><td></td></tr><tr><td></td><td>Reasoning</td><td><code>QuestionType.CODE</code> + <code>code_provider</code></td><td>&quot;what&#x27;s wrong with X&quot; asked as a question → evidence-cited <code>v4.ide.*</code> answer</td><td></td></tr><tr><td></td><td>CLI</td><td><code>cli_ide.py</code></td><td><code>friday4 ide detect/diagnose/symbols/open/reveal/run</code> — <code>run</code> goes through the gated execution pipeline</td><td></td></tr><tr><td></td><td>Composition</td><td><code>executors.py</code> + <code>nl_router</code></td><td><code>FRIDAY_V4_IDE_PREFLIGHT=1</code> → diagnostics ride along with Claude Code (<code>--append-system-prompt</code>) and appear in command preflight notes</td><td></td></tr></tbody></table>
+<h3>What We Did NOT Build (honest)</h3>
+<ul><li><strong>The TypeScript VS Code extension</strong> (sidebar, status bar, decorations)</li></ul>
+<p>is not built. The editor is still reachable *today* through the CLI</p>
+<p>(<code>code -r</code>, <code>code -g file:line</code>) and the LSP protocol — the extension</p>
+<p>would only *add* an in-UI surface. That stays a future refinement.</p>
+<ul><li>No marketplace publishing, no per-editor plugin bundles.</li></ul>
+<h3>The MCU Friday Feel (now real)</h3>
+<pre><code class="language-">[In the terminal / voice / web chat]
+🧑 &quot;what&#x27;s wrong with auth.py&quot;
+🤖 &quot;I found 2 error(s) in auth.py (via ast): line 3: undefined name &#x27;get_token&#x27;;
+    line 5: shadowed builtin: list.&quot;
+🧑 &quot;diagnose src/main.py&quot; → Friday opens the real diagnostics from the LSP</code></pre>
+<hr>
+<h2>Wave 7: Mobile &amp; Web (10-12 weeks)</h2>
+<p><strong>Status (web slice):</strong> ✅ Web Dashboard SHIPPED (2026-08). <code>friday4 web</code></p>
+<p>starts a pure-stdlib local dashboard (no FastAPI/flask — consistent with</p>
+<p>V4&#x27;s &quot;pure-stdlib, always works&quot; philosophy) visualizing daemon status,</p>
+<p>security grade + findings, intelligence drift/anomalies, proactive</p>
+<p>patterns, the read-only V3 bridge, voice config, and the ambient feed,</p>
+<p>with a &quot;run security scan&quot; action. React Native app + push pending.</p>
+<p><strong>Goal:</strong> Friday in your pocket. Quick status, voice input, push notifications.</p>
+<h3>What We Build</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>T</th><th>i</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>C</th><th>o</th><th>m</th><th>p</th><th>l</th><th>e</th><th>x</th><th>i</th><th>t</th><th>y</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>MobileAPI</code> (FastAPI server)</td><td><code>mobile/api.py</code></td><td>4 days</td><td>Low</td><td></td></tr><tr><td></td><td>Push Notification Service</td><td><code>mobile/push.py</code></td><td>5 days</td><td>Medium — APNS + FCM setup</td><td></td></tr><tr><td></td><td><strong>Web Dashboard</strong></td><td><code>mobile/web/</code></td><td><strong>3 weeks</strong></td><td>Medium — FastAPI + HTMX or React</td><td></td></tr><tr><td></td><td><strong>React Native App</strong></td><td><code>mobile/app/</code></td><td><strong>6-8 weeks</strong></td><td><strong>HIGH</strong> — first RN app</td><td></td></tr></tbody></table>
+<p><strong>Total: ~48 days → 10-12 weeks</strong></p>
+<h3>Strategy: Web First, Mobile Second</h3>
+<pre><code class="language-">Week 1-3:   Web Dashboard only (valuable alone)
+Week 4-10:  React Native app (if you still want it)
+Week 11-12: Polish + push notifications</code></pre>
+<p>The web dashboard is <strong>independently useful</strong> — anyone can open a browser</p>
+<p>to see Friday&#x27;s status. The mobile app adds push notifications and voice input</p>
+<p>but requires platform-specific development.</p>
+<h3>Prerequisites</h3>
+<table><thead><tr><th>|</th><th></th><th>R</th><th>e</th><th>q</th><th>u</th><th>i</th><th>r</th><th>e</th><th>m</th><th>e</th><th>n</th><th>t</th><th></th><th>|</th><th></th><th>C</th><th>o</th><th>s</th><th>t</th><th></th><th>|</th><th></th><th>D</th><th>e</th><th>t</th><th>a</th><th>i</th><th>l</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Apple Developer Account</strong></td><td><strong>$99/year</strong></td><td>Required for iOS push notifications (APNS) and app distribution</td><td></td></tr><tr><td></td><td><strong>Google Firebase Project</strong></td><td>Free</td><td>Required for Android push notifications (FCM)</td><td></td></tr><tr><td></td><td><strong>React Native learning</strong></td><td>Time</td><td>First RN app has a 1-2 week learning curve minimum</td><td></td></tr></tbody></table>
+<h3>Hidden Complexity</h3>
+<ul><li><strong>Apple Push Notification service (APNS)</strong> requires a paid developer account,</li></ul>
+<p>certificate/key management, and device token registration.</p>
+<ul><li><strong>Firebase Cloud Messaging (FCM)</strong> needs a google-services.json config file</li></ul>
+<p>and project setup.</p>
+<ul><li><strong>App Store / Play Store submission</strong> can take 1-3 days for review.</li></ul>
+<h3>File Count</h3>
+<ul><li><strong>~25-35 files</strong> (Python API + React Native + web frontend). Highest-complexity wave.</li></ul>
+<h3>MCU Friday Feel</h3>
+<pre><code class="language-">📱 [Phone buzzes — Friday notification]:
+   &quot;Your CI pipeline failed on branch &#x27;feature/auth&#x27;.
+   3 tests failed. Review on desktop?&quot;
+   → Friday follows you everywhere.</code></pre>
+<hr>
+<h2>Wave 9: Agency Core — The Brain ✅ SHIPPED</h2>
+<p><strong>Goal:</strong> Friday actually does things. Full design: <code>WAVE_9_AGENCY_CORE.md</code></p>
+<p>(§10 &quot;What Actually Shipped&quot; documents the build + deviations).</p>
+<ul><li>✅ <code>db.py</code> — V4-native sqlite foundation (schema v3, 9 tables, migrations)</li><li>✅ <code>understanding/</code> — NLU: intent → entities → canonical action (shared by voice/CLI/web)</li><li>✅ <code>reasoning/</code> — evidence-cited answer engine + provider registry (6 providers, no answer without evidence)</li><li>✅ <code>missions/</code> — persistent goals: planner → engine → steps → scheduler → progress</li><li>✅ <code>execution/</code> — gated, sandboxed, audited executors (shell/git/file/python/testing) with undo</li><li>✅ <code>nl_router.py</code> — NL → act (shared CLI/voice handler, not in the original design)</li><li>✅ CLI: <code>friday4 talk &quot;…&quot; / ask / execute / status</code> (incl. <code>db status</code>)</li></ul>
+<p><strong>MCU Friday Feel:</strong> &quot;Friday, run the tests.&quot; → gate → executes → reports result. ✅</p>
+<hr>
+<h2>Wave 10: Memory &amp; Identity — Friday Knows You ✅ SHIPPED</h2>
+<p><strong>Goal:</strong> Friday builds a relationship. Full design: <code>WAVE_10_MEMORY_IDENTITY.md</code></p>
+<p>(§8 &quot;Wiring Status&quot; tracks all 16 integration gaps — every one closed).</p>
+<ul><li>✅ <code>memory/</code> — facts + working memory with provenance, confidence, decay</li><li>✅ <code>persona/</code> — explicit-consent name &amp; preference learning</li><li>✅ <code>relationship/</code> — interaction depth → tone &amp; verbosity</li><li>✅ <code>skills/</code> — shadow-first self-improvement (Replay + Shadow executors, verified promotion)</li><li>✅ CLI: <code>friday4 memory / persona / relationship / skills</code></li><li>✅ Daemon: <code>MemorySweeper</code> + <code>SkillLearner</code> + <code>RelationshipRefresher</code> schedules</li></ul>
+<p><strong>MCU Friday Feel:</strong> &quot;Call me Lakshay&quot; → remembered across restarts, tone adapts. ✅</p>
+<hr>
+<h2>Wave 11: Research &amp; Reflection ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> Friday reasons across your world. Full design: <code>WAVE_11_RESEARCH_REFLECTION.md</code></p>
+<p>(§9 &quot;What Actually Shipped&quot; documents the close-out + deviations).</p>
+<ul><li>✅ <code>research/</code> — architecture, cross-project correlation, impact, code search, README purpose</li><li>✅ <code>synthesis/</code> — deterministic, evidence-cited reports (incl. <code>reports.py</code> daily/weekly)</li><li>✅ <code>briefing/</code> — morning/evening briefings from real V4 state</li><li>✅ <code>ambient/</code> — in-process event bus + durable queue; <strong>push replaces polling</strong></li><li>✅ Push wiring: security findings, suggestions, collab obs → shared bus</li><li>✅ Web SSE (<code>/api/events</code>) + dashboard EventSource with poll fallback</li><li>✅ CLI: <code>friday4 analyze / correlate / briefing / narrative / report [--daily|--weekly]</code></li></ul>
+<p><strong>MCU Friday Feel:</strong> &quot;Friday, analyze the integration cost between vivaha and</p>
+<p>MindWell.&quot; → cited, ranged estimate. ✅</p>
+<hr>
+<h2>Wave 12: Polish &amp; Scale ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> Production-ready V4 with documentation, benchmarks, installer, and</p>
+<p>a full test suite.</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Performance benchmarks (<code>tools/benchmarks.py</code>, V3 vs V4 where importable)</td><td>✅</td><td></td></tr><tr><td></td><td>Documentation site (<code>tools/build_docs_site.py</code> → <code>site/</code>)</td><td>✅</td><td></td></tr><tr><td></td><td>Installation script (<code>install.sh</code>)</td><td>✅</td><td></td></tr><tr><td></td><td>Migration guide (<code>docs/MIGRATION_GUIDE.md</code>)</td><td>✅</td><td></td></tr><tr><td></td><td><code>network/</code> stub folded in — <code>ssh</code> executor behind gate → sandbox → audit</td><td>✅</td><td></td></tr><tr><td></td><td>Dogfooding + bug fixes</td><td>⏳ ongoing</td><td></td></tr><tr><td></td><td>~800 V4 tests (hermetic, tmp_path)</td><td>✅</td><td></td></tr></tbody></table>
+<hr>
+<h2>Wave 13: Thinking Core ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> the LLM that *thinks* — Law 6&#x27;s &quot;deterministic floor, LLM</p>
+<p>ceiling&quot;. One LLM provider enhances the answer engine; never gates it.</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>llm_provider()</code> in <code>reasoning/providers.py</code> — synthesis over the same evidence, citations kept verbatim</td><td>✅</td><td></td></tr><tr><td></td><td>Engine post-pass — no LLM → byte-identical deterministic floor</td><td>✅</td><td></td></tr><tr><td></td><td>Evidence-less answers never sent to the LLM (&quot;I don&#x27;t know&quot; stays real)</td><td>✅</td><td></td></tr><tr><td></td><td>Explicit opt-in — <code>FRIDAY_V4_LLM</code> env or injected client (reuses <code>nlu.LLMClient</code>, 9router proxy)</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 ask</code> conversation-capable — history threaded, Q&amp;A logged</td><td>✅</td><td></td></tr><tr><td></td><td>Voice/talk/web inherit via <code>nl_router</code> (one entry point)</td><td>✅</td><td></td></tr><tr><td></td><td>Hermetic tests (<code>test_wave13_thinking_core.py</code>, 17 tests)</td><td>✅</td><td></td></tr><tr><td></td><td>Wave doc (<code>docs/WAVE_13_THINKING_CORE.md</code>)</td><td>✅</td><td></td></tr></tbody></table>
+<p><strong>MCU Friday Feel:</strong> &quot;What&#x27;s the deal between vivaha and MindWell?&quot; →</p>
+<p>synthesized, cited, ranged — through <code>friday4 talk</code>, through voice. ✅</p>
+<h2>Wave 13a: ONE NLU Point ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> *speaks natural language* — no regex/keyword matching anywhere</p>
+<p>in the input path. Every surface routes through ONE parser, <code>resolve()</code>,</p>
+<p>which is <strong>LLM-first</strong>; deterministic rules are a fallback only when the</p>
+<p>LLM is absent/offline — never the product.</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>nlu/</code> package — <code>resolve(text, llm=LLMClient())</code> LLM-first, rules fallback</td><td>✅</td><td></td></tr><tr><td></td><td><code>understanding/</code> is a thin shim — old Wave 9 implementation submodules removed; only re-export <code>__init__</code> remains</td><td>✅</td><td></td></tr><tr><td></td><td>All surfaces verified on ONE point — <code>nl_router</code>, <code>voice/router.py</code>, <code>web/dashboard.py</code>, <code>cli_nl.py</code></td><td>✅</td><td></td></tr><tr><td></td><td>Fallback never crashes — fixed the confidence <code>TypeError</code> on ambiguous input (never-crash law)</td><td>✅</td><td></td></tr><tr><td></td><td>ASK/RESEARCH targets threaded through <code>resolve()</code></td><td>✅</td><td></td></tr><tr><td></td><td>Research routing fixed — <code>X vs Y</code> classified as research; correlate path (str/Path bug) + verb-strip fixed</td><td>✅</td><td></td></tr><tr><td></td><td><code>FRIDAY_V4_LLM_URL</code> / <code>_MODEL</code> / <code>_KEY</code> env config; explicit opt-in</td><td>✅</td><td></td></tr><tr><td></td><td>Hermetic tests — <code>test_understanding.py</code> (25 shim-contract tests) + <code>test_nlu.py</code> (12) + research/CLI</td><td>✅</td><td></td></tr><tr><td></td><td>Wave doc (<code>docs/WAVE_13A_ONE_NLU_POINT.md</code>)</td><td>✅</td><td></td></tr></tbody></table>
+<p><strong>MCU Friday Feel:</strong> &quot;Friday, what&#x27;s the deal between vivaha and</p>
+<p>MindWell?&quot; → one parser, LLM intent → research → cited answer. No</p>
+<p>surface keyword-matches anything. ✅</p>
+<hr>
+<h2>Consolidated Timeline (Realistic)</h2>
+<pre><code class="language-">WAVE       MONTHS    CUMULATIVE    FEELING                     DIFFICULTY
+───────────────────────────────────────────────────────────────────────────
+Voice      ✅ SHIPPED             🎤 &quot;I can talk to Friday!&quot;  Medium
+Desktop    ✅ SHIPPED             🖥️ &quot;Friday controls desktop&quot; HIGH
+Security   ✅ SHIPPED             🔒 &quot;Friday protects code&quot;   Low
+Smart      ✅ SHIPPED             🧠 &quot;Friday knows my needs&quot;  Medium-HIGH
+Collab     ✅ SHIPPED             🤝 &quot;Friday is networked&quot;    Medium
+IDE        2 mo      +2 mo         📝 &quot;Friday in my editor&quot;    HIGH
+Mobile     3 mo      +3 mo         📱 &quot;Friday on my phone&quot;     VERY HIGH
+Agency     2 mo      +2 mo         🤖 &quot;Friday actually does things&quot; HIGH
+Identity   1.5 mo    +1.5 mo       👤 &quot;Friday knows you&quot;       Medium-HIGH
+Research   1.5 mo    +1.5 mo       🔬 &quot;Friday reasons across your world&quot; Medium
+Polish     ~1 mo     +1 mo         📦 &quot;Production-ready V4&quot;    Medium</code></pre>
+<p><strong>Total remaining: ~9-12 months solo</strong> (Waves 6-7 + 9-11 + 12). Waves 1–5 are</p>
+<p>built and live (<code>friday4 daemon</code>, <code>friday4 talk</code>, <code>friday4 desktop</code>,</p>
+<p><code>friday4 proactive</code>, <code>friday4 intelligence</code>, <code>friday4 security</code>,</p>
+<p><code>friday4 collab</code>, <code>friday4 doctor</code>).</p>
+<p><strong>Web Dashboard slice: ✅ SHIPPED (2026-08)</strong> — <code>friday4 web</code> local UI over daemon/security/intelligence/proactive/V3/voice.</p>
+<p><strong>Minimum MCU Friday (Voice + Desktop + Security): ✅ ACHIEVED</strong></p>
+<hr>
+<h2>Wave 14: Watch Me — Demonstration Capture ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> *no learning ceiling* — &quot;copy any workflow.&quot; The audit log</p>
+<p>IS the demonstration record; &quot;watch me&quot; tags a window on it and</p>
+<p>parameterizes the demonstrated work into a skill that generalizes by</p>
+<p>context (repo + command), never a literal replay.</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>db migration v5 — <code>watches</code> table + start/end/get/active/list/actions_between</td><td>✅</td><td></td></tr><tr><td></td><td><code>skills/watcher.py</code> <code>WatchRecorder</code> — explicit capture → generalized shadow skill</td><td>✅</td><td></td></tr><tr><td></td><td><code>skills/noticer.py</code> <code>RepetitionNoticer</code> — &quot;I noticed you do this every time&quot; offers (pure read)</td><td>✅</td><td></td></tr><tr><td></td><td>Generalization — <code>_step_matches</code> repo-context matching (back-compat safe)</td><td>✅</td><td></td></tr><tr><td></td><td><code>Intent.SKILL</code> through the ONE NLU point (LLM-first, fallback words, resolver target)</td><td>✅</td><td></td></tr><tr><td></td><td><code>nl_router</code> <code>_skill_response</code> — watch / learn / stop / summarize on all surfaces</td><td>✅</td><td></td></tr><tr><td></td><td>Reasoning <code>QuestionType.SKILLS</code> + <code>skills_provider</code> (ASK cites real skills)</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 skills watch</code> / <code>watch-stop</code> / <code>noticed</code> / <code>dispatch</code></td><td>✅</td><td></td></tr><tr><td></td><td>Daemon <code>SkillLearner</code> runs the noticer before <code>learn()</code>, surfaces offers</td><td>✅</td><td></td></tr><tr><td></td><td>Stale <code>test_db</code> schema assertions fixed (v3 → v5)</td><td>✅</td><td></td></tr><tr><td></td><td><code>tests/test_wave14_watch_me.py</code> — 33 hermetic tests</td><td>✅</td><td></td></tr><tr><td></td><td>NL accept loop — <code>Intent.ACCEPT</code> (&quot;yes, run it&quot;) → gate → execution; voice offers the suggestion</td><td>✅</td><td></td></tr><tr><td></td><td>Dispatch → mission — multi-step acceptance becomes a supervised mission (first step runs now, rest tracked)</td><td>✅</td><td></td></tr><tr><td></td><td>Auto-dispatch on idle — daemon <code>DispatchOfferer</code> offers matching skills on a schedule (notify + ambient event, never executes)</td><td>✅</td><td></td></tr></tbody></table>
+<p><strong>MCU feel:</strong> &quot;Friday, watch me do this&quot; → operator works → &quot;learn</p>
+<p>this&quot; → shadow skill formed with repo context; &quot;what did you learn&quot; →</p>
+<p>&quot;I&#x27;ve learned 3 skill(s)…&quot; from the real registry. See</p>
+<p><a href="WAVE_14_WATCH_ME.md"><code>WAVE_14_WATCH_ME.md</code></a>.</p>
+<hr>
+<h2>What If You Skip a Wave?</h2>
+<table><thead><tr><th>|</th><th></th><th>S</th><th>k</th><th>i</th><th>p</th><th></th><th>|</th><th></th><th>I</th><th>m</th><th>p</th><th>a</th><th>c</th><th>t</th><th></th><th>|</th><th></th><th>M</th><th>i</th><th>t</th><th>i</th><th>g</th><th>a</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Desktop</td><td>Voice still works. No desktop control.</td><td>Fine for CLI-centric users.</td><td></td></tr><tr><td></td><td>Security</td><td>Voice + Desktop still work. Manual scanning.</td><td>You can still run pip-audit yourself.</td><td></td></tr><tr><td></td><td>Smart</td><td>No predictions/anticipation. Core features work.</td><td>Friday stops being proactive, stays reactive.</td><td></td></tr><tr><td></td><td>Collab</td><td>Single-instance only. Same as V3.</td><td>Doesn&#x27;t affect any other feature.</td><td></td></tr><tr><td></td><td>IDE</td><td>No editor integration. CLI still works.</td><td>Voice commands can replace some IDE actions.</td><td></td></tr><tr><td></td><td>Mobile</td><td>Desktop-only. Same as V3.</td><td>Web dashboard is the alternative.</td><td></td></tr><tr><td></td><td>Agency (9)</td><td>Friday suggests but never does.</td><td>Voice + desktop still work; no execution.</td><td></td></tr><tr><td></td><td>Identity (10)</td><td>Friday has no memory of you.</td><td>Patterns still learned, but per-session only.</td><td></td></tr><tr><td></td><td>Research (11)</td><td>Friday answers only what you ask.</td><td>Briefings/reports degrade to manual summaries.</td><td></td></tr></tbody></table>
+<p>You can skip any wave and the previous ones still work perfectly. Each wave is</p>
+<p>independent except for depending on Voice (for voice interactions).</p>
+<hr>
+<h2>Risk Register (Solo Developer Edition)</h2>
+<table><thead><tr><th>|</th><th></th><th>R</th><th>i</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>L</th><th>i</th><th>k</th><th>e</th><th>l</th><th>i</th><th>h</th><th>o</th><th>o</th><th>d</th><th></th><th>|</th><th></th><th>I</th><th>m</th><th>p</th><th>a</th><th>c</th><th>t</th><th></th><th>|</th><th></th><th>M</th><th>i</th><th>t</th><th>i</th><th>g</th><th>a</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Burnout from scope creep</strong></td><td><strong>HIGH</strong></td><td>CRITICAL</td><td>Ship each wave, celebrate, pause. No deadline = no rush.</td><td></td></tr><tr><td></td><td>Voice pipeline complexity</td><td>HIGH</td><td>HIGH</td><td>Start with Whisper API + pyttsx3. Optimize to local models later.</td><td></td></tr><tr><td></td><td>macOS learning curve</td><td>HIGH</td><td>MEDIUM</td><td>Start with Hyprland. Add macOS last. Defer if blocked.</td><td></td></tr><tr><td></td><td>React Native learning curve</td><td>HIGH</td><td>MEDIUM</td><td>Build Web Dashboard first. RN app is a stretch goal.</td><td></td></tr><tr><td></td><td>Platform testing logistics</td><td>HIGH</td><td>MEDIUM</td><td>CI + VMs + borrowing friends&#x27; machines</td><td></td></tr><tr><td></td><td>Dependency hell (pyaudio)</td><td>MEDIUM</td><td>MEDIUM</td><td>Docker dev environment, platform-specific install docs</td><td></td></tr><tr><td></td><td>Anticipation engine fake predictions</td><td>MEDIUM</td><td>MEDIUM</td><td>Label predictions as guesses. Never store as facts.</td><td></td></tr><tr><td></td><td>Apple Developer Account cost</td><td>LOW</td><td>MEDIUM</td><td>Skip iOS push. Use web dashboard + polling.</td><td></td></tr><tr><td></td><td>Losing momentum mid-project</td><td>MEDIUM</td><td>HIGH</td><td>Release each wave publicly. Get dopamine from users.</td><td></td></tr></tbody></table>
+<hr>
+<h2>&quot;No Deadline&quot; Philosophy</h2>
+<p>Since you have no deadline, here&#x27;s how to make this sustainable:</p>
+<p>1. <strong>Work in waves, not days.</strong> Each wave is 4-8 weeks. Don&#x27;t count hours.</p>
+<p>2. <strong>Ship each wave.</strong> Even if it&#x27;s rough. Get the dopamine hit.</p>
+<p>3. <strong>Take breaks between waves.</strong> 1-2 weeks off between major milestones.</p>
+<p>4. <strong>Cut scope, never quality.</strong> Better to ship voice without hotword (push-to-talk</p>
+<p>only) than to ship buggy hotword detection.</p>
+<p>5. <strong>Dogfood constantly.</strong> Use V4 yourself. The best feature ideas come from</p>
+<p>your own frustration.</p>
+<p>6. <strong>Celebrate each wave.</strong> You&#x27;re building something extraordinary alone.</p>
+<p>That&#x27;s worth recognizing.</p>
+<hr>
+<h2>Solo Developer Checklist</h2>
+<h3>Before Each Wave</h3>
+<ul><li>[ ] Read all existing V4 docs (PLAN.md, ARCHITECTURE.md, ROADMAP.md)</li><li>[ ] Understand the V3 modules you&#x27;ll integrate with</li><li>[ ] List all files you need to create (15-25 files per wave)</li><li>[ ] Identify the hardest part — do that first</li><li>[ ] Check prerequisites (API keys, system deps, accounts)</li><li>[ ] Estimate: is this wave realistic? If not, cut scope.</li></ul>
+<h3>After Each Wave</h3>
+<ul><li>[ ] Run V4 tests (hermetic, no real <code>~/.friday</code> writes)</li><li>[ ] ruff clean on new/edited files</li><li>[ ] Dogfood for 3 days — use it in real work</li><li>[ ] Fix the 3 most annoying bugs</li><li>[ ] Write a short &quot;what I learned&quot; doc</li><li>[ ] Take a break (1-7 days)</li><li>[ ] Celebrate — you shipped a wave of FRIDAY</li></ul>
+<hr>
+<h2>Prerequisites Cheat Sheet</h2>
+<table><thead><tr><th>|</th><th></th><th>W</th><th>a</th><th>v</th><th>e</th><th></th><th>|</th><th></th><th>W</th><th>h</th><th>a</th><th>t</th><th></th><th>Y</th><th>o</th><th>u</th><th></th><th>N</th><th>e</th><th>e</th><th>d</th><th></th><th>B</th><th>e</th><th>f</th><th>o</th><th>r</th><th>e</th><th></th><th>S</th><th>t</th><th>a</th><th>r</th><th>t</th><th>i</th><th>n</th><th>g</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Voice</td><td>Porcupine API key (free, ~5 min), portaudio dev headers, 5GB disk for models</td><td></td></tr><tr><td></td><td>Desktop</td><td>Root/admin access for D-Bus/Win32 APIs; macOS: physical Mac for dev</td><td></td></tr><tr><td></td><td>Security</td><td>pip-audit, truffleHog, ruff installed globally</td><td></td></tr><tr><td></td><td>Smart</td><td>V3 daemon history (at least 2 weeks of observations)</td><td></td></tr><tr><td></td><td>Collab</td><td>Network ports available (default: 9876)</td><td></td></tr><tr><td></td><td>IDE</td><td>Node.js + npm for VS Code extension development</td><td></td></tr><tr><td></td><td>Mobile</td><td>Apple Developer Account ($99/yr) if iOS; Google Firebase project if Android</td><td></td></tr><tr><td></td><td>Agency (9)</td><td>✅ done — ships <code>db.py</code> foundation; Python ≥3.12</td><td></td></tr><tr><td></td><td>Identity (10)</td><td>✅ done — builds on Wave 9 DB tables</td><td></td></tr><tr><td></td><td>Research (11)</td><td>Wave 9 reasoning (done) + Wave 10 memory (done) — both inputs ready</td><td></td></tr><tr><td></td><td>Polish (12)</td><td>All of the above working correctly</td><td></td></tr></tbody></table>
+<hr>
+<h2>Recap: What Makes This Feasible for a Solo Dev</h2>
+<p>1. <strong>Each wave is independent.</strong> You can stop anytime with something real.</p>
+<p>2. <strong>Voice + Desktop = Minimum MCU Friday in 5.5 months.</strong> That&#x27;s the unlock.</p>
+<p>3. <strong>No deadline means no crunch.</strong> Build at your pace, ship when it&#x27;s ready.</p>
+<p>4. <strong>V3 is the design reference, not the runtime.</strong> V3 proved the capability</p>
+<p>map (mission, executors, memory, skill formation, analysis). V4 rebuilds</p>
+<p>that capability V4-native — with hygiene, polish, and hermetic tests (see</p>
+<p>Waves 9–11).</p>
+<p>5. <strong>Start with what you know.</strong> Build the platforms you use first (Linux +</p>
+<p>Hyprland). Add others progressively.</p>
+<hr>
+<p>*This roadmap is a living document. Each wave reveals what the next wave</p>
+<p>should actually be. The plan is the direction; reality is the path.*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

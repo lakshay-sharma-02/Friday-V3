@@ -204,7 +204,7 @@ class CodeHealthDiagnostics:
             fh.issues.append("Unreadable file")
             return fh
 
-        fh.loc = len([l for l in text.splitlines() if l.strip()])
+        fh.loc = len([ln for ln in text.splitlines() if ln.strip()])
         fh.todo_count = len(_TODO_RE.findall(text))
 
         try:
@@ -238,7 +238,7 @@ class CodeHealthDiagnostics:
         """Composite 0-100 score for a file."""
         score = 100
         score -= (100 - fh.complexity_score)          # complexity penalty
-        score -= min(fh.todo_count * 5, 20)            # TODO debt
+        score -= min(fh.todo_count * 5, 20)            # task-marker debt
         if fh.churn > 10:
             score -= 10                                # heavy churn risk
         if fh.issues and fh.issues[0].startswith("Unparsable"):

@@ -156,17 +156,24 @@ class DesktopNotificationChannel:
         return notified
 
     def _notify_event(self, event) -> None:
-        """Raise a desktop notification for an ambient event."""
-        urgency = "critical" if (event.priority or 0) >= 3 else (
-            "normal" if (event.priority or 0) >= 2 else "low"
-        )
+        """Raise a desktop notification for an ambient event.
+
+        Uses normal urgency with a priority-scaled timeout so banners
+        auto-dismiss — critical urgency is persistent on GNOME and other
+        desktops, which made notifications stick around indefinitely.
+        """
+        priority = int(event.priority or 0)
+        # Higher-priority events stay on screen a little longer, but every
+        # event still fades on its own.
+        timeout_ms = {3: 12000, 2: 8000}.get(priority, 5000)
         title = event.title or event.event_type
         detail = event.detail or ""
         message = detail[:200] if detail else title[:200]
         if event.project:
             title = f"{event.project}: {title}"
 
-        DesktopAbstraction.notify(title, message, urgency=urgency)
+        DesktopAbstraction.notify(title, message, urgency="normal",
+                                  timeout_ms=timeout_ms)
         logger.info(f"Desktop notification: {title}")
 
     # ── Lifecycle ─────────────────────────────────────────────────
@@ -250,11 +257,13 @@ class ProactiveSuggestionChannel:
         poll_interval: float = 120.0,
         cooldown_seconds: float = 3600.0,
         notify: Optional[Callable[..., bool]] = None,
+        bus=None,
     ):
         self.engine = engine  # AnticipationEngine (lazy if None)
         self.poll_interval = poll_interval
         self.cooldown_seconds = cooldown_seconds
         self._notify = notify or DesktopAbstraction.notify
+        self._bus = bus  # shared Wave 11 AmbientBus (optional)
         self.running = False
         self._thread: Optional[threading.Thread] = None
         # Only clean up engines we built ourselves — an injected engine
@@ -331,17 +340,38 @@ class ProactiveSuggestionChannel:
         return notified
 
     def _raise_notification(self, item, text: str) -> None:
-        """Raise a desktop notification for a suggestion item."""
-        urgency = "critical" if getattr(item, "should_speak", False) else "normal"
+        """Raise a desktop notification for a suggestion item.
+
+        Always normal urgency with a bounded timeout so the banner fades
+        (critical banners are persistent on GNOME and never auto-dismiss).
+        Speak-worthy items stay up a little longer. When a shared Wave 11
+        bus is wired, the suggestion is ALSO published durably so the web
+        dashboard / voice / briefing surfaces get it (push, not just the
+        desktop banner).
+        """
+        timeout_ms = 12000 if getattr(item, "should_speak", False) else 10000
         title = "Friday · Suggestion"
         if getattr(item, "source", None):
             title = f"Friday · {str(item.source).capitalize()}"
         message = text[:200]
         try:
-            self._notify(title, message, urgency=urgency)
+            self._notify(title, message, urgency="normal",
+                         timeout_ms=timeout_ms)
             logger.info(f"Suggestion notification: {title} — {text[:60]}")
         except Exception as exc:
             logger.debug(f"Suggestion notification failed: {exc}")
+        if self._bus is not None:
+            try:
+                from ..ambient import Event, Priority
+                prio = Priority.IMPORTANT \
+                    if getattr(item, "should_speak", False) else Priority.ROUTINE
+                self._bus.publish(Event(
+                    topic="suggestion",
+                    payload=text[:200],
+                    priority=prio,
+                    source="daemon.suggestions"))
+            except Exception as exc:
+                logger.debug(f"Suggestion bus publish failed: {exc}")
 
     def _prune_notified(self, now: float) -> None:
         """Drop cooldown entries older than the window (bounds memory)."""

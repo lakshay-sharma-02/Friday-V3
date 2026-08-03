@@ -22,7 +22,6 @@ import numpy as np
 from friday_v4.voice.pipeline import PipelineConfig, PipelineState
 from friday_v4.voice.utils import write_wav
 
-
 # ==========================================================================
 # Fakes
 # ==========================================================================
@@ -180,6 +179,7 @@ class TestSTTGeneratorSegments:
         exhausted the iterator, zeroed avg_confidence and rejected every
         real transcription as "low confidence"."""
         import numpy as np
+
         from friday_v4.voice.stt import FasterWhisperProvider
 
         class _GenModel:
@@ -203,6 +203,7 @@ class TestSTTGeneratorSegments:
         """Low-confidence utterances are still surfaced with the text (the
         confidence gate must not silently drop every result)."""
         import numpy as np
+
         from friday_v4.voice.stt import FasterWhisperProvider
 
         class _LowConfModel:
@@ -294,6 +295,7 @@ class TestTTSSpeak:
         a partial (first-sentence-only) cache entry under the full-text key —
         the next identical ask would replay just the first sentence."""
         from pathlib import Path
+
         from friday_v4.voice.tts import TextToSpeech, TTSConfig
 
         cache_dir = tmp_path / "cache"

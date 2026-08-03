@@ -1,10 +1,13 @@
 """Voice Router — bridges voice input to FRIDAY's intelligence engines.
 
-Routes transcribed speech through, in priority order:
+Routes transcribed speech through V4's own engines, in priority order:
   1. Desktop commands ("focus code editor", "switch workspace")
   2. Proactive briefings ("brief me", "what's new")
-  3. V3 IdentityEngine (if available) for natural conversation
-  4. Basic fallback (greetings, help, status)
+  3. Basic fallback (greetings, help, status)
+
+V4 owns its conversation path. V3 is never used as a brain here; at
+most its data may be consumed through read-only V4 data sources (e.g.
+V3DataSource) elsewhere.
 
 Every interaction is fed to the PatternLearner so FRIDAY learns the
 user's workflow over time.
@@ -14,10 +17,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from .chimes import play_chime
-from .pipeline import VoicePipeline, PipelineState
+from .pipeline import PipelineState, VoicePipeline
 from .tts import VoiceMode
 
 logger = logging.getLogger("friday_v4.voice.router")
@@ -40,11 +43,21 @@ class VoiceRouter:
     """Routes voice input through FRIDAY's intelligence engines."""
 
     def __init__(self, pipeline: VoicePipeline,
-                 identity_engine=None,  # V3 IdentityEngine
-                 enable_proactive: bool = True):
+                 enable_proactive: bool = True,
+                 conn=None):
+        """
+        Args:
+            pipeline: the voice pipeline (recording/TTS)
+            enable_proactive: load the AnticipationEngine (default True)
+            conn: V4 DB connection for the conversation log. When
+                provided, every spoken utterance is recorded verbatim
+                (feeds the reasoning conversation provider and the
+                persona "who am I" answers — the Wiring Law: voice is a
+                first-class entrypoint into the brain). None = no
+                persistence (hermetic tests / degraded mode).
+        """
         self.pipeline = pipeline
-        self._engine = identity_engine
-        self._conn = None
+        self._conn = conn
         self._wm = None
         self._suggestions_shown: set[str] = set()
         self._interaction_count = 0
@@ -52,8 +65,6 @@ class VoiceRouter:
 
         if enable_proactive:
             self._init_proactive()
-        if self._engine is None:
-            self._try_load_v3_engine()
 
     # ── Engine loading ─────────────────────────────────────────────────
 
@@ -65,18 +76,6 @@ class VoiceRouter:
         except Exception as exc:
             logger.debug(f"Proactive engine init failed: {exc}")
             self._proactive = None
-
-    def _try_load_v3_engine(self) -> None:
-        try:
-            from friday.persona.engine import IdentityEngine
-            from friday.db import connect
-            self._conn = connect()
-            self._engine = IdentityEngine(conn=self._conn)
-            logger.info("V3 IdentityEngine loaded for voice routing")
-        except ImportError:
-            logger.warning("V3 IdentityEngine not available — using fallback routing")
-        except Exception as exc:
-            logger.warning(f"Failed to load V3 IdentityEngine: {exc}")
 
     # ── Routing ────────────────────────────────────────────────────────
 
@@ -104,18 +103,16 @@ class VoiceRouter:
             if response:
                 return response
 
-        # 3. V3 IdentityEngine
-        if self._engine:
-            try:
-                response = self._engine.process(text, channel_id="voice")
-                if response:
-                    self._observe_user_action(text, "conversation")
-                    return response
-            except Exception as exc:
-                logger.error(f"IdentityEngine routing error: {exc}")
-                return f"Sorry, I ran into an error: {exc}"
+        # 3. Natural-language understanding — the Wave 9 brain.
+        # "run the tests" now resolves to a real execution action and
+        # flows through gate → sandbox → audit instead of the old
+        # canned "I'm still learning" fallback.
+        nlu_response = self._try_nlu_route(lower)
+        if nlu_response:
+            self._observe_user_action(text, "nlu")
+            return nlu_response
 
-        # 4. Fallback
+        # 4. Fallback (greetings / canned chat)
         response = self._fallback_route(text)
         if response:
             self._observe_user_action(text, "fallback")
@@ -150,6 +147,70 @@ class VoiceRouter:
                 "app": app_class, "category": category})
         except Exception:
             pass
+
+    # ── NLU routing (Wave 9) ─────────────────────────────────────────
+
+    def _try_nlu_route(self, lower: str) -> Optional[str]:
+        """Route through the ONE NLU point (``nlu.resolve()``) → execution/missions.
+
+        Returns a spoken response when the NLU layer produced an
+        actionable outcome (executed action, created mission), or None
+        to fall through to the canned fallback. Never raises.
+
+        The desktop handler reuses this router's existing desktop
+        command routing so ``nl_router`` never reimplements it.
+        """
+        try:
+            from ..nl_router import TextCommandHandler, voice_confirm
+        except ImportError as exc:
+            logger.debug(f"NLU router unavailable: {exc}")
+            return None
+        try:
+            llm = None
+            try:
+                from ..nlu import LLMClient
+                llm = LLMClient()
+            except Exception:
+                llm = None
+            handler = TextCommandHandler(
+                conn=self._conn,
+                llm=llm,
+                desktop_handler=lambda t: self._try_desktop_command(
+                    t.lower(), t) or "")
+            result = handler.handle(
+                lower,
+                confirm_fn=voice_confirm(self._ask_voice_confirm),
+            )
+        except Exception as exc:
+            logger.debug(f"NLU route failed: {exc}")
+            return None
+        if result.action in ("executed", "mission_created", "denied",
+                             "failed", "security", "memory"):
+            return result.response
+        if result.action == "clarification":
+            return result.response
+        # ASK intents: the reasoning layer answers (evidence-cited) with
+        # action="chat" — route those spoken questions through the brain
+        # instead of dropping them to the canned fallback. This is the
+        # Wave 9 wiring that made "who am I?" typed-only; voice inherits
+        # the same answers now. ACCEPT chat responses ("I don't have a
+        # pending suggestion") and executed/denied outcomes are spoken
+        # too — the dispatch offer round-trip needs them. Greetings/help
+        # still fall through to the canned flavor intentionally.
+        if result.intent in ("ask", "accept") and result.response:
+            return result.response
+        return None  # chat/greeting → canned fallback keeps its flavor
+
+    def _ask_voice_confirm(self, description: str) -> str:
+        """Ask the operator (TTS) and capture a spoken y/N reply.
+
+        Degrades to "" (deny) when the pipeline can't listen back.
+        """
+        try:
+            self.pipeline.speak(f"{description} — proceed?")
+            return self.pipeline.stop_recording_and_process() or ""
+        except Exception:
+            return ""
 
     # ── Fallback routing ───────────────────────────────────────────────
 
@@ -194,7 +255,7 @@ class VoiceRouter:
 
     # ── Desktop commands ───────────────────────────────────────────────
 
-    _DESKTOP_ACTIONS = {
+    _DESKTOP_ACTIONS: ClassVar[dict[str, str]] = {
         "focus": "focus", "switch": "workspace", "go to": "workspace",
         "open": "open", "show": "focus", "launch": "launch",
         "take": "screenshot", "capture": "screenshot", "screenshot": "screenshot",
@@ -291,7 +352,8 @@ class VoiceRouter:
                 for w in windows:
                     if w.app_class.lower() == resolved.lower():
                         if wm.switch_workspace(w.workspace_id):
-                            return f"Switching to workspace {w.workspace_id} where {resolved} is open."
+                            return (f"Switching to workspace {w.workspace_id} "
+                                    f"where {resolved} is open.")
         return f"I couldn't find workspace '{target}'."
 
     def _handle_screenshot(self, wm) -> str:
@@ -319,23 +381,6 @@ class VoiceRouter:
             return "I couldn't check your desktop status right now."
 
     def _get_status_response(self) -> str:
-        parts: list[str] = []
-        try:
-            if self._conn:
-                status = self._conn.execute(
-                    "SELECT state, last_cycle_at FROM daemon_status "
-                    "ORDER BY rowid DESC LIMIT 1").fetchone()
-                if status:
-                    parts.append(f"Daemon is {status['state']}")
-                obs = self._conn.execute(
-                    "SELECT COUNT(*) as cnt FROM observations "
-                    "WHERE observed_at > datetime('now', '-1 day')").fetchone()
-                if obs and obs["cnt"]:
-                    parts.append(f"{obs['cnt']} new observations today")
-        except Exception:
-            pass
-        if parts:
-            return "Here's your status: " + ". ".join(parts) + "."
         if self._proactive:
             try:
                 suggestions = self._proactive.get_suggestions()
@@ -361,14 +406,90 @@ class VoiceRouter:
             stats = self._proactive.get_learning_stats()
             patterns = stats.get("patterns", {})
             if patterns.get("action_pairs_learned", 0) > 2:
-                parts.append(f"I've learned {patterns['action_pairs_learned']} patterns from your workflow.")
+                parts.append(
+                    f"I've learned {patterns['action_pairs_learned']} "
+                    "patterns from your workflow.")
             return " ".join(parts) + "."
         except Exception as exc:
             logger.debug(f"Proactive briefing failed: {exc}")
             return None
 
+    def _pending_permission_ask(self) -> Optional[str]:
+        """A spoken prompt for the oldest pending permission ask.
+
+        The autonomy loop asks permission durably; voice surfaces the
+        ask on session start / idle so the operator can answer with
+        "yes, run it" / "no" (both route through the ONE NLU point).
+        Returns None when nothing is pending or the DB is unavailable.
+        """
+        if self._conn is None:
+            return None
+        try:
+            from ..autonomy import AutonomyAgent
+            pending = AutonomyAgent(conn=self._conn).pending(limit=1)
+            if not pending:
+                return None
+            what = (pending[0].get("description") or pending[0].get("command")
+                    or pending[0].get("action_type") or "that")
+            return (f"I need your permission: {what}. "
+                    f"Say yes, run it — or no.")
+        except Exception as exc:
+            logger.debug(f"Pending permission ask failed: {exc}")
+            return None
+
+    def _skill_offer(self) -> Optional[str]:
+        """A dispatch-suggestion offer, if the current context matches.
+
+        Wave 14 close-out: "yes, run it" only makes sense if Friday
+        *offered* something first. On session start / idle, a matching
+        promoted skill yields the natural offer: "That matches your
+        'run-tests' skill — want me to run 'git status' next?" The
+        operator's "yes, run it" then flows back through the ONE NLU
+        point (Intent.ACCEPT) → the gate → execution.
+
+        Returns the spoken offer text or None. Never raises — a missing
+        DB/conn degrades to no offer.
+        """
+        if self._conn is None:
+            return None
+        try:
+            from ..skills import SkillDispatcher
+            dispatcher = SkillDispatcher(self._conn)
+            suggestions = dispatcher.suggest(limit=1)
+            if not suggestions:
+                return None
+            return dispatcher.prompt(suggestions[0])
+        except Exception as exc:
+            logger.debug(f"Skill offer failed: {exc}")
+            return None
+
     def proactive_notify(self, force: bool = False) -> Optional[str]:
         """Check for proactive suggestions on session start / idle."""
+        # Autonomy first: a pending permission ask is the most important
+        # thing Friday is waiting on — the operator's "yes, run it" /
+        # "no" resolves it through the same NL loop. Surface it before
+        # dispatch offers / proactive hints.
+        pending_ask = self._pending_permission_ask()
+        if pending_ask and (force or pending_ask not in self._suggestions_shown):
+            self._suggestions_shown.add(pending_ask)
+            if len(self._suggestions_shown) > 100:
+                self._suggestions_shown.clear()
+            play_chime("done")
+            self.pipeline.speak(pending_ask)
+            logger.info(f"Autonomy ask: {pending_ask[:60]}")
+            return pending_ask
+        # Wave 14: the dispatch offer comes first — accepting it ("yes,
+        # run it") is the operator-visible loop. Falls through to the
+        # proactive engine when nothing matches a promoted skill.
+        skill_offer = self._skill_offer()
+        if skill_offer and (force or skill_offer not in self._suggestions_shown):
+            self._suggestions_shown.add(skill_offer)
+            if len(self._suggestions_shown) > 100:
+                self._suggestions_shown.clear()
+            play_chime("done")
+            self.pipeline.speak(skill_offer)
+            logger.info(f"Skill offer: {skill_offer[:60]}")
+            return skill_offer
         if not self._proactive:
             return None
         try:
@@ -412,13 +533,6 @@ class VoiceRouter:
 
     def cleanup(self) -> None:
         """Release all resources."""
-        self._engine = None
-        if self._conn:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
         if self._proactive:
             try:
                 self._proactive.cleanup()

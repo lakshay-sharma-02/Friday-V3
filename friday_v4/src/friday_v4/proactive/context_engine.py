@@ -22,7 +22,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("friday_v4.proactive.context")
 
@@ -324,7 +323,7 @@ class DeepContextEngine:
                 )
                 if commits_today.returncode == 0:
                     ctx.recent_commits_today = len(
-                        [l for l in commits_today.stdout.split("\n") if l.strip()]
+                        [ln for ln in commits_today.stdout.split("\n") if ln.strip()]
                     )
 
                 # Recent commits this week
@@ -337,7 +336,7 @@ class DeepContextEngine:
                 )
                 if commits_week.returncode == 0:
                     ctx.recent_commits_week = len(
-                        [l for l in commits_week.stdout.split("\n") if l.strip()]
+                        [ln for ln in commits_week.stdout.split("\n") if ln.strip()]
                     )
 
         except Exception as exc:

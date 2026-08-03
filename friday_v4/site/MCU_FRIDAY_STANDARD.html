@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mcu Friday Standard — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Mcu Friday Standard</h1>
+<h1>The MCU FRIDAY Standard</h1>
+<blockquote>The constitution. Every wave, feature, and commit is judged against</blockquote>
+<blockquote>this document. If a build doesn&#x27;t move Friday toward *this*, it doesn&#x27;t</blockquote>
+<blockquote>get built — regardless of how clever it is.</blockquote>
+<blockquote></blockquote>
+<blockquote><strong>The standard in one sentence:</strong> MCU FRIDAY is a single presence that</blockquote>
+<blockquote>speaks natural language, has no learning ceiling, no task it can&#x27;t pick</blockquote>
+<blockquote>up, and adapts its personality to you.</blockquote>
+<blockquote></blockquote>
+<blockquote><strong>Route companion:</strong> <a href="MASTER_PLAN.md"><strong>THE FRIDAY MASTER PLAN</strong></a> turns</blockquote>
+<blockquote>that sentence into waves (11 → 18) — the *how*; this Standard is the</blockquote>
+<blockquote>*judge* of everything built along the route.</blockquote>
+<hr>
+<h2>1. What MCU FRIDAY Is</h2>
+<p>Tony doesn&#x27;t type commands. He says things. And FRIDAY:</p>
+<ul><li><strong>Learns anything</strong> — remembers what you tell her, what you do, what</li></ul>
+<p>you mean. Not transcripts — *understanding*.</p>
+<ul><li><strong>Copies any workflow</strong> — watch once, replay, verify, own it. &quot;Watch</li></ul>
+<p>me do this&quot; is a feature, not a dream.</p>
+<ul><li><strong>Understands everything</strong> — &quot;what&#x27;s the deal between vivaha and</li></ul>
+<p>MindWell?&quot; gets a *researched, cited, synthesized* answer. Not &quot;I don&#x27;t</p>
+<p>know yet.&quot;</p>
+<ul><li><strong>Does anything</strong> — any task expressible in the world: code, shell,</li></ul>
+<p>files, git, remote machines, your browser, your phone. With a safety</p>
+<p>floor, never a capability ceiling.</p>
+<ul><li><strong>Extends itself</strong> — new abilities are *learned and registered*, not</li></ul>
+<p>coded. Friday grows without you writing Friday.</p>
+<ul><li><strong>Tones itself</strong> — &quot;be more casual, Tony&quot; shifts her personality this</li></ul>
+<p>session and keeps it. Identity is adaptive, explicit-consent, never</p>
+<p>hardcoded.</p>
+<ul><li><strong>Anticipates</strong> — researches before you ask, briefs you before you</li></ul>
+<p>wonder, interrupts only for what matters.</p>
+<ul><li><strong>Is one presence</strong> — the same Friday on voice, in the terminal, on</li></ul>
+<p>the web, on your phone. Same memory, same context, same voice.</p>
+<hr>
+<h2>2. The Ten Laws (build gates)</h2>
+<p>Every feature must satisfy every law. A feature that breaks a law is</p>
+<p>rejected; a wave that ships without satisfying all ten is not MCU level.</p>
+<table><thead><tr><th>|</th><th></th><th>#</th><th></th><th>|</th><th></th><th>L</th><th>a</th><th>w</th><th></th><th>|</th><th></th><th>M</th><th>e</th><th>a</th><th>n</th><th>i</th><th>n</th><th>g</th><th></th><th>|</th><th></th><th>C</th><th>u</th><th>r</th><th>r</th><th>e</th><th>n</th><th>t</th><th></th><th>s</th><th>t</th><th>a</th><th>t</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>1</td><td><strong>Natural language is the only surface</strong></td><td>Users say things; Friday does them. CLI exists for ops/debug only — never the product surface. <code>friday4 talk &quot;…&quot;</code> is the product; <code>friday4 execute</code> is a debug hatch.</td><td>🟡 NLU + NL router shipped; many capabilities still CLI-only (memory, skills, collab, desktop)</td><td></td></tr><tr><td></td><td>2</td><td><strong>No learning ceiling</strong></td><td>Anything demonstrable is learnable: memory forms *models* (propositions + provenance + confidence), skills form from demonstration (shadow → verify → promote), and both generalize to new contexts.</td><td>🟡 Facts + shadow-first skills exist; learning is manual and narrow — no &quot;watch me&quot; capture, no generalization</td><td></td></tr><tr><td></td><td>3</td><td><strong>No answer without evidence</strong></td><td>Every answer cites its ground truth; empty evidence → &quot;I don&#x27;t know yet&quot;. Never fabrication.</td><td>🟢 Reasoning providers + evidence engine shipped</td><td></td></tr><tr><td></td><td>4</td><td><strong>No action without audit</strong></td><td>Every action: gate → sandbox → audit → undo where possible.</td><td>🟢 Execution layer shipped</td><td></td></tr><tr><td></td><td>5</td><td><strong>Understands, not records</strong></td><td>Memory stores *meaning* — what you prefer, why, when it matters — not transcripts. Transcript is raw material, not memory.</td><td>🟡 Memory stores verbatim statements + facts; no meaning extraction, no inference</td><td></td></tr><tr><td></td><td>6</td><td><strong>Reasoning, not lookup</strong></td><td>Answers synthesize across evidence (research, cross-project, impact, synthesis). Deterministic providers are the floor; LLM synthesis is the expected ceiling.</td><td>🔴 Deterministic providers only; zero LLM; no research/synthesis layer</td><td></td></tr><tr><td></td><td>7</td><td><strong>Self-extension</strong></td><td>Every capability is registered (capability registry), so Friday can compose, learn, and add abilities without code changes.</td><td>🔴 No registry; every new capability is hand-written Python</td><td></td></tr><tr><td></td><td>8</td><td><strong>Adaptive identity</strong></td><td>Tone, verbosity, and persona shift with explicit direction (&quot;be more casual&quot;) and relationship depth — and persist. Never hardcoded.</td><td>🟡 Relationship depth → tone exists; no explicit tone-direction, no persistence of style requests</td><td></td></tr><tr><td></td><td>9</td><td><strong>Proactive before reactive</strong></td><td>Friday researches before asked, briefs before wondered, interrupts only for what matters. Polling is the enemy; push is the standard.</td><td>🔴 Everything polls; no ambient push, no briefings</td><td></td></tr><tr><td></td><td>10</td><td><strong>One presence, every surface</strong></td><td>Same memory, same context, same conversation across voice / terminal / web / desktop / mobile.</td><td>🟡 Same DB everywhere; no cross-surface continuity of context</td><td></td></tr></tbody></table>
+<p><strong>Never-simplify-away items</strong> (the floor that stays): hermetic tests,</p>
+<p>never-crash, degrade silently, V4-is-the-product, V3 read-only bridge.</p>
+<hr>
+<h2>3. The MCU Test (admission gate)</h2>
+<p>Before any feature ships, ask: **&quot;would Tony say &#x27;that&#x27;s my FRIDAY&#x27; — or</p>
+<p>&#x27;that&#x27;s a CLI tool with extra steps&#x27;?&quot;**</p>
+<p>If a human must type a command, use a flag, read docs, or remember a</p>
+<p>syntax — the feature is not done. The natural-language path must be</p>
+<p>*the* path, tested end-to-end, in the same change as the capability</p>
+<p>(Wiring Law).</p>
+<h3>The five proof moments (MCU acceptance tests)</h3>
+<p>A wave is &quot;MCU level&quot; only when these work through **natural language</p>
+<p>only**, no flags:</p>
+<p>1. <strong>Mission shepherding</strong></p>
+<p><code>&quot;Friday, ship the auth refactor by Friday&quot;</code> → mission created →</p>
+<p>Friday proposes next steps, tracks progress, reports blockers, adapts</p>
+<p>when reality changes, reports &quot;plan changed because…&quot;.</p>
+<p>2. <strong>Workflow copying</strong></p>
+<p><code>&quot;Watch me do this&quot;</code> (or Friday noticing a repeated pattern) → skill</p>
+<p>formed → shadowed → verified → promoted → auto-dispatched when the</p>
+<p>context matches next time. Promotion requires approval. Failure</p>
+<p>demotes.</p>
+<p>3. <strong>Deep reasoning</strong></p>
+<p><code>&quot;What&#x27;s the deal between vivaha and MindWell?&quot;</code> → a researched,</p>
+<p>cited, ranged answer with confidence — because Friday did the work</p>
+<p>*before* being asked (cached research), not on the spot.</p>
+<p>4. <strong>Adaptive identity</strong></p>
+<p><code>&quot;Be more casual, Tony.&quot;</code> → tone shifts this session, persists, and</p>
+<p>Friday can tell you *why* she talks the way she does. `&quot;Call me</p>
+<p>Lakshay&quot;` already works — this is the same law extended to style.</p>
+<p>5. <strong>Capability composition</strong></p>
+<p><code>&quot;Figure out why the build fails and fix it.&quot;</code> → Friday decomposes,</p>
+<p>researches, executes through the gate, verifies, and reports with</p>
+<p>evidence — composing abilities it already has, none of which were</p>
+<p>written for that specific sentence.</p>
+<hr>
+<h2>4. Honest gap map (today)</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>a</th><th>p</th><th>a</th><th>b</th><th>i</th><th>l</th><th>i</th><th>t</th><th>y</th><th></th><th>|</th><th></th><th>M</th><th>C</th><th>U</th><th></th><th>l</th><th>e</th><th>v</th><th>e</th><th>l</th><th></th><th>|</th><th></th><th>T</th><th>o</th><th>d</th><th>a</th><th>y</th><th></th><th>|</th><th></th><th>G</th><th>a</th><th>p</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>NL surface</td><td>Speak-only</td><td><code>talk</code> NL + voice; rest CLI</td><td>Law 1: all capabilities need NL paths</td><td></td></tr><tr><td></td><td>Memory</td><td>Understands</td><td>Stores verbatim + facts</td><td>No meaning extraction, no inference, no forgetting-by-model</td><td></td></tr><tr><td></td><td>Skills</td><td>Watches → owns</td><td>Shadow-first scaffold, empty</td><td>No demonstration capture, no generalization, nothing formed</td><td></td></tr><tr><td></td><td>Reasoning</td><td>Synthesizes</td><td>Lookup with citations</td><td>No LLM, no research, no synthesis, no cross-project</td><td></td></tr><tr><td></td><td>Identity</td><td>Adapts on request</td><td>Depth → tone</td><td>No explicit tone-direction, no persistence</td><td></td></tr><tr><td></td><td>Proactivity</td><td>Researches before asked</td><td>Polls, suggests</td><td>No push, no briefings, no pre-research</td><td></td></tr><tr><td></td><td>Continuity</td><td>One presence</td><td>Same DB</td><td>No shared context across surfaces</td><td></td></tr><tr><td></td><td>Self-extension</td><td>Grows itself</td><td>None</td><td>No capability registry</td><td></td></tr><tr><td></td><td>Safety floor</td><td>Non-negotiable</td><td>✅ solid</td><td>Keep</td><td></td></tr></tbody></table>
+<p><strong>The honest verdict:</strong> today&#x27;s Friday is a well-built, safe, honest</p>
+<p>*operator&#x27;s assistant* — a shell with a working brain stem. The MCU</p>
+<p>standard is the gap between &quot;what&#x27;s built&quot; and Laws 1, 2, 5, 6, 7, 8, 9.</p>
+<hr>
+<h2>5. The path to MCU level (in order)</h2>
+<p>Order is deliberate — each step unlocks the next.</p>
+<p>1. <strong>LLM reasoning (Law 6 first)</strong> — one LLM provider in</p>
+<p><code>reasoning/providers.py</code> that *enhances* deterministic answers:</p>
+<p>synthesize across evidence, keep citations, keep &quot;I don&#x27;t know&quot;.</p>
+<p>Single highest-leverage change; everything else builds on it.</p>
+<p>2. <strong>Wave 11: research/synthesis/briefing/ambient (Laws 6, 9)</strong> —</p>
+<p>cross-project analysis, deterministic cited reports, morning/evening</p>
+<p>briefings from real state, in-process event bus + durable queue</p>
+<p>(push replaces polling). The &quot;researched before asked&quot; layer.</p>
+<p>3. <strong>Demonstration capture (Law 2)</strong> — &quot;watch me do this&quot;: record an</p>
+<p>operator demo through the audit log, form a parameterized skill,</p>
+<p>shadow, promote. Fills the empty skills system.</p>
+<p>4. <strong>Meaning memory (Law 5)</strong> — memory extracts propositions</p>
+<p>(preference, project, person) from conversations with explicit</p>
+<p>consent; identity answers draw on *models*, not transcripts.</p>
+<p>5. <strong>Capability registry (Law 7)</strong> — every executor + skill + provider</p>
+<p>registered with natural-language intents; Friday composes them. This</p>
+<p>is what makes &quot;figure out X&quot; possible.</p>
+<p>6. <strong>Adaptive tone (Law 8)</strong> — explicit tone-direction persists;</p>
+<p>persona profile carries style, not just facts.</p>
+<p>7. <strong>One presence (Law 10)</strong> — shared context session across surfaces;</p>
+<p>mobile push via the Wave 11 queue.</p>
+<p>8. <strong>Wave 12 Polish</strong> — benchmarks, installer, docs site, dogfooding.</p>
+<p>Each step must land with its NL path (Law 1 + Wiring Law) in the same</p>
+<p>change.</p>
+<hr>
+<h2>6. Definition of done for every future build</h2>
+<p>A build is done when all of the following are true:</p>
+<ul><li>[ ] The natural-language path works end-to-end (no flags, no syntax)</li><li>[ ] No answer without evidence / no action without audit (Laws 3–4)</li><li>[ ] It can be *learned* or *extended* — or the capability is registered</li></ul>
+<p>in the registry (Laws 2, 7)</p>
+<ul><li>[ ] Identity/tone rules are data-driven, not hardcoded (Law 8)</li><li>[ ] It surfaces through push or briefing, not a poll (Law 9)</li><li>[ ] Works on every surface that should reach it (Law 10)</li><li>[ ] Hermetic tests, never-crash, degrade silently</li><li>[ ] The MCU test is passed: a sentence, not a command</li></ul>
+<p><strong>The question that ends all debate:</strong></p>
+<blockquote>&quot;If Tony could only *speak* to Friday — no keyboard, no flags, no</blockquote>
+<blockquote>config files — would this feature be reachable?&quot;</blockquote>
+<p>If no, it&#x27;s not MCU level. Fix it or cut it.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

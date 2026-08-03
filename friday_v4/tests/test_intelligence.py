@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from friday_v4.intelligence import (
     AnomalyDetector,
     CodeHealthDiagnostics,
@@ -19,7 +17,6 @@ from friday_v4.intelligence import (
     PredictiveAnalytics,
     is_available,
 )
-
 
 # ==========================================================================
 # DriftPredictor
@@ -380,16 +377,14 @@ class TestIntelligenceCLI:
 
     def test_integrated_friday4_parser_includes_intelligence(self):
         """The `friday4` entry point exposes `friday4 intelligence`."""
-        from friday_v4.cli_talk import main
-
         # Parse-only via a dedicated subprocess-free path: build the parser
         # exactly like main() does and check the choice exists.
         import argparse
 
-        from friday_v4.cli_talk import build_talk_parser, build_voice_parser
         from friday_v4.cli_desktop import build_desktop_parser
-        from friday_v4.cli_proactive import build_proactive_parser
         from friday_v4.cli_intelligence import build_intelligence_parser
+        from friday_v4.cli_proactive import build_proactive_parser
+        from friday_v4.cli_talk import build_talk_parser, build_voice_parser, main
 
         parser = argparse.ArgumentParser(prog="friday4")
         subparsers = parser.add_subparsers(dest="command")

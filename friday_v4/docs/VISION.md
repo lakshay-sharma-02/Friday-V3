@@ -9,8 +9,12 @@
 ## ⭐ Status: V4 Is the Main Project
 
 **V4 is the project being actively built.** V3 is largely built but
-inconsistent. V4 imports only the V3 modules that are properly built and
-useful (persona, ambient, db) — everything else is built properly in V4.
+inconsistent. Per PLAN.md's V3-boundary decision, V4 imports **no V3 code**
+— the only touchpoint is `proactive/v3source.py`, a read-only bridge to
+`~/.friday/friday.db`. Everything V4 needs (voice, desktop, security,
+proactive intelligence, and from Waves 9–11 the reasoning/memory/execution
+core) is built properly in V4. V3's *capabilities* are design reference;
+its *code* is never imported.
 
 ---
 
@@ -79,7 +83,7 @@ You don't open a Friday app. You don't navigate to a Friday dashboard. Friday is
 2. **Your system tray** — glanceable status, click for quick actions
 3. **Your notifications** — Friday taps you on the shoulder when it matters
 4. **Your editor** — inline hints, status bar, quick actions
-5. **Your terminal** — `friday` command for when you want to type
+5. **Your terminal** — `friday4` command for when you want to type
 6. **Your phone** — push notifications, voice input on the go
 
 ---
@@ -175,8 +179,9 @@ Every MCU Friday capability, translated to software engineering:
 **How it works:**
 - Microphone listens for "Hey Friday" (hotword)
 - Speech is transcribed locally (Whisper) — no cloud needed
-- Text routes through V3's persona engine (already has conversation history,
-  name learning, preference extraction, memory)
+- Text routes through V4's `VoiceRouter` → Wave 9 `understanding/` NLU
+  (intent + entities) → Wave 9 `reasoning/` evidence-cited answers
+- Wave 10 adds persona/memory/relationship so Friday knows *you*
 - Response is spoken aloud via local TTS (Piper)
 - You can interrupt Friday mid-sentence
 
@@ -247,10 +252,10 @@ Every MCU Friday capability, translated to software engineering:
            vivaha's approach. Want the full breakdown?"
 ```
 
-- Architecture analysis (already exists in V3)
-- Cross-project integration analysis (already exists in V3)
-- Impact assessment of changes
-- Pattern matching across repos
+- Architecture analysis (Wave 11 `research/` — V3 had it, V4 rebuilds it)
+- Cross-project integration analysis (Wave 11 — V3 had it, V4 rebuilds it)
+- Impact assessment of changes (Wave 11)
+- Pattern matching across repos (Wave 11)
 
 **Friday has already done the research before you asked.**
 
@@ -271,10 +276,10 @@ Every MCU Friday capability, translated to software engineering:
            Want me to start prepping the test files?"
 ```
 
-- Breaks goals into tasks (V3's planning pipeline)
-- Schedules work across available time
-- Executes tasks autonomously when safe
-- Reports progress proactively
+- Breaks goals into tasks (Wave 9 `missions/` — V3's planner, rebuilt V4-native)
+- Schedules work across available time (Wave 9 `scheduler.py`)
+- Executes tasks when confirmed safe (Wave 9 `execution/` — gated, sandboxed, audited)
+- Reports progress proactively (Wave 9 `progress.py` → surfaces)
 
 **Friday plans. Friday executes. You direct.**
 
@@ -375,20 +380,22 @@ You don't need to learn Friday's language. Friday learns yours.
 | You check the daemon status | Friday speaks up when something changes |
 | You initiate every interaction | Friday initiates when it matters |
 
-### What V3 Did Right (Reused Selectively in V4)
+### What V3 Did Right (Rebuilt V4-Native in Waves 9–11)
 
-Some V3 modules are genuinely well-built. V4 imports those pieces where
-they earn their place — and builds the rest itself.
+V3 proved these capabilities. V4 never imports them — it rebuilds each
+one cleanly, stdlib-first, with hermetic tests.
 
-| V3 Module (reused) | V4 Surface |
+| V3 Capability (design reference) | V4 Rebuild |
 |-----------|-----------|
-| Persona Engine | Friday talks like a partner |
-| Ambient Feed | Friday's memory of events |
-| Db Layer | Friday's knowledge base |
+| Persona Engine | `persona/` (Wave 10) — name & preference learning |
+| Ambient Feed | `ambient/` event bus (Wave 11) + V3 feed via read-only bridge |
+| Db Layer | `db.py` (Wave 9) — V4 state, sqlite |
+| Mission / Planner | `missions/` (Wave 9) |
+| Executors | `execution/` (Wave 9) — gated, sandboxed, audited |
+| Memory | `memory/` (Wave 10) — facts + working memory |
+| Analysis / Synthesis | `research/` + `synthesis/` (Wave 11) |
 
-Everything else the vision needs (observation, knowledge, planning,
-executors, memory as V4 surfaces) is built properly in V4 — the main
-project.
+Everything the vision needs is built properly in V4 — the main project.
 
 ---
 
@@ -443,6 +450,20 @@ V4 has boundaries:
 
 But unlike V3's limitations (which were architectural), these are **policy**
 decisions. They can change if you want them to.
+
+### Status of the MCU Feature Map (2026-08-01)
+
+| MCU Capability | Wave | Status |
+|----------------|------|--------|
+| 🗣️ Voice | 1 | ✅ shipped |
+| 🖥️ Environment control | 2 | ✅ shipped |
+| 🔒 Security | 3 | ✅ shipped |
+| 🧠 Learning & anticipation | 4 | ✅ shipped (suggestion-only; action in Wave 9) |
+| 🤝 Collaboration | 5 | ✅ shipped |
+| 📊 HUD / ambient awareness | 7 (web) | ✅ shipped (push transport in Wave 11) |
+| 🤖 Mission control / execution | 9 | 🆕 designed — `WAVE_9_AGENCY_CORE.md` |
+| 👤 Personality & relationship | 10 | 🆕 designed — `WAVE_10_MEMORY_IDENTITY.md` |
+| 🔬 Research & synthesis | 11 | 🆕 designed — `WAVE_11_RESEARCH_REFLECTION.md` |
 
 ---
 

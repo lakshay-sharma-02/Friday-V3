@@ -67,7 +67,10 @@ def _descend(start_freq: float, end_freq: float, duration_s: float,
     n = int(_SAMPLE_RATE * duration_s)
     return [
         32767 * volume
-        * math.sin(2 * math.pi * max(start_freq - (start_freq - end_freq) * (i / n), end_freq) * (i / _SAMPLE_RATE))
+        * math.sin(2 * math.pi
+                   * max(start_freq - (start_freq - end_freq) * (i / n),
+                         end_freq)
+                   * (i / _SAMPLE_RATE))
         * math.exp(-(i / _SAMPLE_RATE) * 5)
         for i in range(n)
     ]
@@ -88,7 +91,8 @@ def get_chime(chime_type: str = "listen") -> bytes:
         samples = _tone(880, 0.2, 0.5, decay=6)
     elif chime_type == "alert":
         # Two sharp C7 (2093 Hz) staccato bursts
-        samples = _tone(2093, 0.08, 0.7, decay=20) + _silence(0.06) + _tone(2093, 0.12, 0.7, decay=15)
+        samples = (_tone(2093, 0.08, 0.7, decay=20) + _silence(0.06)
+                   + _tone(2093, 0.12, 0.7, decay=15))
     elif chime_type == "error":
         # Descending E5 (659 Hz) → C5 (523 Hz) over 400 ms
         samples = _descend(659, 523, 0.4, 0.5)

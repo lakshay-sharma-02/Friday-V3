@@ -1,7 +1,8 @@
 # Friday V4 — Refined Roadmap
 
 > **Context:** Solo developer, no deadline, full-stack vision, multi-platform.
-> **Total estimate:** 13–17 months for the complete vision (revised from 10-13).
+> **Total estimate:** 13–17 months for Waves 1–8; **~18–22 months** including the
+> Wave 9–11 Agency Core (the brain — reasoning, memory, execution, research).
 > **Strategy:** Shippable waves — every wave delivers visible MCU-Friday value.
 > **Minimum MCU Friday (Voice + Desktop): ~3.5–5 months.**
 
@@ -10,15 +11,16 @@
 ## The Honest Math
 
 Building a production-quality voice interface, cross-platform desktop control,
-collaboration layer, security scanner, IDE integration, mobile app, and
-proactive intelligence engine — solo — is a **13–17 month endeavor**. That's not
-scary — it's liberating. No deadline means we build it right, ship waves that
-feel like progress, and never crunch.
+collaboration layer, security scanner, IDE integration, mobile app, proactive
+intelligence — **plus the agency core (reasoning, memory, execution, research)**
+— solo — is an **~18–22 month endeavor** (Waves 1–8 ≈ 13–17 months; Waves 9–11
+≈ 4–5 months more). That's not scary — it's liberating. No deadline means we
+build it right, ship waves that feel like progress, and never crunch.
 
 **But here's the secret:** You stop after any wave and you have something real.
 - Stop after **Wave 1**: You have a voice-controlled Friday. That's already MCU-level.
 - Stop after **Wave 2**: You have voice + desktop. That's Iron Man's lab.
-- Keep going to **Wave 8**: You have the complete Friday.
+- Keep going to **Wave 12**: You have the complete Friday — surfaces *and* brain.
 
 ---
 
@@ -27,15 +29,29 @@ feel like progress, and never crunch.
 ```
 Wave 1: VOICE ─────> "Hey Friday, what's new?" ─────────> ✅ SHIPPED
 Wave 2: DESKTOP ───> Friday controls your environment ──> ✅ SHIPPED
-Wave 3: SECURITY ──> Friday protects your code ─────────> 3-4 weeks
+Wave 3: SECURITY ──> Friday protects your code ─────────> ✅ SHIPPED
 Wave 4: SMART ─────> Friday anticipates your needs ─────> ✅ SHIPPED
-Wave 5: COLLAB ────> Friday works with teams ───────────> 4-6 weeks
-Wave 6: IDE ───────> Friday lives in your editor ───────> 6-10 weeks
+Wave 5: COLLAB ────> Friday works with teams ───────────> ✅ SHIPPED
+Wave 6: IDE ───────> Friday lives in your editor ───────> ✅ SHIPPED (2026-08)
 Wave 7: MOBILE ────> Friday in your pocket ─────────────> 10-12 weeks
-Wave 8: POLISH ────> Production-ready ──────────────────> 4-6 weeks
+Wave 9: AGENCY ────> Friday actually does things ───────> ✅ SHIPPED
+Wave 10: IDENTITY ─> Friday knows you ──────────────────> ✅ SHIPPED
+Wave 11: RESEARCH ─> Friday reasons across your world ──> ✅ SHIPPED
+Wave 12: POLISH ───> Production-ready ──────────────────> ✅ SHIPPED
+Wave 13: THINKING CORE ──> LLM synthesis over evidence ──> ✅ SHIPPED
+Wave 13a: ONE NLU POINT ──> LLM-first resolve(), rules fallback ──> ✅ SHIPPED
+Wave 14: WATCH ME ──────> demonstration capture ─────────────────> ✅ SHIPPED
 ```
 
-**Total: 13–17 months solo.** Each wave ships independently.
+> **Renumbering note:** the original Wave 8 slot ("Polish & Scale") is now
+> **Wave 12**; Waves 9–11 are the new Agency Core (the brain). IDE (6) and
+> Mobile (7) keep their numbers — **Wave 8 is intentionally left unused** to
+> keep the new brain waves at 9–11 (matching the WAVE doc filenames). Full
+> designs: `WAVE_9_AGENCY_CORE.md`, `WAVE_10_MEMORY_IDENTITY.md`,
+> `WAVE_11_RESEARCH_REFLECTION.md`.
+
+**Total: ~18–22 months solo (the original 8-wave scope ≈ 13–17 months + ~4–5
+for Waves 9–11).** Each wave ships independently.
 
 ---
 
@@ -178,7 +194,18 @@ have a cross-platform desktop Friday for 80% of Linux users.
 
 ---
 
-## Wave 3: Security & Quality (3-4 weeks)
+## Wave 3: Security & Quality ✅ SHIPPED (2026-08)
+
+**Status:** Built. `VulnerabilityScanner` + `DependencyAuditor` + `SecretDetector`
++ `QualityGate` + `SecurityReport` in `security/`. Every scanner has a
+**built-in, pure-stdlib implementation that always works** plus **optional
+subprocess integrations** (pip-audit, trufflehog, ruff, mypy, bandit) that are
+discovered **venv-aware** via `security/tooling.py` — tools installed in the
+active venv's `bin/` are found even when they're not on PATH, so `security
+status` / `doctor` report them truthfully. `friday4 security scan [path]
+[--json] [--threshold N] [--no-deps|--no-secrets|--no-quality]`, `friday4
+security status`. Findings stay V4-native (CLI output + exit code + daemon
+state file + web dashboard; no V3 DB writes, per the V3-boundary decision).
 
 **Goal:** Friday actively scans your projects for vulnerabilities, exposed
 secrets, and code quality issues — and tells you about them proactively.
@@ -279,10 +306,18 @@ gracefully report "I'm still learning your patterns" when data is insufficient.
 
 ---
 
-## Wave 5: Collaboration (4-6 weeks)
+## Wave 5: Collaboration ✅ SHIPPED (2026-08)
 
 **Goal:** Multiple Friday instances can observe, sync, and coordinate. Team
 workspaces share observations while keeping local control.
+
+**What shipped:** ``collab/`` (``crdt.py`` LWW observation CRDT,
+``peer.py`` discovery, ``sync.py`` sync, ``coordinator.py``,
+``permissions.py`` ACLs) plus the ``friday4 collab`` CLI (start / status /
+peers / observations / add / share / perms). **Pure stdlib**: discovery is
+UDP JSON beacons and sync is a TCP JSON-lines protocol — the roadmap's
+zeroconf/WebSocket choices were replaced deliberately to honor V4's
+"pure-stdlib, always works" law (no new dependencies).
 
 ### What We Build
 
@@ -321,48 +356,52 @@ WebSocket sync requires network port access. The sync engine should:
 
 ---
 
-## Wave 6: IDE Integration (6-10 weeks)
+## Wave 6: IDE Integration ✅ SHIPPED (2026-08)
 
-**Goal:** Friday lives inside VS Code — inline code review, quick actions,
-status bar, diagnostics.
+**Goal:** Friday lives inside your editor — it knows which editor is
+present, adapts to it, analyzes your code with a real language server,
+and controls the editor (open / reveal / run). **Design:**
+`WAVE_6_IDE.md`.
 
-### What We Build
+### What Actually Shipped
 
-| Module | Files | Time | Notes |
-|--------|-------|------|-------|
-| `LSPClient` | `desktop/ide/lsp_client.py` | 5 days | pygls |
-| VS Code extension | `desktop/ide/vscode_extension/` | **3-4 weeks** | TypeScript, first extension |
-| Status bar integration | (in extension) | 3 days | — |
-| Inline review | (in extension) | 5-7 days | Decoration + comments API |
-| IPC with daemon | (in extension) | 3-4 days | WebSocket or HTTP |
+| Module | Files | Notes |
+|--------|-------|-------|
+| Editor detection | `desktop/ide/detection.py` | VS Code / JetBrains / Neovim / Sublime / Emacs from env (`TERM_PROGRAM`, `VSCODE_*`, `NVIM`), processes, and config dirs — adapts launcher argv per kind |
+| LSP client | `desktop/ide/lsp_client.py` | **Pure stdlib** JSON-RPC 2.0 over stdio: initialize, didOpen, `textDocument/diagnostic` pull + publishDiagnostics fallback, documentSymbol. No pygls |
+| Always-on analyzer | `desktop/ide/ast_analyzer.py` | `ast` fallback: syntax errors, undefined names, unused imports, shadowed builtins — Friday *always* has an opinion |
+| Editor control | `desktop/ide/controller.py` | open / reveal / run, argv adapted per editor (`code -r -g file:line`, `idea --line`, `nvim +line`, `subl file:line`, `emacs +line`) + OS opener fallback |
+| NL path | `Intent.IDE` + `nl_router._ide_response` | "what's wrong with src/main.py", "diagnose auth.py", "lint X", "why won't this compile" → diagnostics on every surface (talk / voice / web) |
+| Reasoning | `QuestionType.CODE` + `code_provider` | "what's wrong with X" asked as a question → evidence-cited `v4.ide.*` answer |
+| CLI | `cli_ide.py` | `friday4 ide detect/diagnose/symbols/open/reveal/run` — `run` goes through the gated execution pipeline |
+| Composition | `executors.py` + `nl_router` | `FRIDAY_V4_IDE_PREFLIGHT=1` → diagnostics ride along with Claude Code (`--append-system-prompt`) and appear in command preflight notes |
 
-**Total: ~35-40 days → 6-10 weeks**
+### What We Did NOT Build (honest)
+- **The TypeScript VS Code extension** (sidebar, status bar, decorations)
+  is not built. The editor is still reachable *today* through the CLI
+  (`code -r`, `code -g file:line`) and the LSP protocol — the extension
+  would only *add* an in-UI surface. That stays a future refinement.
+- No marketplace publishing, no per-editor plugin bundles.
 
-### Why 6-10 Weeks (not 6-8)
-- **First VS Code extension** — you'll spend 3-5 days learning the API,
-  extension manifest, activation events, WebViews, and debugging.
-- **TypeScript** — if you primarily write Python, there's a language context
-  switch cost.
-- **IPC design** — the extension communicates with the Friday daemon. This
-  could be WebSocket (real-time) or HTTP (request-response). Both need design,
-  error handling, reconnection logic.
-- **Publishing** — if you want to publish to the VS Code Marketplace, you need
-  a publisher account and a passing extension review.
-
-### File Count
-- **~15-20 files** (TypeScript + Python). High complexity, new language.
-
-### MCU Friday Feel
+### The MCU Friday Feel (now real)
 ```
-[In VS Code, opening a PR]
-📝 [Friday sidebar]: "This PR has 2 files changed, 3 potential issues.
-                     Want me to run the full review pipeline?"
-                     → Friday is right there in your editor.
+[In the terminal / voice / web chat]
+🧑 "what's wrong with auth.py"
+🤖 "I found 2 error(s) in auth.py (via ast): line 3: undefined name 'get_token';
+    line 5: shadowed builtin: list."
+🧑 "diagnose src/main.py" → Friday opens the real diagnostics from the LSP
 ```
 
 ---
 
 ## Wave 7: Mobile & Web (10-12 weeks)
+
+**Status (web slice):** ✅ Web Dashboard SHIPPED (2026-08). `friday4 web`
+starts a pure-stdlib local dashboard (no FastAPI/flask — consistent with
+V4's "pure-stdlib, always works" philosophy) visualizing daemon status,
+security grade + findings, intelligence drift/anomalies, proactive
+patterns, the read-only V3 bridge, voice config, and the ambient feed,
+with a "run security scan" action. React Native app + push pending.
 
 **Goal:** Friday in your pocket. Quick status, voice input, push notifications.
 
@@ -417,19 +456,115 @@ but requires platform-specific development.
 
 ---
 
-## Wave 8: Polish & Scale (4-6 weeks)
+## Wave 9: Agency Core — The Brain ✅ SHIPPED
+
+**Goal:** Friday actually does things. Full design: `WAVE_9_AGENCY_CORE.md`
+(§10 "What Actually Shipped" documents the build + deviations).
+
+- ✅ `db.py` — V4-native sqlite foundation (schema v3, 9 tables, migrations)
+- ✅ `understanding/` — NLU: intent → entities → canonical action (shared by voice/CLI/web)
+- ✅ `reasoning/` — evidence-cited answer engine + provider registry (6 providers, no answer without evidence)
+- ✅ `missions/` — persistent goals: planner → engine → steps → scheduler → progress
+- ✅ `execution/` — gated, sandboxed, audited executors (shell/git/file/python/testing) with undo
+- ✅ `nl_router.py` — NL → act (shared CLI/voice handler, not in the original design)
+- ✅ CLI: `friday4 talk "…" / ask / execute / status` (incl. `db status`)
+
+**MCU Friday Feel:** "Friday, run the tests." → gate → executes → reports result. ✅
+
+---
+
+## Wave 10: Memory & Identity — Friday Knows You ✅ SHIPPED
+
+**Goal:** Friday builds a relationship. Full design: `WAVE_10_MEMORY_IDENTITY.md`
+(§8 "Wiring Status" tracks all 16 integration gaps — every one closed).
+
+- ✅ `memory/` — facts + working memory with provenance, confidence, decay
+- ✅ `persona/` — explicit-consent name & preference learning
+- ✅ `relationship/` — interaction depth → tone & verbosity
+- ✅ `skills/` — shadow-first self-improvement (Replay + Shadow executors, verified promotion)
+- ✅ CLI: `friday4 memory / persona / relationship / skills`
+- ✅ Daemon: `MemorySweeper` + `SkillLearner` + `RelationshipRefresher` schedules
+
+**MCU Friday Feel:** "Call me Lakshay" → remembered across restarts, tone adapts. ✅
+
+---
+
+## Wave 11: Research & Reflection ✅ SHIPPED (2026-08)
+
+**Goal:** Friday reasons across your world. Full design: `WAVE_11_RESEARCH_REFLECTION.md`
+(§9 "What Actually Shipped" documents the close-out + deviations).
+
+- ✅ `research/` — architecture, cross-project correlation, impact, code search, README purpose
+- ✅ `synthesis/` — deterministic, evidence-cited reports (incl. `reports.py` daily/weekly)
+- ✅ `briefing/` — morning/evening briefings from real V4 state
+- ✅ `ambient/` — in-process event bus + durable queue; **push replaces polling**
+- ✅ Push wiring: security findings, suggestions, collab obs → shared bus
+- ✅ Web SSE (`/api/events`) + dashboard EventSource with poll fallback
+- ✅ CLI: `friday4 analyze / correlate / briefing / narrative / report [--daily|--weekly]`
+
+**MCU Friday Feel:** "Friday, analyze the integration cost between vivaha and
+MindWell." → cited, ranged estimate. ✅
+
+---
+
+## Wave 12: Polish & Scale ✅ SHIPPED (2026-08)
 
 **Goal:** Production-ready V4 with documentation, benchmarks, installer, and
 a full test suite.
 
-| Task | Time |
-|------|------|
-| Performance benchmarks (V3 vs V4) | 1 week |
-| Documentation site | 1 week |
-| Installation script (pipx/pip) | 3 days |
-| Migration guide (V3 → V4) | 2 days |
-| Dogfooding + bug fixes | 2-3 weeks |
-| 500+ V4 tests (spread across waves) | 2 weeks |
+| Task | Status |
+|------|--------|
+| Performance benchmarks (`tools/benchmarks.py`, V3 vs V4 where importable) | ✅ |
+| Documentation site (`tools/build_docs_site.py` → `site/`) | ✅ |
+| Installation script (`install.sh`) | ✅ |
+| Migration guide (`docs/MIGRATION_GUIDE.md`) | ✅ |
+| `network/` stub folded in — `ssh` executor behind gate → sandbox → audit | ✅ |
+| Dogfooding + bug fixes | ⏳ ongoing |
+| ~800 V4 tests (hermetic, tmp_path) | ✅ |
+
+---
+
+## Wave 13: Thinking Core ✅ SHIPPED (2026-08)
+
+**Goal:** the LLM that *thinks* — Law 6's "deterministic floor, LLM
+ceiling". One LLM provider enhances the answer engine; never gates it.
+
+| Task | Status |
+|------|--------|
+| `llm_provider()` in `reasoning/providers.py` — synthesis over the same evidence, citations kept verbatim | ✅ |
+| Engine post-pass — no LLM → byte-identical deterministic floor | ✅ |
+| Evidence-less answers never sent to the LLM ("I don't know" stays real) | ✅ |
+| Explicit opt-in — `FRIDAY_V4_LLM` env or injected client (reuses `nlu.LLMClient`, 9router proxy) | ✅ |
+| `friday4 ask` conversation-capable — history threaded, Q&A logged | ✅ |
+| Voice/talk/web inherit via `nl_router` (one entry point) | ✅ |
+| Hermetic tests (`test_wave13_thinking_core.py`, 17 tests) | ✅ |
+| Wave doc (`docs/WAVE_13_THINKING_CORE.md`) | ✅ |
+
+**MCU Friday Feel:** "What's the deal between vivaha and MindWell?" →
+synthesized, cited, ranged — through `friday4 talk`, through voice. ✅
+
+## Wave 13a: ONE NLU Point ✅ SHIPPED (2026-08)
+
+**Goal:** *speaks natural language* — no regex/keyword matching anywhere
+in the input path. Every surface routes through ONE parser, `resolve()`,
+which is **LLM-first**; deterministic rules are a fallback only when the
+LLM is absent/offline — never the product.
+
+| Task | Status |
+|------|--------|
+| `nlu/` package — `resolve(text, llm=LLMClient())` LLM-first, rules fallback | ✅ |
+| `understanding/` is a thin shim — old Wave 9 implementation submodules removed; only re-export `__init__` remains | ✅ |
+| All surfaces verified on ONE point — `nl_router`, `voice/router.py`, `web/dashboard.py`, `cli_nl.py` | ✅ |
+| Fallback never crashes — fixed the confidence `TypeError` on ambiguous input (never-crash law) | ✅ |
+| ASK/RESEARCH targets threaded through `resolve()` | ✅ |
+| Research routing fixed — `X vs Y` classified as research; correlate path (str/Path bug) + verb-strip fixed | ✅ |
+| `FRIDAY_V4_LLM_URL` / `_MODEL` / `_KEY` env config; explicit opt-in | ✅ |
+| Hermetic tests — `test_understanding.py` (25 shim-contract tests) + `test_nlu.py` (12) + research/CLI | ✅ |
+| Wave doc (`docs/WAVE_13A_ONE_NLU_POINT.md`) | ✅ |
+
+**MCU Friday Feel:** "Friday, what's the deal between vivaha and
+MindWell?" → one parser, LLM intent → research → cited answer. No
+surface keyword-matches anything. ✅
 
 ---
 
@@ -440,19 +575,56 @@ WAVE       MONTHS    CUMULATIVE    FEELING                     DIFFICULTY
 ───────────────────────────────────────────────────────────────────────────
 Voice      ✅ SHIPPED             🎤 "I can talk to Friday!"  Medium
 Desktop    ✅ SHIPPED             🖥️ "Friday controls desktop" HIGH
-Security   1 mo      +1 mo         🔒 "Friday protects code"   Low
+Security   ✅ SHIPPED             🔒 "Friday protects code"   Low
 Smart      ✅ SHIPPED             🧠 "Friday knows my needs"  Medium-HIGH
-Collab     1.5 mo    +1.5 mo       🤝 "Friday is networked"    Medium
+Collab     ✅ SHIPPED             🤝 "Friday is networked"    Medium
 IDE        2 mo      +2 mo         📝 "Friday in my editor"    HIGH
 Mobile     3 mo      +3 mo         📱 "Friday on my phone"     VERY HIGH
+Agency     2 mo      +2 mo         🤖 "Friday actually does things" HIGH
+Identity   1.5 mo    +1.5 mo       👤 "Friday knows you"       Medium-HIGH
+Research   1.5 mo    +1.5 mo       🔬 "Friday reasons across your world" Medium
 Polish     ~1 mo     +1 mo         📦 "Production-ready V4"    Medium
 ```
 
-**Total remaining: ~8-10 months solo.** Waves 1, 2, and 4 are built and live
-(`friday4 daemon`, `friday4 talk`, `friday4 desktop`, `friday4 proactive`,
-`friday4 intelligence`, `friday4 doctor`).
+**Total remaining: ~9-12 months solo** (Waves 6-7 + 9-11 + 12). Waves 1–5 are
+built and live (`friday4 daemon`, `friday4 talk`, `friday4 desktop`,
+`friday4 proactive`, `friday4 intelligence`, `friday4 security`,
+`friday4 collab`, `friday4 doctor`).
 
-**Minimum MCU Friday (Voice + Desktop + Security): ~5.5 months**
+**Web Dashboard slice: ✅ SHIPPED (2026-08)** — `friday4 web` local UI over daemon/security/intelligence/proactive/V3/voice.
+
+**Minimum MCU Friday (Voice + Desktop + Security): ✅ ACHIEVED**
+
+---
+
+## Wave 14: Watch Me — Demonstration Capture ✅ SHIPPED (2026-08)
+
+**Goal:** *no learning ceiling* — "copy any workflow." The audit log
+IS the demonstration record; "watch me" tags a window on it and
+parameterizes the demonstrated work into a skill that generalizes by
+context (repo + command), never a literal replay.
+
+| Task | Status |
+|------|--------|
+| db migration v5 — `watches` table + start/end/get/active/list/actions_between | ✅ |
+| `skills/watcher.py` `WatchRecorder` — explicit capture → generalized shadow skill | ✅ |
+| `skills/noticer.py` `RepetitionNoticer` — "I noticed you do this every time" offers (pure read) | ✅ |
+| Generalization — `_step_matches` repo-context matching (back-compat safe) | ✅ |
+| `Intent.SKILL` through the ONE NLU point (LLM-first, fallback words, resolver target) | ✅ |
+| `nl_router` `_skill_response` — watch / learn / stop / summarize on all surfaces | ✅ |
+| Reasoning `QuestionType.SKILLS` + `skills_provider` (ASK cites real skills) | ✅ |
+| `friday4 skills watch` / `watch-stop` / `noticed` / `dispatch` | ✅ |
+| Daemon `SkillLearner` runs the noticer before `learn()`, surfaces offers | ✅ |
+| Stale `test_db` schema assertions fixed (v3 → v5) | ✅ |
+| `tests/test_wave14_watch_me.py` — 33 hermetic tests | ✅ |
+| NL accept loop — `Intent.ACCEPT` ("yes, run it") → gate → execution; voice offers the suggestion | ✅ |
+| Dispatch → mission — multi-step acceptance becomes a supervised mission (first step runs now, rest tracked) | ✅ |
+| Auto-dispatch on idle — daemon `DispatchOfferer` offers matching skills on a schedule (notify + ambient event, never executes) | ✅ |
+
+**MCU feel:** "Friday, watch me do this" → operator works → "learn
+this" → shadow skill formed with repo context; "what did you learn" →
+"I've learned 3 skill(s)…" from the real registry. See
+[`WAVE_14_WATCH_ME.md`](WAVE_14_WATCH_ME.md).
 
 ---
 
@@ -466,6 +638,9 @@ Polish     ~1 mo     +1 mo         📦 "Production-ready V4"    Medium
 | Collab | Single-instance only. Same as V3. | Doesn't affect any other feature. |
 | IDE | No editor integration. CLI still works. | Voice commands can replace some IDE actions. |
 | Mobile | Desktop-only. Same as V3. | Web dashboard is the alternative. |
+| Agency (9) | Friday suggests but never does. | Voice + desktop still work; no execution. |
+| Identity (10) | Friday has no memory of you. | Patterns still learned, but per-session only. |
+| Research (11) | Friday answers only what you ask. | Briefings/reports degrade to manual summaries. |
 
 You can skip any wave and the previous ones still work perfectly. Each wave is
 independent except for depending on Voice (for voice interactions).
@@ -515,8 +690,8 @@ Since you have no deadline, here's how to make this sustainable:
 - [ ] Estimate: is this wave realistic? If not, cut scope.
 
 ### After Each Wave
-- [ ] Run V3 tests (1,656 must pass)
-- [ ] Run V4 tests for this wave
+- [ ] Run V4 tests (hermetic, no real `~/.friday` writes)
+- [ ] ruff clean on new/edited files
 - [ ] Dogfood for 3 days — use it in real work
 - [ ] Fix the 3 most annoying bugs
 - [ ] Write a short "what I learned" doc
@@ -536,7 +711,10 @@ Since you have no deadline, here's how to make this sustainable:
 | Collab | Network ports available (default: 9876) |
 | IDE | Node.js + npm for VS Code extension development |
 | Mobile | Apple Developer Account ($99/yr) if iOS; Google Firebase project if Android |
-| Polish | All of the above working correctly |
+| Agency (9) | ✅ done — ships `db.py` foundation; Python ≥3.12 |
+| Identity (10) | ✅ done — builds on Wave 9 DB tables |
+| Research (11) | Wave 9 reasoning (done) + Wave 10 memory (done) — both inputs ready |
+| Polish (12) | All of the above working correctly |
 
 ---
 
@@ -545,8 +723,10 @@ Since you have no deadline, here's how to make this sustainable:
 1. **Each wave is independent.** You can stop anytime with something real.
 2. **Voice + Desktop = Minimum MCU Friday in 5.5 months.** That's the unlock.
 3. **No deadline means no crunch.** Build at your pace, ship when it's ready.
-4. **V3 does the heavy lifting.** The observation, knowledge, planning, and
-   execution pipelines are already built. V4 just adds interaction surfaces.
+4. **V3 is the design reference, not the runtime.** V3 proved the capability
+   map (mission, executors, memory, skill formation, analysis). V4 rebuilds
+   that capability V4-native — with hygiene, polish, and hermetic tests (see
+   Waves 9–11).
 5. **Start with what you know.** Build the platforms you use first (Linux +
    Hyprland). Add others progressively.
 

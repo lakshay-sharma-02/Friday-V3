@@ -21,11 +21,11 @@ churn×complexity risk ranker; learner tracks correction feedback weights.
 from __future__ import annotations
 
 try:
-    from .drift import DriftPredictor
     from .anomaly import AnomalyDetector
+    from .drift import DriftPredictor
     from .health import CodeHealthDiagnostics
-    from .predictor import PredictiveAnalytics
     from .learner import ContinuousLearner
+    from .predictor import PredictiveAnalytics
     _INTELLIGENCE_AVAILABLE = True
 except ImportError:  # pragma: no cover - Wave 4 stub
     DriftPredictor = None  # type: ignore

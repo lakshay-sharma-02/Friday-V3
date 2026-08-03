@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Master Plan — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Master Plan</h1>
+<h1>The Friday Master Plan — &quot;One Sentence, One Product&quot;</h1>
+<blockquote><strong>THE SENTENCE (the only spec that matters):</strong></blockquote>
+<blockquote></blockquote>
+<blockquote>### MCU FRIDAY is a single presence that speaks natural language, has no learning ceiling, no task it can&#x27;t pick up, and adapts its personality to you.</blockquote>
+<blockquote></blockquote>
+<blockquote>Every wave below exists to make that sentence true. If a wave doesn&#x27;t</blockquote>
+<blockquote>serve one of its four clauses, it doesn&#x27;t get built.</blockquote>
+<blockquote></blockquote>
+<blockquote>Governance: <a href="MCU_FRIDAY_STANDARD.md"><strong>THE MCU FRIDAY STANDARD</strong></a> — ten</blockquote>
+<blockquote>laws, five MCU acceptance tests, one definition of done. This plan is</blockquote>
+<blockquote>the *route*; the Standard is the *judge*.</blockquote>
+<hr>
+<h2>0. The sentence, decomposed</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>l</th><th>a</th><th>u</th><th>s</th><th>e</th><th></th><th>|</th><th></th><th>M</th><th>e</th><th>a</th><th>n</th><th>s</th><th></th><th>|</th><th></th><th>S</th><th>h</th><th>i</th><th>p</th><th>s</th><th></th><th>i</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>single presence</strong></td><td>Same memory, context, identity across voice / terminal / web / desktop / mobile. One Friday, not five tools.</td><td>Wave 15</td><td></td></tr><tr><td></td><td><strong>speaks natural language</strong></td><td>Speech is the *only* user surface. Every capability has an NL path; CLI is a debug hatch.</td><td>Continuous (Law 1)</td><td></td></tr><tr><td></td><td><strong>no learning ceiling</strong></td><td>Anything demonstrable is learnable — memory forms models, skills form from watching, both generalize.</td><td>Waves 13, 14, 16</td><td></td></tr><tr><td></td><td><strong>no task it can&#x27;t pick up</strong></td><td>Capability registry + composition: Friday decomposes any request into known capabilities.</td><td>Wave 16</td><td></td></tr><tr><td></td><td><strong>adapts its personality to you</strong></td><td>Explicit tone-direction persists; identity is data-driven, consent-first, never hardcoded.</td><td>Wave 17</td><td></td></tr></tbody></table>
+<p><strong>The through-line:</strong> Waves 1–12 built (and are building) the *surfaces*</p>
+<p>and the *safe core*. Waves 13–17 build the *sentence*. Waves 11–18 build</p>
+<p>the whole path; shipped waves get hardened (§2) so the foundation is</p>
+<p>strong underneath everything new.</p>
+<hr>
+<h2>1. Where we are (already shipped / in flight)</h2>
+<table><thead><tr><th>|</th><th></th><th>W</th><th>a</th><th>v</th><th>e</th><th></th><th>|</th><th></th><th>W</th><th>h</th><th>a</th><th>t</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>1</td><td>Voice interaction</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>2</td><td>Desktop presence</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>3</td><td>Security &amp; quality</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>4</td><td>Proactive intelligence</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>5</td><td>Collaboration</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>6</td><td>IDE Integration — adaptive editor detection (VS Code / JetBrains / Neovim / Sublime / Emacs), pure-stdlib LSP client, always-on AST analyzer, editor control (open/reveal/run), NL path (&quot;what&#x27;s wrong with X&quot;), CODE reasoning provider, claude preflight composition</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>7</td><td>Web dashboard</td><td>✅ SHIPPED (slice)</td><td></td></tr><tr><td></td><td>9</td><td>Agency Core — the brain (DB, NLU, reasoning, missions, execution, NL router)</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>10</td><td>Memory &amp; identity (memory, persona, relationship, skills scaffold)</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>11</td><td>Research &amp; reflection (research, synthesis, briefing, ambient push)</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>12</td><td>Polish &amp; scale (benchmarks, docs site, installer, migration guide, SSH executor)</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>13</td><td>Thinking Core — LLM synthesis over evidence (enhance, never gate)</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>13a</td><td>ONE NLU Point — <code>resolve()</code> LLM-first, rules fallback; <code>understanding/</code> = thin shim</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>14</td><td>Watch Me — demonstration capture (audit-log tagging, repetition notices, SKILL NL paths)</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>15</td><td>One Presence — shared context session + web-chat polish + ambient push to every surface + mobile transport (one session follows you across surfaces; &quot;what did we talk about this morning?&quot; answered from any surface)</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>16</td><td>Capability &amp; Self-Extension — registry (executors/providers/intents/surfaces + learned skills), &quot;what can you do&quot; from the registry</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>17</td><td>Adaptive Identity — tone-direction (&quot;be more casual&quot; persists + explainable), effective-tone merge, briefing adapts</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>18</td><td>Claude Code Hands — complex agentic goals (&quot;figure out why the build fails and fix it&quot;) delegate to the local Claude Code CLI through the same gate → sandbox → audit pipeline</td><td>✅ SHIPPED</td><td></td></tr><tr><td></td><td>19</td><td>Polish, Scale &amp; Dogfood — the sentence, proven under real use (five MCU acceptance tests through speech only, five most annoying bugs, benchmarks, docs site, installer, migration guide verified, 1085 tests)</td><td>✅ SHIPPED</td><td></td></tr></tbody></table>
+<p><strong>Foundation present:</strong> <strong>1085 hermetic tests green</strong> (W19 close-out),</p>
+<p>evidence-honest reasoning, <strong>LLM synthesis over evidence</strong> (Wave 13 — enhances, never</p>
+<p>gates; conversation-capable `<code>friday4 ask</code>`), gated/audited/undo-able</p>
+<p>execution, memory with provenance and decay, shadow-first skills, daemon</p>
+<p>with sweeps/learners, web dashboard, V3 read-only bridge, **ambient</p>
+<p>push** (Wave 11 SSE + shared bus), and Wave 12 polish (benchmarks, docs</p>
+<p>site, installer, migration guide, SSH executor). The shell and the safe</p>
+<p>core are real, and <strong>Wave 13a (ONE NLU Point) is shipped</strong> — every</p>
+<p>surface routes through one LLM-first <code>resolve()</code>, <code>understanding/</code> is a</p>
+<p>thin shim, and the fallback never crashes (it classifies honestly</p>
+<p>instead). <strong>Wave 14 (Watch Me) is shipped</strong> — explicit &quot;watch me do</p>
+<p>this&quot; capture, repetition notices, and SKILL NL paths all land on the</p>
+<p>audit log. <strong>Wave 15 (One Presence) is SHIPPED</strong> — the shared-context</p>
+<p>session (one thread per day across talk/ask/voice/web/mobile),</p>
+<p>time-window recall (&quot;what did we talk about this morning?&quot; from any</p>
+<p>surface), web-chat hydrate (the browser resumes the terminal thread),</p>
+<p>ambient push reaching every surface (voice speak / desktop banner via</p>
+<p>surface channels), and mobile transport via the durable queue</p>
+<p>(<code>PushNotificationService</code> + companion API — status / conversation /</p>
+<p>talk / SSE). See <code>WAVE_15_ONE_PRESENCE.md</code>.</p>
+<p><strong>Foundation missing (the sentence&#x27;s gap):</strong> demonstration capture,</p>
+<p>a capability registry, cross-surface continuity, adaptive tone. Waves</p>
+<p>14–17 close exactly that — and §2 makes sure the already-shipped waves</p>
+<p>are pulled up to MCU standard *as* we build them, so nothing is left as</p>
+<p>a CLI-only island. **Wave 16 (Capability Registry) and Wave 17</p>
+<p>(Adaptive Identity) are now shipped** — the registry answers &quot;what can</p>
+<p>you do&quot; from real state and grows with learned skills (Law 7), and</p>
+<p>&quot;be more casual, Tony&quot; shifts tone this session, persists, and is</p>
+<p>explainable (Law 8, MCU test #4). See <code>WAVE_16_17_ADAPTIVE.md</code>.</p>
+<p><strong>Wave 19 (Polish, Scale &amp; Dogfood) is now SHIPPED</strong> — the five MCU</p>
+<p>acceptance tests pass through the shared NL brain (speech-only</p>
+<p>surface), the five most annoying bugs are fixed, and the floor</p>
+<p>(benchmarks / docs site / installer / migration guide / 1085 tests) is</p>
+<p>verified. <strong>All five sentence clauses are ✅.</strong> See</p>
+<p><code>WAVE_19_POLISH_DOGFOOD.md</code>.</p>
+<p><strong>Wave 6 (IDE Integration) is now SHIPPED</strong> — the editor is no longer</p>
+<p>an empty placeholder: Friday detects which editor is present (VS Code /</p>
+<p>JetBrains / Neovim / Sublime / Emacs — env, process, and config</p>
+<p>signals), analyzes code through a pure-stdlib LSP client (pyright /</p>
+<p>pylsp / typescript-language-server / gopls / rust-analyzer) with an</p>
+<p>always-on AST fallback (syntax errors, undefined names, unused imports,</p>
+<p>shadowed builtins), controls the editor (open / reveal / run), and</p>
+<p>composes with execution: &quot;what&#x27;s wrong with auth.py&quot; is an NL intent on</p>
+<p>every surface, the reasoning layer has a CODE provider, and — when</p>
+<p><code>FRIDAY_V4_IDE_PREFLIGHT</code> is set — Friday&#x27;s diagnostics ride along with</p>
+<p>Claude Code delegations via <code>--append-system-prompt</code>. The TypeScript VS</p>
+<p>Code extension (sidebar/status bar) remains the one explicitly-unbuilt</p>
+<p>piece; the editor is reachable today through the CLI + LSP without it.</p>
+<p>See <code>WAVE_6_IDE.md</code>.</p>
+<hr>
+<h2>2. Foundation Hardening — retro-fit the shipped waves</h2>
+<blockquote><strong>The rule:</strong> a shipped wave isn&#x27;t *done* until it speaks MCU. Every</blockquote>
+<blockquote>built wave below has gaps against the sentence; the hardening items</blockquote>
+<blockquote>close them. Each item lands with its natural wave (column &quot;Lands</blockquote>
+<blockquote>with&quot;) or anytime it&#x27;s small enough — and always with its NL path in</blockquote>
+<blockquote>the same change (Law 1 + Wiring Law). Never as a separate CLI-only</blockquote>
+<blockquote>feature.</blockquote>
+<table><thead><tr><th>|</th><th></th><th>B</th><th>u</th><th>i</th><th>l</th><th>t</th><th></th><th>w</th><th>a</th><th>v</th><th>e</th><th></th><th>|</th><th></th><th>M</th><th>C</th><th>U</th><th></th><th>g</th><th>a</th><th>p</th><th></th><th>t</th><th>o</th><th>d</th><th>a</th><th>y</th><th></th><th>|</th><th></th><th>H</th><th>a</th><th>r</th><th>d</th><th>e</th><th>n</th><th>i</th><th>n</th><th>g</th><th></th><th>(</th><th>r</th><th>e</th><th>t</th><th>r</th><th>o</th><th>-</th><th>f</th><th>i</th><th>t</th><th>)</th><th></th><th>|</th><th></th><th>N</th><th>L</th><th></th><th>p</th><th>a</th><th>t</th><th>h</th><th></th><th>(</th><th>L</th><th>a</th><th>w</th><th></th><th>1</th><th>)</th><th></th><th>|</th><th></th><th>L</th><th>a</th><th>n</th><th>d</th><th>s</th><th></th><th>w</th><th>i</th><th>t</th><th>h</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>1 · Voice</strong></td><td>Voice is a *surface*, not *the* surface. Full spoken roundtrip (hear → think → act → speak) never verified end-to-end.</td><td>Verify the whole loop live: hotword → NLU → gate → execute → spoken result. Voice confirmation for every confirm-gate action (already asked aloud — verify). Reach ask/talk/memory/skills by voice. Barge-in + chimes verified.</td><td>&quot;Friday, run the tests&quot; → spoken execute → spoken result</td><td>Continuous + W13</td><td></td></tr><tr><td></td><td><strong>2 · Desktop</strong></td><td>Context isn&#x27;t fully ambient; volume control remains voice-only.</td><td>✅ NL entry shipped: <code>desktop_text_command</code> routes focus / switch / launch / open / screenshot / workspace / status through <code>friday4 talk</code> + web chat (same verbs as the voice router — desktop is no longer CLI/voice-only). Active window/app feeds the context engine continuously (observer exists — verify it feeds reasoning, not just anticipation).</td><td>&quot;switch to workspace 3&quot;, &quot;screenshot the screen&quot; — talk, web, voice</td><td>Continuous</td><td></td></tr><tr><td></td><td><strong>3 · Security</strong></td><td>Severity gating doesn&#x27;t feed anticipation yet.</td><td>✅ NL entry shipped: <code>Intent.SECURITY</code> — &quot;scan my repo&quot; → <code>VulnerabilityScanner</code> graded report, high/critical findings pushed onto the ambient bus (briefing/web feed see them). Never crashes (missing scanner degrades honestly). Severity gating feeds anticipation next.</td><td>&quot;scan this repo&quot; → graded report, pushed</td><td>W11</td><td></td></tr><tr><td></td><td><strong>4 · Proactive</strong></td><td>Suggestions poll + notify only; can&#x27;t be actioned by voice.</td><td>Suggestions actionable via NL (&quot;yes, run it&quot; → confirm → execute). Replace the suggestion poll with W11 push. Anticipation consumes memory/skills/missions — not just V3 + activity.</td><td>&quot;what should I do next&quot; → suggestion → &quot;go&quot;</td><td>W11</td><td></td></tr><tr><td></td><td><strong>5 · Collab</strong></td><td>Peer obs don&#x27;t feed briefings/anticipation yet.</td><td>✅ NL entry shipped: <code>QuestionType.COLLAB</code> + <code>collab_provider</code> — &quot;what&#x27;s my team working on&quot; → reasoning cites peer observations + known peers (read-only, coordinator perms respected). Peer obs feed briefings + anticipation next (single direction).</td><td>&quot;what&#x27;s happening in the team workspace&quot;</td><td>W11</td><td></td></tr><tr><td></td><td><strong>7 · Web</strong></td><td>Dashboard is read-mostly; no NL chat; polls.</td><td>NL chat surface on the dashboard (same <code>nl_router</code> — one command language everywhere). SSE push via W11 ambient.</td><td>Type/speak in the dashboard → the same Friday</td><td>W11 + W15</td><td></td></tr><tr><td></td><td><strong>9 · Agency</strong></td><td>Reasoning is deterministic lookup; missions never exercised in real use; execution CLI-only.</td><td>W13 LLM provider (enhance, never gate). Mission shepherding: propose next step, report blockers, &quot;plan changed because…&quot; (MCU test #1). Executor breadth: web/network (W12). Mission progress by NL.</td><td>&quot;ship the auth refactor by Friday&quot; → shepherded; &quot;how&#x27;s it going?&quot;</td><td>W13 + W16</td><td></td></tr><tr><td></td><td><strong>10 · Identity</strong></td><td>Tone is depth-driven only; no explicit direction.</td><td>✅ Memory NL entry shipped: <code>Intent.MEMORY</code> — &quot;remember that I prefer Rust&quot; / &quot;what did I tell you about X&quot; → facts with provenance, consent-first, never crashes. Tone-direction (&quot;be more casual&quot;) pull-forward from W17 remains; meaning extraction continues there. Persona answers draw on models, not just quotes.</td><td>&quot;call me Lakshay&quot;, &quot;be more casual&quot;, &quot;I prefer Rust…&quot;</td><td>W17 + anytime</td><td></td></tr></tbody></table>
+<p><strong>Tracking:</strong> a hardening item is done when its NL path works end-to-end,</p>
+<p>its test exists, and the wave doc&#x27;s wiring table says so. The sentence</p>
+<p>progress tracker (§7) marks the clause it moved.</p>
+<hr>
+<h2>3. The waves ahead</h2>
+<blockquote>Order is deliberate — each wave unlocks the next. Every wave must land</blockquote>
+<blockquote>with its natural-language path (Law 1) and hermetic tests in the same</blockquote>
+<blockquote>change (Wiring Law).</blockquote>
+<h3>Wave 11 — Research &amp; Reflection ✅ SHIPPED (5–6 weeks)</h3>
+<p><strong>Why it serves the sentence:</strong> *no task it can&#x27;t pick up* and</p>
+<p>*understands everything* — the &quot;researched before asked&quot; layer. Also the</p>
+<p>transport for §2 hardening (ambient push replaces every poll).</p>
+<ul><li><code>research/</code> — architecture analysis, cross-project correlation, impact</li></ul>
+<p>analysis, code search, README purpose recovery. Evidence-cited,</p>
+<p>ranged + confidence estimates, cached with invalidation.</p>
+<ul><li><code>synthesis/</code> — deterministic, evidence-cited reports (same evidence →</li></ul>
+<p>same report).</p>
+<ul><li><code>briefing/</code> — morning/evening briefings from real V4 state (missions,</li></ul>
+<p>security, drift, memory), tone- and time-of-day-adapted.</p>
+<ul><li><code>ambient/</code> — in-process event bus + durable queue + channels (voice</li></ul>
+<p>speak, desktop notify, web SSE). <strong>Push replaces polling</strong> — the</p>
+<p>architectural fix the whole product has been waiting for; it also</p>
+<p>carries the §2 hardening (security findings, team obs, suggestions).</p>
+<ul><li>CLI: <code>friday4 analyze / correlate / briefing / narrative / report</code></li></ul>
+<p>(debug hatches only — NL paths land with them).</p>
+<p><strong>MCU test:</strong> &quot;Friday, analyze the integration cost between vivaha and</p>
+<p>MindWell.&quot; → cited, ranged estimate. ✅</p>
+<p><strong>What actually shipped (close-out):</strong> <code>research/</code>, <code>synthesis/</code> +</p>
+<p><code>reports.py</code> (daily/weekly), <code>briefing/</code>, <code>ambient/</code> with <strong>push wiring</strong></p>
+<p>(SecurityScanner, ProactiveSuggestionChannel, and collab Coordinator all</p>
+<p>publish onto one daemon-shared <code>AmbientBus</code>), web <strong>SSE</strong> <code>GET /api/events</code></p>
+<p>with dashboard EventSource (poll kept as fallback), and `friday4 research</p>
+<p>report --daily|--weekly<code>. See </code>WAVE_11_RESEARCH_REFLECTION.md` §9.</p>
+<hr>
+<h3>Wave 12 — Polish &amp; Scale ✅ SHIPPED (4–6 weeks)</h3>
+<p><strong>Why it serves the sentence:</strong> the *reliability floor* under every</p>
+<p>other clause — MCU Friday must never crash, never degrade ungracefully.</p>
+<ul><li>✅ Performance benchmarks (<code>tools/benchmarks.py</code>, V3 vs V4 where importable), full hermetic suite (~800), docs site (<code>tools/build_docs_site.py</code> → <code>site/</code>), installer (<code>install.sh</code>), V3→V4 migration guide (<code>docs/MIGRATION_GUIDE.md</code>), dogfooding pass (ongoing).</li><li>✅ <code>network/</code> stub folded here: <code>ssh</code> executor slots into <code>execution/</code></li></ul>
+<p>behind the same gate → sandbox → audit (extends *no task it can&#x27;t pick</p>
+<p>up* to remote machines).</p>
+<hr>
+<h3>Wave 13 — The Thinking Core (LLM reasoning) ✅ SHIPPED (2026-08)</h3>
+<p><strong>Why it serves the sentence:</strong> *understands everything* — the single</p>
+<p>highest-leverage change in the whole plan.</p>
+<ul><li>✅ One LLM provider in <code>reasoning/providers.py</code> that <strong>enhances</strong></li></ul>
+<p>deterministic answers (Law 6&#x27;s &quot;LLM enhances, never gates&quot;):</p>
+<ul><li>synthesizes across evidence (never without it — citations kept),</li><li>answers ambiguity honestly, never fabricates (&quot;I don&#x27;t know&quot; stays</li></ul>
+<p>real),</p>
+<ul><li>optional — no LLM → current honest deterministic floor.</li><li>✅ <strong>Default provider: the local 9router proxy</strong> (<code>localhost:20128/v1</code>,</li></ul>
+<p>configurable model — already proven in this workspace). Pure-stdlib</p>
+<p>client (<code>urllib</code>, reused <code>nlu.LLMClient</code>); SSE-trailer quirk handled</p>
+<p>at the client boundary. <code>FRIDAY_V4_LLM</code> env; provider pluggable;</p>
+<p>explicit opt-in.</p>
+<ul><li>✅ <code>friday4 ask</code> becomes conversation-capable (follow-ups, context —</li></ul>
+<p>history threaded into the synthesis prompt, Q&amp;A logged).</p>
+<ul><li>✅ Voice/talk/web inherit it automatically (one entry point via</li></ul>
+<p><code>nl_router</code>). §2 Wave 1 hardening (spoken roundtrip) rides along with</p>
+<p>the §2 pass.</p>
+<p><strong>MCU test:</strong> &quot;What&#x27;s the deal between vivaha and MindWell?&quot; →</p>
+<p>synthesized, cited, ranged — through <code>friday4 talk</code>, through voice. ✅</p>
+<p><strong>What actually shipped (close-out):</strong> <code>reasoning/providers.py</code></p>
+<p><code>llm_provider()</code> post-pass over the deterministic best (citations kept</p>
+<p>verbatim; evidence-less answers never sent to the LLM), engine</p>
+<p><code>answer(…, history=, llm=)</code>, conversation-capable <code>friday4 ask</code></p>
+<p>(history + Q&amp;A logging), <code>nl_router</code> history threading for talk/voice/</p>
+<p>web, 17 hermetic tests, wave doc. See</p>
+<p><code>WAVE_13_THINKING_CORE.md</code>.</p>
+<h3>Wave 13a — ONE NLU Point (LLM-first, rules fallback) ✅ SHIPPED (2026-08)</h3>
+<p><strong>Why it serves the sentence:</strong> *speaks natural language* — the</p>
+<p>directive: <strong>no regex/keyword matching anywhere in the input path.</strong></p>
+<p>Every surface (voice, <code>friday4 talk</code>, web chat) routes through ONE</p>
+<p>parser, <code>resolve()</code>, which is <strong>LLM-first</strong>; the deterministic rules</p>
+<p>are a fallback only when the LLM is absent/offline — never the product.</p>
+<ul><li><code>nlu/</code> package — the ONE point: <code>llm.py</code> (9router client),</li></ul>
+<p><code>intent.py</code> (LLM intent + slots, rules fallback), <code>entities.py</code> (LLM</p>
+<p>extraction, rules fallback), <code>confidence.py</code>, <code>resolver.py</code></p>
+<p>(utterance → canonical action, LLM-first).</p>
+<ul><li><code>understanding/</code> becomes a thin compatibility shim re-exporting</li></ul>
+<p><code>nlu</code> (keeps <code>missions/planner.py</code> + tests working).</p>
+<ul><li><code>nl_router</code>, <code>voice/router.py</code>, <code>web/dashboard.py</code>, <code>cli_nl</code> all call</li></ul>
+<p><code>resolve(text, llm=LLMClient())</code> — one point, no surface parses</p>
+<p>language itself.</p>
+<ul><li><code>FRIDAY_V4_LLM_URL</code> / <code>FRIDAY_V4_LLM_MODEL</code> / <code>FRIDAY_V4_LLM_KEY</code> env</li></ul>
+<p>config; explicit opt-in.</p>
+<ul><li>Deterministic fallback kept ONLY for the never-crash law (offline/</li></ul>
+<p>no-LLM), and clearly labeled fallback — never the primary path.</p>
+<p><strong>MCU test:</strong> &quot;Friday, what&#x27;s the deal between vivaha and MindWell?&quot;</p>
+<p>→ one parser, LLM intent → research → cited answer. No surface</p>
+<p>keyword-matches anything. ✅</p>
+<p><strong>What actually shipped (close-out):</strong> the <code>nlu/</code> package is the ONE</p>
+<p>point — <code>resolve(text, llm=LLMClient())</code> is LLM-first (9router client</p>
+<p>in <code>llm.py</code>), with the deterministic rules only as the never-crash</p>
+<p>fallback. Every surface is verified to route through it: <code>nl_router</code></p>
+<p>(<code>resolve(raw, llm=self.llm)</code>), <code>voice/router.py</code>, <code>web/dashboard.py</code></p>
+<p>(<code>TextCommandHandler(conn, llm=llm)</code>), <code>cli_nl.py</code> (<code>_default_llm()</code>).</p>
+<p><code>understanding/</code> is now a genuinely <strong>thin shim</strong> — the old Wave 9</p>
+<p>implementation submodules were removed; only the re-export <code>__init__</code></p>
+<p>remains (identity-checked by tests). The close-out also fixed the</p>
+<p>fallback&#x27;s confidence bug (an ambiguous utterance used to raise a</p>
+<p><code>TypeError</code> and crash <code>resolve()</code> — now it scores correctly and never</p>
+<p>crashes), threaded ASK/RESEARCH <code>target</code> through the resolver, taught</p>
+<p>the fallback to recognize <code>X vs Y</code> as research, and fixed the research</p>
+<p>layer bugs that blocked the NL correlate path (<code>_overlapping_names</code></p>
+<p>str/Path + <code>_strip_research_lead</code>). Test suite: <code>test_understanding.py</code></p>
+<p>rewritten as shim-contract tests + <code>test_nlu.py</code> + research/CLI tests —</p>
+<p>25 + 12 + research tests hermetic and green.</p>
+<hr>
+<h3>Wave 14 — Watch Me (demonstration capture) ✅ SHIPPED (2026-08)</h3>
+<p><strong>Why it serves the sentence:</strong> *no learning ceiling* — the &quot;copy any</p>
+<p>workflow&quot; clause made real.</p>
+<ul><li><strong>Raw material already exists:</strong> the audit log IS the demonstration</li></ul>
+<p>record — every action is logged (what, when, result). &quot;Watch me&quot; =</p>
+<p>tag a session on the audit trail and parameterize it into a skill.</p>
+<ul><li>✅ <code>watches</code> table (db migration v5) + <code>start_watch</code> / <code>end_watch</code> /</li></ul>
+<p><code>actions_between</code> — single-active watch, links the formed skill.</p>
+<ul><li>✅ <code>skills/watcher.py</code> <code>WatchRecorder</code> — explicit &quot;watch me&quot; capture</li></ul>
+<p>→ generalized <strong>shadow</strong> skill (repo context, consecutive-dup</p>
+<p>collapse, honest reuse-by-name: a same-name skill never swallows a</p>
+<p>fresh demonstration — it gets a versioned name).</p>
+<ul><li>✅ Repetition detection: <code>skills/noticer.py</code> <code>RepetitionNoticer</code></li></ul>
+<p>notices a repeated pattern before being asked (&quot;you run pytest after</p>
+<p>editing tests every time&quot;) and *offers* to form a skill — the MCU</p>
+<p>&quot;I noticed you do this every time&quot; moment. Pure read: nothing forms</p>
+<p>until the operator accepts.</p>
+<ul><li>✅ Generalization: steps carry repo context; shadow/dispatch match by</li></ul>
+<p>context (repo + command), not literal replays.</p>
+<ul><li>✅ NL paths through the ONE point: <code>Intent.SKILL</code> (LLM-first,</li></ul>
+<p>fallback words <code>watch me</code> / <code>learn this</code> / <code>stop watching</code>) →</p>
+<p><code>nl_router._skill_response</code> — &quot;watch me do this&quot;, &quot;learn this&quot;,</p>
+<p>&quot;stop watching&quot;. &quot;What did you learn&quot; is ASK → reasoning</p>
+<p><code>skills_provider</code> (cites real skills — Wiring Law).</p>
+<ul><li>✅ Daemon: <code>SkillLearner</code> runs the noticer *before* <code>learn()</code> so</li></ul>
+<p>offers surface in <code>last_report</code> (<code>offers</code>, <code>offer_lines</code>).</p>
+<p><strong>MCU test:</strong> five-moment #2 — skill formed from watching, shadowed,</p>
+<p>promoted with approval, auto-dispatches next time. ✅</p>
+<p><strong>What actually shipped (close-out):</strong> db migration v5 (<code>watches</code></p>
+<p>table + helpers), <code>WatchRecorder</code> (demonstration capture → generalized</p>
+<p>shadow skill), <code>RepetitionNoticer</code> (offers, pure read), repo-context</p>
+<p>matching in <code>_step_matches</code> (back-compat safe), <code>Intent.SKILL</code> through</p>
+<p>the ONE NLU point (LLM prompt + fallback + resolver target), <code>nl_router</code></p>
+<p>SKILL routing on every surface, <code>QuestionType.SKILLS</code> + <code>skills_provider</code></p>
+<p>in reasoning, <code>friday4 skills watch / watch-stop / noticed / dispatch</code>, the daemon</p>
+<p>noticer wiring, and the wave-10 lifecycle gap (shadow → verified now</p>
+<p>happens when a sweep crosses the match threshold; promotion stays</p>
+<p>operator-approved). Close-out: the NL accept loop — <code>Intent.ACCEPT</code></p>
+<p>(&quot;yes, run it&quot;) runs a dispatch suggestion&#x27;s next step through the gate</p>
+<p>(voice offers it in <code>proactive_notify</code>; NEVER steps stay denied without</p>
+<p><code>force</code>); <strong>multi-step acceptances become supervised missions</strong></p>
+<p>(dispatch → mission — first step runs now, the rest is tracked); and the</p>
+<p><strong>daemon <code>DispatchOfferer</code></strong> auto-offers matching skills on a schedule</p>
+<p>(desktop notify + durable <code>dispatch</code> ambient event, deduped, never</p>
+<p>executes). Stale <code>test_db</code> schema assertions fixed (v3 → v5) — the</p>
+<p>pre-existing <code>test_db</code> ×3 failures are gone. 33 hermetic tests in</p>
+<p><code>tests/test_wave14_watch_me.py</code>. See <code>WAVE_14_WATCH_ME.md</code>.</p>
+<hr>
+<h3>Wave 15 — One Presence (cross-surface continuity) ✅ SHIPPED (2026-08)</h3>
+<p><strong>Why it serves the sentence:</strong> *single presence* — the first clause.</p>
+<ul><li>✅ Shared context session: a conversation started in the terminal</li></ul>
+<p>continues on the web dashboard, in voice, and on the phone (session</p>
+<p>state in the DB, not per-surface).</p>
+<ul><li>✅ Ambient push from Wave 11 reaches every surface; mobile transport</li></ul>
+<p>via the durable queue.</p>
+<ul><li>✅ Web dashboard chat polish: the browser hydrates today&#x27;s shared</li></ul>
+<p>thread (uses <code>nl_router</code> — one command language everywhere).</p>
+<p>Complements §2 Wave 7 hardening.</p>
+<ul><li>✅ Mobile transport: <code>PushNotificationService</code> (cursor-persisted</li></ul>
+<p>durable-queue consumer) + companion API (<code>mobile/api.py</code> — status /</p>
+<p>conversation / talk / SSE) + <code>friday4 mobile serve|push</code> **and a</p>
+<p>daemon-scheduled <code>MobilePushWorker</code>** (drains the queue every</p>
+<p><code>mobile_push_interval</code>, default 60s — the phone gets pushed without</p>
+<p>manual <code>friday4 mobile push</code>; <code>friday4 daemon start</code> exposes</p>
+<p><code>--no-mobile-push</code> / <code>--mobile-push-interval</code> /</p>
+<p><code>--mobile-push-priority</code>). <strong>Operator-configurable destination:</strong> the</p>
+<p>daemon&#x27;s worker takes a <code>--mobile-push-hook &quot;&lt;shell command&gt;&quot;</code></p>
+<p>(each notification&#x27;s JSON piped to its stdin — e.g. a curl to</p>
+<p>ntfy.sh) or <code>--mobile-push-file &lt;path&gt;</code> (JSONL outbox) — or the</p>
+<p><code>mobile_push</code> section of <code>~/.friday/v4_config.json</code> (fields</p>
+<p><code>hook</code> / <code>file_path</code> / <code>interval</code> / <code>priority</code> / <code>enabled</code>;</p>
+<p><code>FRIDAY_V4_MOBILE_PUSH_*</code> env). The React Native app plugs in via</p>
+<p>the local HTTP API — the phone is another surface of the same</p>
+<p>Friday, not a separate product.</p>
+<ul><li>✅ Ambient surface channels: wildcard subscribe (<code>bus.subscribe(&quot;*&quot;)</code>),</li></ul>
+<p><code>speak_channel</code> (voice, CRITICAL) + <code>desktop_channel</code> (banner,</p>
+<p>IMPORTANT+) wired by <code>AmbientWorker.wire_channels</code> in the daemon.</p>
+<p><strong>MCU test:</strong> ask &quot;what did we talk about this morning?&quot; from voice and</p>
+<p>get the conversation from the terminal session. ✅</p>
+<p><strong>What actually shipped (close-out):</strong> **slice 1 — shared context</p>
+<p>session**: <code>db.get_or_create_shared_session</code> (one <code>surface=&#x27;shared&#x27;</code></p>
+<p>session per UTC day; all conversational loggers — <code>nl_router</code>,</p>
+<p><code>cli_ask</code>, <code>persona/learn.record_statement</code> — join it, so voice/web/</p>
+<p>mobile inherit through <code>TextCommandHandler</code>); <strong>time-window recall</strong> in</p>
+<p><code>conversation_provider</code> (&quot;this morning / afternoon / evening / tonight /</p>
+<p>today / yesterday / last night / this week / last week&quot; via</p>
+<p><code>db.recent_exchanges_since</code>; empty window stays an honest unknown);</p>
+<p>classifier reorder (CONVERSATION precedes ACTIVITY so &quot;what did we</p>
+<p>talk about yesterday&quot; stays a conversation question). **Slice 2 — web</p>
+<p>chat polish**: <code>web/dashboard.conversation_state()</code> + `GET</p>
+<p>/api/conversation` + chat hydrate (the browser resumes the shared</p>
+<p>thread). <strong>Slice 3 — ambient push to every surface</strong>: wildcard</p>
+<p>subscribe + <code>speak_channel</code>/<code>desktop_channel</code> + daemon</p>
+<p><code>AmbientWorker.wire_channels</code>. <strong>Slice 4 — mobile transport</strong>: closed</p>
+<p>the Wave 7 stub — <code>mobile/push.py</code> (<code>PushNotificationService</code>,</p>
+<p><code>file_transporter</code>), <code>mobile/api.py</code> (<code>MobileAPI</code>,</p>
+<p><code>create_api_server</code>), <code>cli_mobile.py</code> (<code>friday4 mobile serve|push</code>),</p>
+<p>status probe, and <strong><code>daemon.MobilePushWorker</code></strong> (the daemon drains the</p>
+<p>durable queue on a schedule — <code>DaemonConfig.mobile_push*</code> fields,</p>
+<p><code>friday4 daemon start</code> flags, <code>mobile</code> status row; hermetic daemon</p>
+<p>tests disable it like every other component). **Close-out 2 —</p>
+<p>operator-configurable push hook:** <code>mobile/push.command_transporter</code></p>
+<p>(shell command, notification JSON on stdin — never raises, never</p>
+<p>wedges the queue) + <code>config.MobilePushConfig</code> (<code>mobile_push</code> section</p>
+<p>of <code>~/.friday/v4_config.json</code> + <code>FRIDAY_V4_MOBILE_PUSH_*</code> env) +</p>
+<p><code>MobilePushWorker(hook=…, file_path=…)</code> + `friday4 daemon start</p>
+<p>--mobile-push-hook/--mobile-push-file` (CLI flag wins, config file</p>
+<p>fills the rest). <strong>Tests</strong>: 13 hermetic</p>
+<p>(<code>test_wave15_one_presence.py</code>) + 38 hermetic</p>
+<p>(<code>test_wave15_transport.py</code> incl. the hook suite) — full suite green.</p>
+<p>See <code>WAVE_15_ONE_PRESENCE.md</code>.</p>
+<hr>
+<h3>Wave 16 — Capability &amp; Self-Extension (5–6 weeks)</h3>
+<p><strong>Why it serves the sentence:</strong> *no task it can&#x27;t pick up* — the</p>
+<p>registry that makes composition possible.</p>
+<ul><li><strong>Capability registry:</strong> every executor, provider, skill, and surface</li></ul>
+<p>registered with (intent, params, permission level, evidence rules).</p>
+<p>Friday *knows what it can do* — and can say so. (The §2 hardening</p>
+<p>items are the first entries that prove the registry.)</p>
+<ul><li><strong>Composition:</strong> &quot;figure out why the build fails and fix it&quot; →</li></ul>
+<p>decompose → research → execute through the gate → verify → report</p>
+<p>with evidence. Composing existing capabilities, none written for that</p>
+<p>sentence.</p>
+<ul><li><strong>Self-extension:</strong> learning a new skill registers a new capability —</li></ul>
+<p>Friday grows abilities without code (Laws 2 + 7 meet).</p>
+<ul><li><strong>Reality-first verification:</strong> claims about its own actions cite the</li></ul>
+<p>audit trail.</p>
+<p><strong>MCU test:</strong> five-moment #5 — capability composition, end-to-end,</p>
+<p>speech-only. ✅</p>
+<hr>
+<h3>Wave 17 — Adaptive Identity (3–4 weeks)</h3>
+<p><strong>Why it serves the sentence:</strong> *adapts its personality to you* — the</p>
+<p>final clause, the emotional core.</p>
+<ul><li><strong>Tone-direction:</strong> &quot;be more casual, Tony&quot; shifts tone this session</li></ul>
+<p>*and persists*. &quot;Be more formal&quot;, &quot;call me Lakshay&quot;, &quot;less chatter&quot; —</p>
+<p>all explicit-consent, all remembered, all explainable (&quot;I&#x27;m briefer</p>
+<p>because you asked me to be&quot;).</p>
+<ul><li><strong>Identity profile as a view over facts</strong> (Standard Law 8): persona =</li></ul>
+<p>stored preferences + relationship depth + tone direction — never a</p>
+<p>hidden hardcoded personality.</p>
+<ul><li><strong>Morning/evening briefing tone</strong> adapts to depth *and* explicit</li></ul>
+<p>direction (Wave 11 briefing + Wave 10 relationship + this). §2 Wave 10</p>
+<p>hardening (meaning extraction) rides along.</p>
+<ul><li>Gradual, explainable shifts — never a sudden personality change.</li></ul>
+<p><strong>MCU test:</strong> five-moment #4 — &quot;be more casual, Tony&quot; → different tone</p>
+<p>this session, persisted next session, explainable why. ✅</p>
+<hr>
+<h3>Wave 18 — Claude Code Hands ✅ SHIPPED (2026-08)</h3>
+<p><strong>Why it serves the sentence:</strong> *no task it can&#x27;t pick up* — the</p>
+<p>composition clause, made real with an agent that can actually do the</p>
+<p>work.</p>
+<ul><li>✅ <strong><code>executor:claude</code></strong> — a new gated executor whose command IS the</li></ul>
+<p>natural-language task. It runs the local Claude Code CLI</p>
+<p>(<code>claude -p &quot;&lt;task&gt;&quot; --output-format json --model fable</code></p>
+<p><code>--allowedTools &quot;Bash Read Edit Write Glob Grep&quot;</code>) inside the same</p>
+<p>gate → sandbox → audit pipeline as every other executor: the task</p>
+<p>text is classified (CONFIRM default; destructive *phrases* like</p>
+<p>&quot;push my changes&quot; / &quot;deploy to production&quot; escalate to NEVER), the</p>
+<p>child env is sanitized, stdin is /dev/null, the run is timeout-bounded</p>
+<p>(default 600s, <code>FRIDAY_V4_CLAUDE_TIMEOUT</code>), and the JSON result is</p>
+<p>parsed back (is_error / terminal_reason / permission_denials). A</p>
+<p>missing <code>claude</code> CLI degrades to a structured failure — never a crash.</p>
+<ul><li>✅ <strong>NL routing</strong> — &quot;figure out why the build fails and fix it&quot;,</li></ul>
+<p>&quot;fix the failing test&quot;, &quot;debug the memory leak&quot;, &quot;investigate the</p>
+<p>crash&quot; all resolve to the claude executor (LLM prompt + deterministic</p>
+<p>fallback both know the marker phrases). Concrete commands (&quot;git</p>
+<p>status&quot;, &quot;run the tests&quot;, &quot;read README.md&quot;) stay instant on Friday&#x27;s</p>
+<p>own executors — Claude is the *hands for complex work*, not a toll</p>
+<p>gate on every command.</p>
+<ul><li>✅ CLI + registry: <code>friday4 execute claude &quot;&lt;task&gt;&quot;</code> and</li></ul>
+<p><code>executor:claude</code> in the capability registry (&quot;what can you do&quot;</p>
+<p>tells the truth).</p>
+<p><strong>MCU test:</strong> &quot;Friday, figure out why the build fails and fix it.&quot; →</p>
+<p>Friday delegates to Claude Code through the gate, audited, result</p>
+<p>surfaced. ✅</p>
+<p><strong>What actually shipped (close-out):</strong> <code>ClaudeCodeExecutor</code> in</p>
+<p><code>execution/executors.py</code> (registered, exported, gated CONFIRM with</p>
+<p>phrase-level NEVER sniffing), sandbox stdin=/dev/null, resolver</p>
+<p>agentic-goal routing (+LLM prompt <code>claude</code> action_type, fallback</p>
+<p>marker scoring), <code>_run_execution</code> surfaces Claude&#x27;s result text, CLI</p>
+<p>choice + capability entry, 25 hermetic tests</p>
+<p>(<code>tests/test_claude_executor.py</code> with a fake <code>claude</code> binary).</p>
+<p><strong>Close-out 2 — Claude Code as the mission planner:</strong> <code>ClaudePlanner</code></p>
+<p>(<code>missions/claude_planner.py</code>) fills the <code>Planner.enhancer</code> hook —</p>
+<p>agentic goals (&quot;ship the auth refactor by Friday&quot;) decompose through</p>
+<p><code>claude -p</code> with <strong>read-only</strong> tools (`--allowedTools &quot;Read Glob</p>
+<p>Grep&quot;`), gated (NEVER goals refused), sandboxed, and audited</p>
+<p>(<code>action_type=&quot;claude_plan&quot;</code>); any failure → the deterministic</p>
+<p>planner stands. Opt-in via <code>FRIDAY_V4_CLAUDE_PLANNER=1</code> (Wave 13&#x27;s</p>
+<p><code>FRIDAY_V4_LLM</code> convention — hermetic by default), wired into</p>
+<p><code>nl_router._create_mission</code> <strong>and</strong> <code>_replan_response</code> (&quot;replan this</p>
+<p>mission&quot; / &quot;change the plan&quot; — talk/voice/web), with a single</p>
+<p><code>make_planner(cwd, conn)</code> construction point that <code>MissionEngine</code></p>
+<p>uses for its default planner, so <code>create()</code> and <code>replan()</code> both</p>
+<p>decompose through Claude Code under the same opt-in. **Close-out 3</p>
+<p>(W19 slice 0) — the Wiring Law CLI:** `friday4 mission</p>
+<p>create|list|status|replan|advance|start|pause|cancel|complete|delete`</p>
+<p>(<code>cli_missions.py</code>) exposes the layer&#x27;s debug hatch through the SAME</p>
+<p><code>make_planner</code> point (Claude Code decomposition under the same opt-in;</p>
+<p><code>--json</code> for scripting). +27 hermetic tests</p>
+<p>(<code>tests/test_claude_planner.py</code>) + 11 hermetic CLI tests</p>
+<p>(<code>tests/test_cli_missions.py</code>). See <code>WAVE_18_CLAUDE_HANDS.md</code> §4.5.</p>
+<hr>
+<h3>Wave 19 — Polish, Scale &amp; Dogfood ✅ SHIPPED (2026-08)</h3>
+<p><strong>Why it serves the sentence:</strong> the sentence, proven under real use.</p>
+<ul><li><strong>✅ Slice 1 — the MCU acceptance harness</strong> (<code>tests/test_mcu_acceptance.py</code>):</li></ul>
+<p>the five proof moments driven through the shared NL brain</p>
+<p>(<code>nl_router.TextCommandHandler</code> — the path talk/voice/web/mobile</p>
+<p>route through), no flags, hermetic (tmp DBs, fake <code>claude</code>, seeded</p>
+<p>repos). This is the instrument the exit condition is measured by.</p>
+<ul><li><strong>✅ Slice 1 — the first two most-annoying bugs fixed:</strong> (1) the</li></ul>
+<p>deterministic NLU fallback classified the MCU deep-reasoning</p>
+<p>sentence &quot;what&#x27;s the deal between X and Y&quot; as ASK instead of</p>
+<p>RESEARCH (offline machines could never research); (2) the research</p>
+<p>router split &quot;between … and …&quot; so the research lead became an empty</p>
+<p>operand (<code>correlate(&quot;&quot;, Y)</code>). Both fixed (<code>nlu/intent.py</code></p>
+<p>tie-break + <code>nl_router._extract_pair</code>), regression-guarded by the</p>
+<p>harness.</p>
+<ul><li><strong>✅ Slice 2 — the remaining three most-annoying bugs fixed:</strong> (3)</li></ul>
+<p>the &quot;with&quot; variant (&quot;what&#x27;s the deal with X and Y&quot;) also</p>
+<p>classifies ASK — the research pair tie-break now covers &quot;with …</p>
+<p>and …&quot; and <code>_extract_pair</code> handles the &quot;with&quot; separator; (4)</p>
+<p>failed commands hid *why* (&quot;git status&quot; in a non-repo said only</p>
+<p>&quot;That didn&#x27;t work — failed.&quot; — <code>_run_execution</code> now surfaces the</p>
+<p>first line of stderr); (5) &quot;how&#x27;s it going&quot; with zero missions</p>
+<p>answered &quot;I don&#x27;t know yet&quot; — <code>mission_provider</code> now says honestly</p>
+<p>&quot;You don&#x27;t have a mission in flight…&quot; with a pointer to start one.</p>
+<p>All regression-guarded (harness + <code>test_nl_router</code> +</p>
+<p><code>test_reasoning</code>).</p>
+<ul><li>**✅ Slice 3 — the floor verified, and the tools themselves</li></ul>
+<p>dogfooded:** <code>tools/benchmarks.py</code> measured all seven daily-use ops</p>
+<p>(fixing two silent <code>n/a</code> bugs: <code>answer(conn, text)</code> arg order and</p>
+<p>the collab CRDT wire shape); <code>tools/build_docs_site.py</code> → 23-page</p>
+<p><code>site/</code> with zero broken links; <code>install.sh</code> verified end-to-end in</p>
+<p>a throwaway venv (doctor/talk/status green) and its missing</p>
+<p>executable bit fixed (<code>./install.sh</code> now works); the migration</p>
+<p>guide&#x27;s every command claim verified against the real <code>friday4</code></p>
+<p>CLI. Suite: <strong>1085 hermetic tests green.</strong></p>
+<p><strong>Exit condition (met):</strong> the sentence is *true in daily use* — single</p>
+<p>presence, natural language, learning ceiling gone, any task, personality</p>
+<p>that adapts. The five MCU acceptance tests pass through the shared NL</p>
+<p>brain (speech-only surface), the five most annoying bugs are fixed, and</p>
+<p>the floor (benchmarks / docs site / installer / migration guide / 1085</p>
+<p>tests) is verified. Everything after this is refinement, not building.</p>
+<p>See <code>WAVE_19_POLISH_DOGFOOD.md</code>.</p>
+<hr>
+<h2>4. Wave dependency map</h2>
+<pre><code class="language-">1-5,7,9,10  ✅ shipped — the surfaces + safe core
+    │
+    ▼
+11 Research/Reflection ──► 12 Polish (floor)
+    │                          │
+    ▼                          ▼
+13 Thinking Core ──► 14 Watch Me ──► 15 One Presence ──► 16 Capability
+(LLM reasoning)     (demo capture)    (continuity)      &amp; Self-Extension
+                                                          │
+                                                          ▼
+                                                   17 Adaptive Identity
+                                                          │
+                                                          ▼
+                                                   18 Claude Code Hands
+                                                   (= complex tasks)
+                                                          │
+                                                          ▼
+                                                   19 Polish &amp; Dogfood
+                                                    (= sentence true)</code></pre>
+<ul><li><strong>11 → 13:</strong> research feeds the LLM richer evidence; the LLM makes</li></ul>
+<p>research synthesis smarter. 11 also carries most §2 hardening (push</p>
+<p>for security/team/suggestions).</p>
+<ul><li><strong>13 → 14:</strong> the LLM makes demonstration capture generalize (&quot;what</li></ul>
+<p>were you doing?&quot;) — but 14 works without it (audit-log based).</p>
+<ul><li><strong>11 → 15:</strong> ambient push + durable queue are the transport for one</li></ul>
+<p>presence.</p>
+<ul><li><strong>16 ← everything:</strong> the registry only makes sense once capabilities</li></ul>
+<p>exist to register; the §2 hardening items are its first entries.</p>
+<ul><li><strong>17 ← 10, 11, 13:</strong> identity needs relationship depth (10), briefing</li></ul>
+<p>(11), and conversation (13) to adapt *well*.</p>
+<hr>
+<h2>5. The rules that never bend</h2>
+<p>1. <strong>The Standard judges everything.</strong> Ten laws, five MCU tests, one</p>
+<p>definition of done — in <code>MCU_FRIDAY_STANDARD.md</code>. A feature that</p>
+<p>fails the MCU test is rejected, however clever.</p>
+<p>2. <strong>NL path in the same change</strong> (Law 1 + Wiring Law). No CLI-only</p>
+<p>capability, ever — including hardening of already-shipped waves.</p>
+<p>3. <strong>Evidence or silence</strong> — no answer without evidence, no action</p>
+<p>without audit. Unchanged since Wave 9.</p>
+<p>4. <strong>Never crash, degrade silently, hermetic tests.</strong> Unchanged since</p>
+<p>Wave 1.</p>
+<p>5. <strong>V4 is the product; V3 is read-only heritage.</strong> Unchanged forever.</p>
+<p>6. <strong>Cut scope over cutting laws.</strong> A wave that can&#x27;t satisfy the</p>
+<p>standard in its time budget shrinks — it never bends the standard.</p>
+<hr>
+<h2>6. Definition of done for a wave</h2>
+<ul><li>[ ] The MCU acceptance test(s) for that wave pass through **speech</li></ul>
+<p>only** — no flags, no syntax, no CLI-only path</p>
+<ul><li>[ ] Natural-language entry point(s) shipped in the same change</li><li>[ ] Evidence/audit laws hold (nothing fabricated, nothing unlogged)</li><li>[ ] Hermetic tests added (suite grows; nothing red)</li><li>[ ] Capability registered (Wave 16+), tone data-driven (Wave 17+)</li><li>[ ] Any §2 hardening items that belong to this wave are closed</li><li>[ ] The wave doc updated with &quot;What Actually Shipped&quot; + what was</li></ul>
+<p>learned (the wave recipe)</p>
+<ul><li>[ ] The sentence is measurably more true than before the wave</li></ul>
+<hr>
+<h2>7. Sentence progress tracker</h2>
+<blockquote>Updated at the end of every wave. &quot;Today&quot; is where we are now; the</blockquote>
+<blockquote>waves column is what moves the clause.</blockquote>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>l</th><th>a</th><th>u</th><th>s</th><th>e</th><th></th><th>|</th><th></th><th>T</th><th>o</th><th>d</th><th>a</th><th>y</th><th></th><th>|</th><th></th><th>M</th><th>o</th><th>v</th><th>e</th><th>d</th><th></th><th>b</th><th>y</th><th></th><th>|</th><th></th><th>D</th><th>o</th><th>n</th><th>e</th><th></th><th>w</th><th>h</th><th>e</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>single presence</strong></td><td><strong>W15 SHIPPED</strong> — one shared session follows you across surfaces (talk/ask/voice/web/mobile) + time-window recall + web-chat hydrate + ambient push to every surface + mobile transport</td><td>—</td><td>One session follows you across surfaces; &quot;what did we talk about this morning&quot; works from any surface ✅</td><td></td></tr><tr><td></td><td><strong>speaks natural language</strong></td><td><code>talk</code>/<code>ask</code>/voice reach the brain through ONE <code>resolve()</code> (Wave 13a); §2 hardening shipped NL entry points for security, memory, collab, and desktop (skills already had SKILL/ACCEPT)</td><td>§2 hardening (every built wave) + every new wave (Law 1)</td><td>No capability requires a flag or syntax — the MCU test passes for every feature</td><td></td></tr><tr><td></td><td><strong>no learning ceiling</strong></td><td>Facts + shadow-first skills scaffold; <strong>Watch Me shipped</strong> (watch → shadow skill, repetition notices, repo-context generalization)</td><td>W15→W16 (registry self-extension)</td><td>Anything demonstrable is learnable; skills generalize and auto-dispatch</td><td></td></tr><tr><td></td><td><strong>no task it can&#x27;t pick up</strong></td><td>Shell/git/file/python/testing executors; <strong>W16 SHIPPED (registry)</strong>; <strong>W18 SHIPPED (Claude Code hands — complex goals delegated, simple commands stay native)</strong></td><td>W12 (network executors), W13 (LLM decompose), W16 (registry), W18 (agentic delegation)</td><td>&quot;figure out why the build fails and fix it&quot; works, speech-only ✅</td><td></td></tr><tr><td></td><td><strong>adapts its personality</strong></td><td>Depth → tone only; no explicit direction</td><td><strong>W17 SHIPPED</strong> (tone-direction: persists, explainable)</td><td>&quot;be more casual, Tony&quot; shifts tone now, persists, explainable why ✅</td><td></td></tr></tbody></table>
+<p>*The sentence is the product. The waves are just the route to it.*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

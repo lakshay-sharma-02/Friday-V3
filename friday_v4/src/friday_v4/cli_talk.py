@@ -85,9 +85,9 @@ def _print_help():
 
 def cmd_talk(args: argparse.Namespace):
     """Start interactive voice session with Friday."""
+    from .voice.core import config_from_file
     from .voice.pipeline import VoicePipeline
     from .voice.router import VoiceRouter
-    from .voice.core import config_from_file
 
     _print_logo()
 
@@ -114,7 +114,17 @@ def cmd_talk(args: argparse.Namespace):
         config.tts_speed = args.tts_speed
 
     pipeline = VoicePipeline(config)
-    router = VoiceRouter(pipeline, enable_proactive=True)
+    # Wire the conversation log: spoken utterances persist verbatim so
+    # the reasoning conversation provider and persona identity answers
+    # read what the operator *said* (Wiring Law — voice is a first-class
+    # entrypoint into the brain). Guarded: never crash without a DB.
+    voice_conn = None
+    try:
+        from . import db
+        voice_conn = db.connect()
+    except Exception:
+        voice_conn = None
+    router = VoiceRouter(pipeline, enable_proactive=True, conn=voice_conn)
 
     pipeline.on_transcription = lambda text: _print_you(text)
     pipeline.on_state_change = lambda s: _print_state(s.value)
@@ -123,6 +133,11 @@ def cmd_talk(args: argparse.Namespace):
 
     if not pipeline.start():
         _print_error("Failed to start voice pipeline. Run 'friday4 voice setup' to diagnose.")
+        if voice_conn is not None:
+            try:
+                voice_conn.close()
+            except Exception:
+                pass
         return 1
 
     def _handle_text(text: str) -> None:
@@ -191,6 +206,11 @@ def cmd_talk(args: argparse.Namespace):
             _unbind_push_to_talk()
         pipeline.stop()
         router.cleanup()
+        if voice_conn is not None:
+            try:
+                voice_conn.close()
+            except Exception:
+                pass
         print(f"\n{_DIM}  Voice session ended.{_RESET}\n")
 
     return 0
@@ -325,9 +345,11 @@ def cmd_voice_setup(args: argparse.Namespace):
         if tts and tts.is_available:
             print(f"{_GREEN}✅ {tts.active_provider_name}{_RESET}")
             for p in tts.list_providers():
-                status = f"{_GREEN}available{_RESET}" if p["available"] else f"{_RED}unavailable{_RESET}"
+                status = (f"{_GREEN}available{_RESET}" if p["available"]
+                          else f"{_RED}unavailable{_RESET}")
                 internet = " [internet]" if p["requires_internet"] else ""
-                print(f"     {_DIM}{p['name']}: {status} (quality: {p['quality']}){internet}{_RESET}")
+                print(f"     {_DIM}{p['name']}: {status} "
+                      f"(quality: {p['quality']}){internet}{_RESET}")
         else:
             print(f"{_RED}❌ No TTS available{_RESET}")
     except Exception as exc:
@@ -458,14 +480,72 @@ def cmd_voice_test(args: argparse.Namespace):
 # ---------------------------------------------------------------------------
 
 
+#: Named subcommands (kept as debug hatches behind the ONE command).
+_SUBCOMMANDS = frozenset({
+    "talk", "voice", "daemon", "doctor", "desktop", "proactive",
+    "intelligence", "security", "web", "collab", "status", "execute",
+    "research", "ask", "memory", "persona", "relationship", "skills",
+    "autonomy", "capability", "mobile", "mission", "ide",
+})
+
+
+def _ensure_presence() -> None:
+    """Best-effort: start the daemon when it isn't already running.
+
+    The MCU law: ``friday4`` alone IS the product — one command that
+    brings the presence up (observer, autonomy loop, security, skills)
+    and then drops into the natural-language session. Only runs on an
+    interactive terminal (never during tests/scripts — stdin is not a
+    tty there, and spawning a daemon would be a side effect tests must
+    not trigger); a failure to start is logged and the session proceeds
+    regardless.
+    """
+    import sys as _sys
+    if not _sys.stdin.isatty():
+        return
+    try:
+        import subprocess
+        from .daemon import is_running
+        if is_running():
+            return
+        subprocess.Popen(
+            [_sys.executable, "-m", "friday_v4.cli_talk", "daemon", "start"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug(f"presence start skipped: {exc}")
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Main entry point for the integrated `friday4` CLI."""
+    """Main entry point for the integrated `friday4` CLI.
+
+    THE ONE COMMAND: ``friday4`` alone starts the presence (daemon) and
+    opens the natural-language session; ``friday4 "run the tests"``
+    routes any phrase through the shared NL brain (talk). The named
+    subcommands remain as debug hatches behind the same entry point —
+    the product never needs them.
+    """
     logging.basicConfig(level=logging.WARNING,
                         format="%(levelname)s: %(message)s")
 
+    argv = list(sys.argv[1:] if argv is None else argv)
+    bare = not argv
+    if bare:
+        argv = ["talk"]            # `friday4` → presence + interactive NL
+    else:
+        # THE ONE COMMAND: `friday4 "run the tests"` and flags-first
+        # forms (`friday4 --force "run the tests"`, `friday4 --json "git
+        # status"`) all route through the shared NL brain (talk). The
+        # first non-flag token decides: a named subcommand keeps its
+        # debug hatch; anything else is a natural-language phrase.
+        first_word = next((t for t in argv if not t.startswith("-")), None)
+        if first_word is not None and first_word not in _SUBCOMMANDS:
+            argv = ["talk"] + argv
+
     parser = argparse.ArgumentParser(
         prog="friday4",
-        description="Friday V4 — Voice Interface & Desktop Control",
+        description="Friday V4 — the one command. Say it like a person.",
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -487,9 +567,63 @@ def main(argv: list[str] | None = None) -> int:
     from .cli_intelligence import build_intelligence_parser
     build_intelligence_parser(subparsers)
 
+    from .cli_security import build_security_parser
+    build_security_parser(subparsers)
+
+    from .cli_web import build_web_parser
+    build_web_parser(subparsers)
+
+    from .cli_collab import build_collab_parser
+    build_collab_parser(subparsers)
+
+    from .cli_status import build_db_parser
+    build_db_parser(subparsers)
+
+    from .cli_execute import build_execute_parser
+    build_execute_parser(subparsers)
+
+    from .cli_nl import build_talk_parser as build_nl_talk_parser
+    build_nl_talk_parser(subparsers)
+
+    from .cli_ask import build_ask_parser
+    build_ask_parser(subparsers)
+
+    from .cli_memory import build_memory_parser
+    build_memory_parser(subparsers)
+
+    from .cli_persona import build_persona_parser
+    build_persona_parser(subparsers)
+
+    from .cli_relationship import build_relationship_parser
+    build_relationship_parser(subparsers)
+
+    from .cli_skills import build_skills_parser
+    build_skills_parser(subparsers)
+
+    from .cli_autonomy import build_autonomy_parser
+    build_autonomy_parser(subparsers)
+
+    from .cli_capability import build_capability_parser
+    build_capability_parser(subparsers)
+
+    from .cli_mobile import build_mobile_parser
+    build_mobile_parser(subparsers)
+
+    from .cli_missions import build_mission_parser
+    build_mission_parser(subparsers)
+
+    from .cli_ide import build_ide_parser
+    build_ide_parser(subparsers)
+
+    # NOTE: `research` is registered by cli_nl.build_talk_parser (the
+    # `friday4 talk` NL surface), so it must NOT also be registered from
+    # cli_research here — a duplicate `add_parser("research")` raised
+    # "conflicting subparser" on every friday4 invocation.
     args = parser.parse_args(argv)
 
     if hasattr(args, "func"):
+        if bare:
+            _ensure_presence()
         return args.func(args) or 0
 
     parser.print_help()
@@ -497,34 +631,14 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def build_talk_parser(subparsers) -> None:
-    parser = subparsers.add_parser(
-        "talk", help="Start interactive voice session",
-        description="Talk to Friday using your voice. Say 'Hey Friday' or press a key.",
-    )
-    parser.add_argument("--push-to-talk", "-p", action="store_true",
-                        help="Use push-to-talk mode (hold key to talk)")
-    parser.add_argument("--push-to-talk-key", "-k", default="ctrl+space",
-                        help="Push-to-talk hotkey, e.g. ctrl+shift+m "
-                             "(default: ctrl+space)")
-    parser.add_argument("--tts-provider", "-t", default=None,
-                        choices=["auto", "piper", "edge", "kokoro", "pyttsx3"],
-                        help="TTS provider (default: config or auto: "
-                             "piper, then edge, then kokoro)")
-    parser.add_argument("--tts-voice", default=None,
-                        help="Voice name/ID override (e.g. af_bella)")
-    parser.add_argument("--no-chimes", action="store_true",
-                        help="Disable audio cue chimes")
-    parser.add_argument("--silero-vad", "-s", action="store_true",
-                        help="Use Silero VAD (better accuracy, more CPU)")
-    parser.add_argument("--silence-timeout", type=float, default=None,
-                        help="Seconds of silence before stopping recording (default: 2.0)")
-    parser.add_argument("--max-utterance", type=float, default=None,
-                        help="Max utterance length in seconds (default: 30.0)")
-    parser.add_argument("--hotword-sensitivity", type=float, default=None,
-                        help="Hotword sensitivity 0.0-1.0 (default: 0.7)")
-    parser.add_argument("--tts-speed", type=float, default=None,
-                        help="TTS speech rate 0.5-2.0 (default: 1.15)")
-    parser.set_defaults(func=cmd_talk)
+    """`friday4 talk` — the Wave 9 brain surface (registered by cli_nl).
+
+    The original voice session here superseded by the NL surface; it now
+    lives under `friday4 voice talk` (see build_voice_parser). Registering
+    two "talk" subparsers crashed every friday4 invocation (argparse:
+    conflicting subparser)."""
+
+
 
 
 def build_voice_parser(subparsers) -> None:
@@ -533,6 +647,41 @@ def build_voice_parser(subparsers) -> None:
         description="Manage Friday's voice interface: setup, status, test.",
     )
     voice_sub = voice_parser.add_subparsers(dest="voice_command")
+
+    # `voice talk` = the original `talk` (voice session). The Wave 9 NL
+    # surface owns `friday4 talk`; the voice session lives here so both
+    # surfaces exist without the subparser conflict that crashed the CLI.
+    talk_parser = voice_sub.add_parser(
+        "talk", help="Interactive voice session (hotword + push-to-talk)",
+        description="Talk to Friday using your voice. Say 'Hey Friday' or "
+                    "press the push-to-talk key.")
+    talk_parser.add_argument("--push-to-talk", "-p", action="store_true",
+                             help="Use push-to-talk mode (hold key to talk)")
+    talk_parser.add_argument("--push-to-talk-key", "-k", default="ctrl+space",
+                             help="Push-to-talk hotkey, e.g. ctrl+shift+m "
+                                  "(default: ctrl+space)")
+    talk_parser.add_argument("--tts-provider", "-t", default=None,
+                             choices=["auto", "piper", "edge", "kokoro",
+                                      "pyttsx3"],
+                             help="TTS provider (default: config or auto: "
+                                  "piper, then edge, then kokoro)")
+    talk_parser.add_argument("--tts-voice", default=None,
+                             help="Voice name/ID override (e.g. af_bella)")
+    talk_parser.add_argument("--no-chimes", action="store_true",
+                             help="Disable audio cue chimes")
+    talk_parser.add_argument("--silero-vad", "-s", action="store_true",
+                             help="Use Silero VAD (better accuracy, more CPU)")
+    talk_parser.add_argument("--silence-timeout", type=float, default=None,
+                             help="Seconds of silence before stopping "
+                                  "recording (default: 2.0)")
+    talk_parser.add_argument("--max-utterance", type=float, default=None,
+                             help="Max utterance length in seconds "
+                                  "(default: 30.0)")
+    talk_parser.add_argument("--hotword-sensitivity", type=float, default=None,
+                             help="Hotword sensitivity 0.0-1.0 (default: 0.7)")
+    talk_parser.add_argument("--tts-speed", type=float, default=None,
+                             help="TTS speech rate 0.5-2.0 (default: 1.15)")
+    talk_parser.set_defaults(func=cmd_talk)
 
     setup_parser = voice_sub.add_parser("setup", help="Run audio setup wizard")
     setup_parser.set_defaults(func=cmd_voice_setup)

@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("friday_v4.proactive.priority")
 

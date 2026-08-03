@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 

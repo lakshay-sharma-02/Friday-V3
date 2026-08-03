@@ -1,38 +1,35 @@
-"""Mobile Companion — Push notifications, quick status, mobile voice input.
+"""Mobile Companion — push transport, quick status, NL talk from your phone.
 
-Bridge between Friday's desktop daemon and your phone. Provides a REST/WS API
-for mobile clients, push notification transport, and voice input from mobile.
+Wave 15 closes the stub: the phone becomes another surface of the SAME
+Friday. The transport is pure-stdlib and local:
 
-The mobile app (React Native) lives in `app/` and communicates with the
-desktop daemon via the local network API.
+    - ``PushNotificationService`` — a durable-queue consumer (rowid
+      cursor, persisted) that replays ambient events to a transporter
+      (a companion app plugs a real FCM/APNS/webhook endpoint in).
+    - ``MobileAPI`` / ``create_api_server`` — a stdlib HTTP server the
+      companion talks to: ``/api/status``, ``/api/conversation`` (the
+      shared one-presence thread), ``POST /api/talk`` (the same
+      ``nl_router`` brain as talk/voice/web), and ``/api/events`` (SSE
+      over the durable queue — push, replayable since a cursor).
 
-Capabilities:
-    - Push notification transport (APNS / FCM)
-    - REST API for status queries
-    - WebSocket for real-time updates
-    - Voice input relay (phone mic → desktop STT)
-    - Quick action dispatch
+The React Native app (``app/``) communicates with this local API over
+the network. Every accessor is guarded and never raises (the never-crash
+law), and tests are hermetic via injectable ``db_path``.
 
-**Status:** Wave 7 — not implemented yet. The imports below are guarded so
-importing this package never crashes the rest of Friday V4.
+**Status:** Wave 15 — built (2026-08).
 """
 
 from __future__ import annotations
 
-try:
-    from .api import MobileAPI, create_api_server
-    from .push import PushNotificationService, Notification
-    _MOBILE_AVAILABLE = True
-except ImportError:  # pragma: no cover - Wave 7 stub
-    MobileAPI = None  # type: ignore
-    create_api_server = None  # type: ignore
-    PushNotificationService = None  # type: ignore
-    Notification = None  # type: ignore
-    _MOBILE_AVAILABLE = False
+from .push import (Notification, PushNotificationService, command_transporter,
+                   file_transporter)
+from .api import MobileAPI, create_api_server
+
+_MOBILE_AVAILABLE = True
 
 
 def is_available() -> bool:
-    """Whether the mobile companion is implemented yet."""
+    """Whether the mobile companion transport is implemented."""
     return _MOBILE_AVAILABLE
 
 
@@ -41,6 +38,8 @@ __all__ = [
     "create_api_server",
     "PushNotificationService",
     "Notification",
+    "command_transporter",
+    "file_transporter",
     "is_available",
     "_MOBILE_AVAILABLE",
 ]

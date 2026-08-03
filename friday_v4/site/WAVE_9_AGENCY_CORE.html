@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 9 Agency Core — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 9 Agency Core</h1>
+<h1>Friday V4 — Wave 9: Agency Core (The Brain)</h1>
+<blockquote><strong>Parent:</strong> PLAN.md · <strong>Sibling docs:</strong> WAVE_10_MEMORY_IDENTITY.md,</blockquote>
+<blockquote>WAVE_11_RESEARCH_REFLECTION.md</blockquote>
+<blockquote><strong>Context:</strong> Solo developer, no deadline, hygiene-first. V3 proved the</blockquote>
+<blockquote>capability map but drowned it in 60K LOC of monolith. V4 rebuilds the</blockquote>
+<blockquote>capability with polish.</blockquote>
+<blockquote><strong>Estimate:</strong> 6–8 weeks solo (see <a href="#wave-splits">Wave Splits</a> below).</blockquote>
+<blockquote><strong>Status:</strong> ✅ SHIPPED (see <a href="#10-what-actually-shipped">What Actually Shipped</a>)</blockquote>
+<hr>
+<h2>1. Why This Wave Exists</h2>
+<p>Waves 1–8 built the <strong>surfaces</strong>: voice, desktop, security, dashboard, collab,</p>
+<p>mobile. But today, when you say something *real* to Friday V4, the voice</p>
+<p>router falls back to canned responses. There is no brain behind the surfaces.</p>
+<p>Wave 9 builds the mind:</p>
+<pre><code class="language-">  understand → decide → plan → act → remember → improve</code></pre>
+<p>The MCU promise — &quot;Friday, ship the auth refactor by Friday&quot; — is a *planning +</p>
+<p>execution + reporting* loop, not a lookup. V3 had every piece of this loop</p>
+<p>(<code>mission.py</code> 1.2K LOC, <code>autonomous_planner.py</code> 1.2K LOC, <code>runtime/executors.py</code>,</p>
+<p><code>confirm_gate.py</code>, <code>sandbox.py</code>) but buried them under CLI glue, a 5.5K-line</p>
+<p><code>db.py</code>, and a 3K-line <code>ask.py</code>.</p>
+<p>**Wave 9 is the &quot;port the capability, not the code&quot; decision applied to the</p>
+<p>brain.** Every module is V4-native: pure-stdlib-first, never-crash,</p>
+<p>degrade-silently, hermetic tests. V3 assets are listed per module as *design</p>
+<p>reference*, never as imports.</p>
+<hr>
+<h2>2. The V4 Architecture Laws (recap — all modules obey these)</h2>
+<p>1. <strong>V4 Is The Product</strong> — no <code>import friday</code>; V3 is read-only data.</p>
+<p>2. <strong>Pure-Stdlib First</strong> — stdlib implementation always works; LLM enhances, never gates.</p>
+<p>3. <strong>Never Crash</strong> — every external call wrapped; failure degrades silently.</p>
+<p>4. <strong>Reality First</strong> — answers cite evidence; no fabricated facts.</p>
+<p>5. <strong>Reasoning Never Mutates Reality</strong> — actions require explicit confirmation gates.</p>
+<p>6. <strong>Hermetic Tests</strong> — no real <code>~/.friday</code> writes in the test suite.</p>
+<hr>
+<h2>3. Wave Splits</h2>
+<p>The full Agency Core is too much for one shippable wave (solo, hygiene-first).</p>
+<p>It ships as three:</p>
+<table><thead><tr><th>|</th><th></th><th>W</th><th>a</th><th>v</th><th>e</th><th></th><th>|</th><th></th><th>C</th><th>o</th><th>r</th><th>e</th><th></th><th>|</th><th></th><th>E</th><th>s</th><th>t</th><th>.</th><th></th><th>|</th><th></th><th>M</th><th>C</th><th>U</th><th></th><th>F</th><th>e</th><th>e</th><th>l</th><th>i</th><th>n</th><th>g</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>9 (this)</strong></td><td>Foundation DB + Understanding + Reasoning + Missions + Execution</td><td>6–8 weeks</td><td>🤖 *&quot;Friday actually does things&quot;*</td><td></td></tr><tr><td></td><td><strong>10</strong></td><td>Memory/Identity + Skills (self-improvement)</td><td>5–7 weeks</td><td>👤 *&quot;Friday knows you&quot;*</td><td></td></tr><tr><td></td><td><strong>11</strong></td><td>Research/Synthesis + Briefings + Ambient push</td><td>5–6 weeks</td><td>🔬 *&quot;Friday reasons across your world&quot;*</td><td></td></tr></tbody></table>
+<p>Each wave is independently shippable. You can stop after Wave 9 and have a</p>
+<p>Friday that takes commands, plans goals, and executes them safely.</p>
+<hr>
+<h2>4. Deliverables</h2>
+<h3>4.0 Foundation — V4 Database ✅ (unblocker — do first)</h3>
+<p>V4 currently persists to scattered JSON state files (<code>v4_notifier_state.json</code>,</p>
+<p><code>collab/state.json</code>). A brain needs a real store.</p>
+<p><strong>Deliverable:</strong> <code>friday_v4/db.py</code> — one stdlib <code>sqlite3</code> module, one schema,</p>
+<p><code>FRIDAY_V4_DB</code> env override, migrations table.</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>b</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>missions</code> / <code>mission_steps</code></td><td>persistent goals &amp; progress</td><td></td></tr><tr><td></td><td><code>actions</code></td><td>audited executions (what, when, result, undo info)</td><td></td></tr><tr><td></td><td><code>memories</code> / <code>facts</code></td><td>long-term knowledge about operator, projects, preferences</td><td></td></tr><tr><td></td><td><code>relationships</code></td><td>depth, tone, preferences per person</td><td></td></tr><tr><td></td><td><code>skills</code></td><td>learned workflows + confidence + verification</td><td></td></tr><tr><td></td><td><code>sessions</code> / <code>exchanges</code></td><td>conversation history, context</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>db.py</code> (5,541 LOC) reduced to a few hundred clean</p>
+<p>lines. One migration table. <code>connect()</code> gains <code>mode=ro</code> support for the V3</p>
+<p>bridge (<code>v3source.py</code> stays the only V3 touchpoint).</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>All reads/writes go through typed helpers (<code>insert_mission</code>, <code>recent_actions</code>, …).</li><li>Schema versioning via <code>PRAGMA user_version</code> + migration list.</li><li>Tests use <code>tmp_path</code> connections — never <code>~/.friday</code>.</li></ul>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [Friday]: &quot;I&#x27;ll remember that. Mission &#x27;auth refactor&#x27; now has 4 steps,
+             step 1 complete. I logged every action — nothing ran silently.&quot;</code></pre>
+<h3>4.1 Understanding Layer — NLU (<code>friday_v4/understanding/</code>) 🆕</h3>
+<p>V3 had <code>cli_nl.py</code> + <code>intent_labeler.py</code> scattered across the CLI. V4 gets one</p>
+<p>shared NLU surface used by <strong>voice, CLI, and web alike</strong> — so &quot;Friday, run the</p>
+<p>tests&quot; works identically everywhere.</p>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>intent.py</code></td><td>intent classification + slot filling (deterministic rules first, LLM enhance)</td><td></td></tr><tr><td></td><td><code>entities.py</code></td><td>entity extraction (repos, files, commands, people, times)</td><td></td></tr><tr><td></td><td><code>confidence.py</code></td><td>ambiguity handling (&quot;did you mean the auth tests or the full suite?&quot;)</td><td></td></tr><tr><td></td><td><code>resolver.py</code></td><td>utterance → canonical action object (the single command language)</td><td></td></tr></tbody></table>
+<p><strong>⚠️ Naming note:</strong> V3 has <code>src/friday/understanding/</code> but that meant the</p>
+<p>*knowledge-derivation* engine (observations → derived facts). This V4</p>
+<p><code>understanding/</code> means <strong>NLU / intent classification</strong> — a completely</p>
+<p>different concept. If the collision ever confuses, rename to <code>nlu/</code>.</p>
+<p><strong>Design reference:</strong> V3 <code>cli_nl.py</code> (<code>_classify_action_or_question</code>),</p>
+<p><code>intent_labeler.py</code>, <code>context_prompter.py</code>.</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Deterministic keyword/rules pass runs <strong>first</strong>; LLM only fills gaps.</li><li>Ambiguous intents return a <code>confidence</code> + clarification, never a guess.</li><li>Every surface (voice router, <code>friday4 talk</code>, web chat, CLI) calls the same</li></ul>
+<p><code>resolve(text)</code> entry point.</p>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;Friday, what&#x27;s the status of my projects?&quot;
+🎧 [Friday]: (intent=status, scope=all repos) → real answer from evidence,
+             not a canned fallback.</code></pre>
+<h3>4.2 Reasoning Core — the answer engine (<code>friday_v4/reasoning/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>engine.py</code></td><td><code>EnsembleReasoner</code>: deterministic + LLM with agreement levels</td><td></td></tr><tr><td></td><td><code>ask.py</code></td><td>evidence-scoped Q&amp;A with provider registry</td><td></td></tr><tr><td></td><td><code>evidence.py</code></td><td>evidence selection + citation — no answer without evidence</td><td></td></tr><tr><td></td><td><code>judgment.py</code></td><td>objective judgment: no hallucination, no overclaim</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>ask.py</code> (3,040 LOC, 16 providers: <code>_p_compare</code>,</p>
+<p><code>_p_overlap</code>, <code>_p_integration</code>, <code>_p_drift</code>…), <code>reasoning/engine.py</code></p>
+<p>(<code>EnsembleReasoner</code>), <code>evidence_scope.py</code>, <code>objective.py</code>.</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Every answer cites evidence; empty evidence → &quot;I don&#x27;t know yet&quot; (never</li></ul>
+<p>fabrication).</p>
+<ul><li>Providers are registered (<code>@provider(&quot;compare&quot;)</code>) — one concept per provider,</li></ul>
+<p>tiny files, no 3K-line monolith.</p>
+<ul><li>Judgment red-team tests carried over from V3 philosophy: forbid overclaim,</li></ul>
+<p>forbid unsupported certainty.</p>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;Friday, what&#x27;s the deal with vivaha and MindWell?&quot;
+🎧 [Friday]: &quot;They share React + Supabase and similar auth flows — 3 files
+             overlap. I flagged this as a cross-project correlation last
+             week. Evidence: architecture analysis of both repos, 2026-07-28.&quot;</code></pre>
+<h3>4.3 Mission &amp; Planning (<code>friday_v4/missions/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>models.py</code></td><td><code>Mission</code>, <code>MissionStep</code> dataclasses with statuses</td><td></td></tr><tr><td></td><td><code>engine.py</code></td><td>persistent missions: create, advance, adapt, replan</td><td></td></tr><tr><td></td><td><code>planner.py</code></td><td>goal → step decomposition (deterministic fallback + LLM)</td><td></td></tr><tr><td></td><td><code>scheduler.py</code></td><td>time-aware sequencing of steps</td><td></td></tr><tr><td></td><td><code>progress.py</code></td><td>progress feed → surfaces (voice briefing, web card, desktop notify)</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>mission.py</code> (<code>MissionEngine</code>: create → start →</p>
+<p>advance → adapt → replan), <code>autonomous_planner.py</code> (<code>plan_from_drift</code>,</p>
+<p><code>plan_from_gaps</code>, <code>_should_execute</code>).</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Missions persist in the V4 DB; restart-safe.</li><li>Adaptation is explicit: a mission never silently changes steps — it reports</li></ul>
+<p>&quot;plan changed because…&quot;.</p>
+<ul><li>Deterministic planner always works; LLM planner enhances step quality.</li></ul>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;Friday, I need to ship the auth refactor by Friday.&quot;
+🎧 [Friday]: &quot;Got it. Created mission: 4 steps, scheduled across 3 days.
+             Step 1 (migrate session handling, 4 files) — want me to
+             start prepping the test files?&quot;</code></pre>
+<h3>4.4 Execution Layer (<code>friday_v4/execution/</code>)</h3>
+<p>The moment V4 currently never reaches — <strong>actually doing things</strong>, safely.</p>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>executors.py</code></td><td>shell, git, file, python, testing executors (V4-native)</td><td></td></tr><tr><td></td><td><code>gate.py</code></td><td>confirmation gate with permission levels</td><td></td></tr><tr><td></td><td><code>sandbox.py</code></td><td>restricted env, path allowlists, timeouts</td><td></td></tr><tr><td></td><td><code>audit.py</code></td><td>every action logged: what, when, result, undo payload</td><td></td></tr><tr><td></td><td><code>undo.py</code></td><td>reversible actions where possible</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>runtime/executors.py</code> (<code>BuiltinShellExecutor</code>,</p>
+<p><code>GitExecutor</code>, <code>FileExecutor</code>, <code>TestingExecutor</code>), <code>runtime/confirm_gate.py</code>,</p>
+<p><code>sandbox.py</code>, <code>cli_undo.py</code>.</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li><strong>Permission levels:</strong> auto (read-only: status, diff), confirm (writes,</li></ul>
+<p>test runs), never (prod/deploy/push without explicit operator override).</p>
+<ul><li>Every action is audited to <code>actions</code> table with undo payload when available.</li><li>Executors are stdlib-first; subprocess tools (pytest, git, ruff) discovered</li></ul>
+<p>venv-aware via <code>security/tooling.py</code>-style helper.</p>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;Friday, run the tests.&quot;
+🎧 [Friday]: &quot;Running pytest on friday_v4 — 390 passed, 0 failed.
+             Want me to run the linter too?&quot;</code></pre>
+<hr>
+<h2>5. Architecture Diagram</h2>
+<pre><code class="language-">                    ┌──────────────────────────────┐
+                    │         SURFACES             │
+                    │  Voice · CLI · Web · Desktop │
+                    └──────────────┬───────────────┘
+                                   │  resolve(text)
+                    ┌──────────────▼───────────────┐
+                    │    understanding/  (NLU)     │
+                    │  intent → entities → action  │
+                    └───────┬──────────────┬───────┘
+              ask / reason │              │ plan / execute
+   ┌───────────────────────▼──┐   ┌───────▼───────────────────┐
+   │      reasoning/          │   │       missions/           │
+   │  ensemble reasoner       │   │  planner → engine → steps │
+   │  evidence-scoped Q&amp;A     │   └───────┬───────────────────┘
+   └──────────────────────────┘           │
+                                  ┌───────▼───────────────────┐
+                                  │      execution/           │
+                                  │  gate → sandbox → audit   │
+                                  └───────┬───────────────────┘
+                                          │
+                          ┌───────────────▼───────────────────┐
+                          │       db.py  (V4 state, sqlite)   │
+                          │  missions · actions · sessions    │
+                          └───────────────────────────────────┘</code></pre>
+<hr>
+<h2>6. Test Strategy</h2>
+<ul><li><strong>db.py:</strong> migrations, typed helpers, read-only mode — hermetic (<code>tmp_path</code>).</li><li><strong>understanding/:</strong> intent fixtures (voice + text), ambiguity → clarification.</li><li><strong>reasoning/:</strong> every answer must cite evidence; red-team overclaim cases</li></ul>
+<p>(carried from V3&#x27;s <code>tools/redteam.py</code> philosophy).</p>
+<ul><li><strong>missions/:</strong> restart-safety, plan adaptation reports &quot;plan changed because…&quot;.</li><li><strong>execution/:</strong> sandbox escape attempts, gate permission matrix</li></ul>
+<p>(auto/confirm/never), audit trail completeness, undo round-trip.</p>
+<p>Target: <strong>+120 tests</strong> for this wave (V4 suite → ~510+).</p>
+<hr>
+<h2>7. File Count</h2>
+<ul><li><strong>~28 source files</strong> + <strong>~12 test files</strong> across 6 new packages</li></ul>
+<p>(<code>db.py</code>, <code>understanding/</code>, <code>reasoning/</code>, <code>missions/</code>, <code>execution/</code>).</p>
+<ul><li>Plus CLI wiring: <code>friday4 ask</code>, <code>friday4 plan</code>, <code>friday4 execute</code>,</li></ul>
+<p><code>friday4 mission</code>, <code>friday4 db status</code> — and the long-missing</p>
+<p>top-level <code>friday4 status</code> (unified layer overview, documented in</p>
+<p>PLAN.md Appendix B but never implemented) finally gets built here.</p>
+<hr>
+<h2>8. Risks</h2>
+<table><thead><tr><th>|</th><th></th><th>R</th><th>i</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>L</th><th>i</th><th>k</th><th>e</th><th>l</th><th>i</th><th>h</th><th>o</th><th>o</th><th>d</th><th></th><th>|</th><th></th><th>I</th><th>m</th><th>p</th><th>a</th><th>c</th><th>t</th><th></th><th>|</th><th></th><th>M</th><th>i</th><th>t</th><th>i</th><th>g</th><th>a</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>LLM reasoning hallucination</td><td>Medium</td><td>High</td><td>Evidence-first: no evidence → &quot;I don&#x27;t know&quot;</td><td></td></tr><tr><td></td><td>Execution safety breach</td><td>Low</td><td>High</td><td>Sandbox + permission levels + audit + undo</td><td></td></tr><tr><td></td><td>Scope creep (re-porting too much V3)</td><td>High</td><td>Medium</td><td>Each module is a capability slice; cut what doesn&#x27;t earn its place</td><td></td></tr><tr><td></td><td>Mission replanning surprises user</td><td>Medium</td><td>Medium</td><td>Explicit &quot;plan changed because…&quot; reporting</td><td></td></tr><tr><td></td><td>DB migration churn</td><td>Medium</td><td>Low</td><td><code>user_version</code> migrations, hermetic tests</td><td></td></tr></tbody></table>
+<hr>
+<h2>9. Success Criteria</h2>
+<p>1. &quot;Friday, run the tests&quot; → gate → executes → reports result. ✅</p>
+<p>2. &quot;Friday, what&#x27;s the status of my projects?&quot; → evidence-cited answer, no canned fallback. ✅</p>
+<p>3. &quot;Friday, I need to ship the auth refactor by Friday&quot; → persistent mission, progress trackable, restart-safe. ✅</p>
+<p>4. Every executed action appears in <code>friday4 actions</code> with undo info. ✅</p>
+<p>5. Zero V3 imports (except <code>v3source.py</code>), 510+ hermetic V4 tests passing. ✅</p>
+<hr>
+<h2>10. What Actually Shipped</h2>
+<p><strong>Status: ✅ shipped</strong> — the full wave, plus two additions the design</p>
+<p>didn&#x27;t anticipate.</p>
+<h3>As designed</h3>
+<ul><li><strong><code>db.py</code></strong> — sqlite with <code>PRAGMA user_version</code> migrations (now at</li></ul>
+<p>schema v3, 9 tables: missions, mission_steps, actions, memories,</p>
+<p>relationships, skills, sessions, exchanges, working_memory). Typed</p>
+<p>helpers + read-only mode for the V3 bridge.</p>
+<ul><li><strong><code>understanding/</code></strong> — <code>intent.py</code> (deterministic rules first),</li></ul>
+<p><code>entities.py</code>, <code>confidence.py</code> (ambiguity → clarification), <code>resolver.py</code></p>
+<p>(utterance → canonical action).</p>
+<ul><li><strong><code>reasoning/</code></strong> — <code>engine.py</code> (EnsembleReasoner: known/unknown,</li></ul>
+<p>evidence-cited), <code>evidence.py</code> (Answer/Evidence), <code>judgment.py</code></p>
+<p>(no-overclaim red-team), <code>providers.py</code> (6 providers: identity, status,</p>
+<p>activity, mission, memory, conversation), <code>question.py</code> (8 question</p>
+<p>types). <strong>No answer without evidence</strong> — empty evidence → honest</p>
+<p>&quot;I don&#x27;t know yet.&quot;</p>
+<ul><li><strong><code>missions/</code></strong> — <code>engine.py</code> (create/start/advance/adapt/replan,</li></ul>
+<p>restart-safe), <code>models.py</code>, <code>planner.py</code> (deterministic fallback),</p>
+<p><code>scheduler.py</code>, <code>progress.py</code>. Adaptation reports &quot;plan changed because…&quot;.</p>
+<ul><li><strong><code>execution/</code></strong> — <code>executors.py</code> (shell/git/file/python/testing),</li></ul>
+<p><code>gate.py</code> (auto/confirm/never permission levels), <code>sandbox.py</code> (path</p>
+<p>allowlists, timeouts), <code>audit.py</code> (every action → <code>actions</code> table),</p>
+<p><code>undo.py</code> (reversible actions).</p>
+<ul><li><strong>CLI</strong> — <code>friday4 talk &quot;…&quot;</code> (one-shot + interactive REPL + <code>--manual</code>),</li></ul>
+<p><code>friday4 ask</code>, <code>friday4 execute</code>, <code>friday4 status</code> (unified overview +</p>
+<p><code>friday4 status db</code>), <code>friday4 db status</code>.</p>
+<h3>Additions beyond the design</h3>
+<p>1. <strong><code>nl_router.py</code> — the shared NL→act handler.</strong> The design listed</p>
+<p><code>resolver.py</code> as &quot;the single command language&quot; but nothing that *did*</p>
+<p>the resolved action. <code>TextCommandHandler.handle(text)</code> interprets an</p>
+<p>utterance and runs it through the real pipeline (gate → sandbox →</p>
+<p>audit), logs every exchange verbatim (the brain learns from what you</p>
+<p>actually said), reports ambiguity honestly, and never auto-completes a</p>
+<p>manual mission step. Every surface calls the same entry point:</p>
+<ul><li><code>friday4 talk &quot;…&quot;</code> (<code>cli_nl.py</code>)</li><li>the <strong>voice router</strong> (<code>voice/router.py:_try_nlu_route</code>) — voice now</li></ul>
+<p>inherits the brain: &quot;run the tests&quot; spoken → executed, &quot;who am I&quot;</p>
+<p>spoken → persona answer. Voice confirmations are asked aloud</p>
+<p>(<code>voice_confirm</code> → TTS + STT).</p>
+<ul><li>future web chat.</li></ul>
+<p>2. <strong><code>friday4 talk</code> became the NL surface.</strong> The original voice session</p>
+<p>moved to <code>friday4 voice talk</code> after argparse rejected two <code>talk</code></p>
+<p>subparsers (the CLI crashed on every invocation until fixed).</p>
+<p>3. <strong>Daemon integration</strong> — <code>friday4 daemon</code> wires the voice router with a</p>
+<p>conversation-log DB connection, so spoken utterances persist into the</p>
+<p>brain&#x27;s log.</p>
+<h3>Deviations / notes</h3>
+<ul><li><strong>EnsembleReasoner</strong> is deterministic-only for now — no LLM provider</li></ul>
+<p>registered (<code>providers.py</code> is the registry where one slots in later).</p>
+<p>The architecture law &quot;LLM enhances, never gates&quot; holds: the</p>
+<p>deterministic set answers honestly, and an empty evidence set says</p>
+<p>&quot;I don&#x27;t know yet&quot; rather than hallucinating.</p>
+<ul><li><strong>Test count:</strong> wave target was +120 → ~510. Actual suite after the</li></ul>
+<p>wave: ~740 tests, all green.</p>
+<ul><li><strong><code>friday4 plan</code>/<code>mission</code> CLI subcommands</strong> were listed in the design</li></ul>
+<p>but missions are surfaced through <code>friday4 talk &quot;ship X by Friday&quot;</code></p>
+<p>(planner) and <code>friday4 status</code> (progress) instead — one command language,</p>
+<p>no separate mission CLI needed. Add <code>friday4 mission</code> if the REPL</p>
+<p>workflow ever needs direct mission CRUD.</p>
+<p><strong>What I learned:</strong> the highest-value piece of this wave was</p>
+<p><code>nl_router.py</code>, which the design didn&#x27;t name — the act part of</p>
+<p>&quot;understand → decide → plan → act&quot; is what makes the surfaces feel alive.</p>
+<p>Voice inheriting the brain (spoken &quot;run the tests&quot; → executed) is the</p>
+<p>single most MCU-feeling moment in the product so far.</p>
+<hr>
+<p>*This wave is the point where the roadmap stops being about interfaces and</p>
+<p>starts being about the hard 60% — a reasoning core that answers without</p>
+<p>hallucinating, executors that act without breaking things. That&#x27;s where the</p>
+<p>real MCU Friday lives.*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

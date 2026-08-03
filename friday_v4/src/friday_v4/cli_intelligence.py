@@ -65,13 +65,11 @@ def cmd_intelligence_status(args: argparse.Namespace) -> int:
         CodeHealthDiagnostics,
         ContinuousLearner,
         DriftPredictor,
-        PredictiveAnalytics,
     )
 
     drift = DriftPredictor()
     anomaly = AnomalyDetector()
     learner = ContinuousLearner()
-    analytics = PredictiveAnalytics()
 
     # Drift baselines
     drift_stats = drift.get_stats()

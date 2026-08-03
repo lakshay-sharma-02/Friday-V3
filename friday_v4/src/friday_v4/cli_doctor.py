@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import platform
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -133,12 +132,45 @@ def diag_audio() -> tuple[bool, list[dict]]:
         return False, rows
 
 
+def _wait_tts_loaded(tts) -> None:
+    """Wait (bounded) for async TTS model loads so availability is truthful.
+
+    Providers load models in background threads (12-15 s on a 2-core box)
+    and would otherwise report "missing" instantly — the same race that
+    made `doctor` lie about kokoro/piper. Waits each provider's
+    `_wait_loaded` (if present), then promotes the primary provider once
+    it has finished loading.
+    """
+    for p in getattr(tts, "_providers", []):
+        wait = getattr(p, "_wait_loaded", None)
+        if callable(wait):
+            try:
+                wait(timeout=180)
+            except Exception:
+                pass
+    promote = getattr(tts, "_ensure_primary_loaded", None)
+    if callable(promote):
+        try:
+            promote(timeout=180)
+        except Exception:
+            pass
+
+
+def _wait_stt_loaded(stt) -> None:
+    """Wait (bounded) for async STT model loads (see ``_wait_tts_loaded``)."""
+    for p in getattr(stt, "_providers", []):
+        thread = getattr(p, "_load_thread", None)
+        if thread is not None:
+            thread.join(timeout=180)
+
+
 def diag_voice() -> tuple[bool, list[dict]]:
     rows: list[dict] = []
     try:
         from friday_v4.voice.tts import TextToSpeech, TTSConfig
         tts = TextToSpeech(TTSConfig(primary_provider="auto",
                                      cache_enabled=False))
+        _wait_tts_loaded(tts)
         for p in tts.list_providers():
             rows.append({"key": f"tts {p['name']}",
                          "value": "available" if p["available"] else "missing",
@@ -154,6 +186,7 @@ def diag_voice() -> tuple[bool, list[dict]]:
     try:
         from friday_v4.voice.stt import SpeechToText
         stt = SpeechToText()
+        _wait_stt_loaded(stt)
         stt_available = bool(stt.is_available)
         rows.append({"key": "stt", "value": "available" if stt_available
                      else "unavailable", "ok": stt_available})
@@ -263,6 +296,70 @@ def diag_daemon() -> tuple[bool, list[dict]]:
     return True, rows
 
 
+def diag_security() -> tuple[bool, list[dict]]:
+    """Security tool availability + last scan state from the daemon scanner.
+
+    Mirrors what the Wave 3 ``friday4 security status`` reports (tool
+    binaries on PATH, built-in scanners always available) and adds the
+    last scan persisted by the daemon's ``SecurityScanner``
+    (``~/.friday/v4_security_last.json``) so ``doctor`` shows whether
+    periodic scanning has actually produced results.
+    """
+    rows: list[dict] = []
+    try:
+        from friday_v4.security.tooling import find_tool
+        for tool in ("pip-audit", "trufflehog", "ruff", "bandit", "mypy"):
+            present = find_tool(tool) is not None
+            rows.append({"key": f"tool {tool}",
+                         "value": "installed" if present else "not installed",
+                         "ok": True})
+        rows.append({"key": "tool builtin", "value": "always available",
+                     "ok": True})
+    except Exception as exc:
+        rows.append({"key": "tools", "value": f"probe failed: {exc}",
+                     "ok": False})
+
+    state_file = Path.home() / ".friday" / "v4_security_last.json"
+    critical_findings = False
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text())
+            report = state.get("report") or {}
+            rows.append({"key": "scans run", "value": str(state.get("scans", 0)),
+                         "ok": True})
+            grade = report.get("grade")
+            if grade:
+                rows.append({"key": "last grade",
+                             "value": f"{grade} ({report.get('score', '?')}/100)",
+                             "ok": True})
+            counts = report.get("counts_by_severity") or {}
+            summary = ", ".join(
+                f"{counts[s]} {s}" for s in ("critical", "high", "medium",
+                                             "low", "info") if counts.get(s))
+            critical_findings = any(counts.get(s) for s in ("critical", "high"))
+            rows.append({"key": "last findings",
+                         "value": summary or "clean",
+                         "ok": not critical_findings})
+            if state.get("last_error"):
+                rows.append({"key": "last error",
+                             "value": str(state["last_error"]), "ok": False})
+        except (json.JSONDecodeError, OSError) as exc:
+            rows.append({"key": "state file",
+                         "value": f"unreadable: {exc}", "ok": False})
+    else:
+        rows.append({"key": "last scan",
+                     "value": "none yet (run `friday4 daemon start`)",
+                     "ok": True})
+    # Section health: tools probe worked, state file readable, and the
+    # last scan had no critical/high findings (those degrade `doctor`'s
+    # exit code like any other subsystem problem).
+    tools_failed = any(r["ok"] is False and r["key"].startswith("tools")
+                       for r in rows)
+    state_failed = any(r["ok"] is False and r["key"]
+                       in ("state file", "last error") for r in rows)
+    return not (tools_failed or state_failed or critical_findings), rows
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -277,6 +374,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         ("V3", diag_v3),
         ("Proactive", diag_proactive),
         ("Intelligence", diag_intelligence),
+        ("Security", diag_security),
         ("Daemon", diag_daemon),
     ]
 
@@ -312,52 +410,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    _print_logo("Status")
+    """Unified V4 layer overview (`friday4 status`).
 
-    # Daemon
+    Delegates to ``cli_status.cmd_status`` — the probes live in
+    ``cli_status.STATUS_PROBES`` (daemon, voice, desktop, security,
+    proactive, intelligence, web, collab, db, v3) so both commands share
+    one source of truth and never duplicate rendering.
+    """
     try:
-        from friday_v4.daemon import is_running, read_status
-        running = is_running()
-        _line("daemon", "running" if running else "stopped", ok=True)
-        if running:
-            status = read_status()
-            if status.get("uptime_seconds"):
-                _line("uptime", f"{status['uptime_seconds']/60:.1f} min",
-                      ok=True)
-            _line("notifications",
-                  str(status.get("notification_count", 0)), ok=True)
-    except Exception:
-        _line("daemon", "probe failed", ok=False)
-
-    # Layer statuses (reuse existing CLI commands' data via direct probes).
-    _section("Layers")
-    try:
-        from friday_v4.desktop.wm_abstraction import WindowManager
-        wm = WindowManager()
-        _line("desktop", wm.backend_name if hasattr(wm, "backend_name")
-              else "available", ok=wm.is_available)
-    except Exception:
-        _line("desktop", "unavailable", ok=False)
-
-    try:
-        from friday_v4.voice.tts import TextToSpeech, TTSConfig
-        tts = TextToSpeech(TTSConfig(primary_provider="auto",
-                                     cache_enabled=False))
-        _line("voice", tts.active_provider_name or "no provider",
-              ok=bool(tts.active_provider_name))
-    except Exception:
-        _line("voice", "unavailable", ok=False)
-
-    try:
-        from friday_v4.proactive.v3source import V3DataSource
-        v3 = V3DataSource()
-        _line("v3 data", "connected" if v3.is_available() else "not available",
-              ok=v3.is_available())
-    except Exception:
-        _line("v3 data", "probe failed", ok=False)
-
-    print()
-    return 0
+        from .cli_status import cmd_status as _unified_status
+        return _unified_status(args)
+    except Exception as exc:
+        print(f"  {_RED}✘{_RESET} status probe failed: {exc}")
+        print()
+        return 1
 
 
 def build_doctor_parser(subparsers) -> None:
@@ -365,7 +431,7 @@ def build_doctor_parser(subparsers) -> None:
     p = subparsers.add_parser(
         "doctor", help="Diagnose all V4 subsystems",
         description="One-command health check across audio, voice, desktop, "
-                    "V3, proactive, intelligence, and daemon.")
+                    "V3, proactive, intelligence, security, and daemon.")
     p.add_argument("--json", action="store_true",
                    help="Machine-readable JSON output")
     p.set_defaults(func=cmd_doctor)

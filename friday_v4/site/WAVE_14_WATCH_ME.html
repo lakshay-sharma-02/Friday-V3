@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 14 Watch Me — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 14 Watch Me</h1>
+<h1>Wave 14 — Watch Me (demonstration capture) ✅ SHIPPED (2026-08)</h1>
+<blockquote><strong>The directive:</strong> *no learning ceiling* — <strong>&quot;copy any workflow.&quot;</strong> The</blockquote>
+<blockquote>operator demonstrates something once (&quot;watch me do this&quot;); Friday</blockquote>
+<blockquote>watches the audit trail, parameterizes the demonstration into a skill,</blockquote>
+<blockquote>and generalizes it (repo + command context) so it matches the real</blockquote>
+<blockquote>workflow — never a literal replay. Repetition is *noticed* before the</blockquote>
+<blockquote>operator asks (the MCU &quot;I noticed you do this every time&quot; moment).</blockquote>
+<blockquote></blockquote>
+<blockquote>Parent waves: <a href="WAVE_10_MEMORY_IDENTITY.md">Wave 10 — Memory &amp; Identity</a></blockquote>
+<blockquote>(shadow-first skills), <a href="WAVE_13A_ONE_NLU_POINT.md">Wave 13a — ONE NLU Point</a></blockquote>
+<blockquote>(the SKILL intent rides the single parser). Governance: [THE MCU FRIDAY</blockquote>
+<blockquote>STANDARD](MCU_FRIDAY_STANDARD.md) — Law 4 (never crash), Law 6 (skills</blockquote>
+<blockquote>enhance, never gate), Law 7 (operator consent).</blockquote>
+<hr>
+<h2>1. The design</h2>
+<h3>The audit log IS the demonstration record</h3>
+<p>&quot;Watch me&quot; = <strong>tag a window on the audit trail.</strong> Every executed action</p>
+<p>is already logged (what, when, result) by the execution layer. A watch</p>
+<p>just records a start time + context; <code>stop()</code> parameterizes everything</p>
+<p>executed inside that window into a skill. No new capture pipeline, no</p>
+<p>recording of keystrokes — the demonstrated *work* is the demonstration.</p>
+<pre><code class="language-">watch me do this ──► start_watch(name, context=repo)     # tag a window
+   (operator works — every action is audited as usual)
+learn this ──────► actions_between(start, now)           # the demonstration
+                    └──► generalized steps (repo context, dupes collapsed)
+                           └──► shadow skill (confidence 0 — never executes)</code></pre>
+<h3><code>skills/watcher.py</code> — WatchRecorder</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>e</th><th>t</th><th>h</th><th>o</th><th>d</th><th></th><th>|</th><th></th><th>B</th><th>e</th><th>h</th><th>a</th><th>v</th><th>i</th><th>o</th><th>r</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>start(name, note, context)</code></td><td>Opens a watch (single-active enforced at the DB layer; a new watch closes the previous).</td><td></td></tr><tr><td></td><td><code>stop(watch_id, name)</code></td><td>Closes the watch, generalizes captured actions into a <strong>shadow</strong> skill (repo context, consecutive-dup collapse), links <code>watches.skill_id</code>.</td><td></td></tr><tr><td></td><td><code>capture(watch_id)</code></td><td>The actions recorded so far (read-only).</td><td></td></tr><tr><td></td><td><code>active()</code></td><td>The live watch, if any.</td><td></td></tr></tbody></table>
+<p><strong>Generalization (wave-14 spec):</strong> each step carries the repo it ran in</p>
+<p>(<code>cwd</code> basename). <code>ShadowExecutor</code>/<code>SkillDispatcher</code> now match on</p>
+<p><strong>context — repo + command + trigger</strong> — not literal replays: <code>pytest -q</code></p>
+<p>in <code>friday_v4</code> is the *same step* wherever it runs in that repo, and is a</p>
+<p>*different context* in another repo. Steps without a repo (wave-10</p>
+<p>skills) keep the old type/command match (back-compat).</p>
+<p><strong>Safety (wave-10 law, preserved):</strong> everything formed starts in</p>
+<p><code>shadow</code> with confidence 0 — inert. Promotion still requires N shadow</p>
+<p>matches + the operator&#x27;s explicit <code>friday4 skills promote</code> approval.</p>
+<p>Nothing executes while watching or learning.</p>
+<p><strong>Reuse-by-name, honestly:</strong> <code>stop()</code> reuses an existing skill by name</p>
+<p>ONLY when its first step matches what was just demonstrated (same</p>
+<p>workflow → no duplicate). A same-name skill with *different* steps never</p>
+<p>swallows the fresh demonstration — the new skill gets a versioned name</p>
+<p>(<code>deploy-2</code>). The operator&#x27;s just-performed work is never discarded.</p>
+<h3><code>skills/noticer.py</code> — RepetitionNoticer</h3>
+<p>The MCU five-moment #2: while the operator works, Friday notices a</p>
+<p>repeated ordered sequence in the audit log and <strong>offers</strong> to form a</p>
+<p>skill — it does not form one silently.</p>
+<ul><li>Reuses <code>ReplayExecutor.find_patterns</code> for the repeated sequences.</li><li>Skips patterns already covered by a skill (first-step signature match)</li></ul>
+<p>— never re-offers what Friday already knows.</p>
+<ul><li><strong>Pure read:</strong> noticing forms nothing. The operator accepts (via</li></ul>
+<p><code>friday4 skills noticed</code> → <code>watch</code>, or the NL &quot;learn this&quot;), then the</p>
+<p>watch path forms the skill.</p>
+<h3>NL paths — through the ONE NLU point</h3>
+<p><code>Intent.SKILL</code> is added to the single parser (<code>nlu/</code>) — LLM-first, with</p>
+<p>deterministic fallback words (<code>watch me</code>, <code>learn this</code>, <code>stop watching</code>,</p>
+<p>…). <code>nl_router</code> routes it:</p>
+<table><thead><tr><th>|</th><th></th><th>U</th><th>t</th><th>t</th><th>e</th><th>r</th><th>a</th><th>n</th><th>c</th><th>e</th><th></th><th>|</th><th></th><th>A</th><th>c</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>&quot;watch me do this&quot;</td><td><code>_skill_start</code> — opens a watch (&quot;I&#x27;m watching — go ahead.&quot;)</td><td></td></tr><tr><td></td><td>&quot;learn this&quot; / &quot;stop watching&quot;</td><td><code>_skill_stop</code> — forms the shadow skill</td><td></td></tr><tr><td></td><td>&quot;what did you learn&quot;</td><td>ASK → reasoning <code>skills_provider</code> (cites real skills)</td><td></td></tr><tr><td></td><td>&quot;show me your skills&quot;</td><td>ASK → <code>skills_provider</code></td><td></td></tr><tr><td></td><td>&quot;yes, run it&quot; / &quot;go ahead&quot;</td><td><code>Intent.ACCEPT</code> → <code>_accept_response</code> — runs the matching dispatch suggestion&#x27;s next step through gate → sandbox → audit; a multi-step suggestion becomes a <strong>supervised mission</strong> (first step runs now, the rest is tracked)</td><td></td></tr></tbody></table>
+<p>&quot;what did you learn&quot; stays an <strong>ASK</strong> intent (the fallback&#x27;s ASK words</p>
+<p>win the tie), so it routes to the reasoning engine&#x27;s <code>skills_provider</code></p>
+<p>and is answered from the real skills registry — the Wiring Law&#x27;s</p>
+<p>&quot;reasoning cites the new state&quot; checkbox.</p>
+<hr>
+<h2>2. Wiring (the Wiring Law)</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>W</th><th>i</th><th>r</th><th>i</th><th>n</th><th>g</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>nl_router.py</code></td><td><code>Intent.SKILL</code> → <code>_skill_response</code> (start/stop/summary) via <code>TextCommandHandler</code> — voice, <code>friday4 talk</code>, and web chat all reach it through the shared handler.</td><td></td></tr><tr><td></td><td><code>cli_skills.py</code></td><td><code>friday4 skills watch [name]</code> · <code>watch-stop [name]</code> · <code>noticed</code> · <code>dispatch</code></td><td></td></tr><tr><td></td><td><code>voice/router.py</code></td><td><code>proactive_notify</code> offers the matching skill suggestion (&quot;want me to run X next?&quot;); &quot;yes, run it&quot; → ACCEPT → spoken result</td><td></td></tr><tr><td></td><td><code>daemon.py</code></td><td><code>SkillLearner.sweep_once</code> runs <code>RepetitionNoticer</code> <strong>before</strong> <code>learn()</code> — offers reflect what isn&#x27;t yet covered, then shadow skills form; offers surface in <code>last_report</code> (<code>offers</code>, <code>offer_lines</code>) for status/briefing. <strong><code>DispatchOfferer</code></strong> — a new daemon component that periodically offers the top dispatch suggestion on context match (desktop notify + durable <code>dispatch</code> ambient event, deduped); never executes.</td><td></td></tr><tr><td></td><td><code>reasoning/providers.py</code></td><td><code>skills_provider</code> registered for <code>QuestionType.SKILLS</code> — &quot;what did you learn&quot; answers cite <code>v4.skills</code>.</td><td></td></tr><tr><td></td><td><code>db.py</code></td><td>Migration v5: <code>watches</code> table (single-active enforced).</td><td></td></tr></tbody></table>
+<p>Checklist: every entry point that should reach SKILL does (voice / CLI /</p>
+<p>web via the shared handler) ✅ · the daemon runs the noticer on its</p>
+<p>schedule ✅ · reasoning cites real skills ✅ · a CLI command exposes the</p>
+<p>layer (<code>friday4 skills watch/…</code>) ✅ · wiring tests hermetic ✅.</p>
+<hr>
+<h2>3. What actually shipped (close-out)</h2>
+<p>1. <strong><code>watches</code> table (db migration v5)</strong> — <code>start_watch</code> /</p>
+<p><code>end_watch</code> / <code>get_watch</code> / <code>active_watch</code> / <code>list_watches</code> /</p>
+<p><code>actions_between</code>; single-active-watch enforced; <code>end_watch</code> links the</p>
+<p>formed skill. Stale <code>test_db</code> schema assertions (v3) updated to v5 +</p>
+<p>the <code>watches</code> table — the pre-existing <code>test_db</code> ×3 failures are gone.</p>
+<p>2. <strong><code>WatchRecorder</code></strong> — explicit &quot;watch me&quot; capture → generalized shadow</p>
+<p>skill (repo context, consecutive-dup collapse, honest reuse-by-name).</p>
+<p>3. <strong><code>RepetitionNoticer</code></strong> — &quot;I noticed you do this every time&quot; offers;</p>
+<p>pure read; skips already-learned patterns.</p>
+<p>4. <strong>Generalization</strong> — <code>_step_matches</code> (shadow + dispatch) enforces repo</p>
+<p>context when a step carries one; back-compat for context-free steps.</p>
+<p>5. <strong>SKILL intent through the ONE point</strong> — <code>Intent.SKILL</code> + fallback</p>
+<p>words + LLM prompt (<code>skill</code> in the allowed set) + resolver target</p>
+<p>threading; LLM interpretation still wins over keywords (tested).</p>
+<p>6. <strong><code>nl_router._skill_response</code></strong> — watch / learn / stop / summary NL</p>
+<p>paths on every surface via <code>TextCommandHandler</code>.</p>
+<p>7. <strong>Reasoning</strong> — <code>QuestionType.SKILLS</code> + <code>skills_provider</code> (ASK cites</p>
+<p>real skills; no skills → honest &quot;I don&#x27;t know yet&quot;).</p>
+<p>8. <strong>CLI</strong> — <code>friday4 skills watch</code>, <code>watch-stop</code>, <code>noticed</code>, <code>dispatch</code></p>
+<p>(next-step suggestions on context match, read-only).</p>
+<p>9. <strong>Daemon</strong> — <code>SkillLearner</code> runs the noticer before <code>learn()</code> and</p>
+<p>surfaces offers in <code>last_report</code>.</p>
+<p>10. <strong>Tests</strong> — <code>tests/test_wave14_watch_me.py</code> (33 tests): db lifecycle,</p>
+<p>watcher generalization + reuse-honesty, noticer offers + pure-read,</p>
+<p>NLU SKILL fallback + LLM-still-wins, router watch→learn→summarize,</p>
+<p>reasoning provider, CLI commands, daemon offers + never-executes.</p>
+<p>Close-out: <code>tests/test_skill_accept_nl.py</code> (11 accept tests + 5</p>
+<p>mission-integration tests) — ACCEPT classification, gate-through</p>
+<p>execution, NEVER denial without force, multi-step accept → supervised</p>
+<p>mission, voice offer + spoken result. <code>tests/test_daemon.py</code> adds</p>
+<p><code>DispatchOfferer</code> tests (offers on match, dedupe, never-executes,</p>
+<p>daemon wiring).</p>
+<p><strong>MCU test (five-moment #2):</strong> &quot;Friday, watch me do this&quot; → operator</p>
+<p>runs a workflow → &quot;learn this&quot; → shadow skill formed with repo context;</p>
+<p>shadowed on the next matching workflow; promoted only with approval;</p>
+<p>auto-dispatched on later matches. ✅</p>
+<hr>
+<h3>NL accept — the dispatch offer closes its loop (close-out)</h3>
+<p><code>Intent.ACCEPT</code> (“yes, run it” / “go ahead”) completes the dispatch</p>
+<p>story: Friday *offers* the next step of a matching promoted skill</p>
+<p>(voice <code>proactive_notify</code>), the operator says yes, and <code>_accept_response</code></p>
+<p>runs that next step through the real pipeline — gate → sandbox → audit.</p>
+<p>The operator&#x27;s yes <strong>is</strong> the CONFIRM approval (passed as a pre-approved</p>
+<p><code>confirm_fn</code>); a NEVER-level next step (git push) is still <strong>denied</strong></p>
+<p>without an explicit <code>force</code> override — a bare yes never escalates</p>
+<p>anything. All surfaces share it (one <code>nl_router</code>, voice/web/CLI).</p>
+<h3>Dispatch → mission — multi-step acceptance is supervised (close-out)</h3>
+<p>When a dispatch suggestion has <strong>2+ remaining steps</strong>, accepting it no</p>
+<p>longer fires-and-forgets: <code>_accept_response</code> forms a <strong>mission</strong> from the</p>
+<p>remaining steps (<code>MissionEngine.create</code> with an explicit plan), starts</p>
+<p>it, and executes the first step *now* through the gate (same</p>
+<p>confirm/force semantics — the operator&#x27;s yes is the CONFIRM approval,</p>
+<p>NEVER stays force-only). The mission persists: status, briefings, and</p>
+<p>the progress feed track it, adaptation stays explicit (&quot;plan changed</p>
+<p>because…&quot;), and a denied first step saves the mission for an explicit</p>
+<p><code>--force</code> rerun. Single-step suggestions keep the direct execution path</p>
+<p>(no wrapper).</p>
+<h3>Auto-dispatch on idle — the daemon offers skills without being asked</h3>
+<p>The <code>DispatchOfferer</code> daemon component closes the *offer* side of the</p>
+<p>loop on a schedule: every <code>dispatch_interval</code> (default 1 h, <code>--no-dispatch-offer</code></p>
+<p>to disable) it re-checks the current context and, when a promoted skill</p>
+<p>matches and the offer hasn&#x27;t been surfaced recently (bounded dedupe), it</p>
+<p>raises a desktop notification <strong>and</strong> publishes a durable <code>dispatch</code></p>
+<p>event on the ambient bus (the web feed / SSE see it). It never executes</p>
+<p>anything — the operator&#x27;s &quot;yes, run it&quot; still flows through the ONE NLU</p>
+<p>point → the gate → execution (or a mission). Wired like every daemon</p>
+<p>component: config flag, build/start, status component (<code>dispatch</code>),</p>
+<p>shutdown stop.</p>
+<hr>
+<h2>4. What we learned</h2>
+<ul><li>The audit-log-as-demonstration design cost almost nothing: no new</li></ul>
+<p>capture machinery, and every safety property (shadow-first, never</p>
+<p>executes) came from the wave-10 layer for free.</p>
+<ul><li><strong>Noticer-before-learn ordering matters:</strong> running <code>learn()</code> first</li></ul>
+<p>would silently pre-empt every offer — the &quot;I noticed&quot; moment must be</p>
+<p>surfaced before the pattern becomes a skill, or it never exists.</p>
+<ul><li><strong>Honest reuse matters more than dedup:</strong> silently linking a fresh,</li></ul>
+<p>different demonstration to a same-name skill would throw away the</p>
+<p>operator&#x27;s work. The first-step-match rule + versioned-name fallback</p>
+<p>keeps dedup without data loss.</p>
+<ul><li>The one remaining pre-existing red (<code>test_cli_collab</code> conflicting</li></ul>
+<p>subparser &quot;research&quot;) is unrelated to this wave and predates it.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

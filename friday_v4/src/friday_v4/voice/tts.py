@@ -29,12 +29,11 @@ import urllib.request
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional
+from typing import ClassVar, Optional
 
 import numpy as np
 
 from .audio import (
-    clear_play_queue,
     flush_play_queue,
     play_wav_file,
     queue_wav,
@@ -173,7 +172,7 @@ class PiperProvider(VoiceProvider):
     requires_internet = False
     latency_ms = 100
 
-    VOICE_MAP = {
+    VOICE_MAP: ClassVar[dict[VoiceMode, str]] = {
         VoiceMode.CONVERSATION: "jenny",
         VoiceMode.BRIEFING: "jenny",
         VoiceMode.ALERT: "jenny",
@@ -215,9 +214,9 @@ class PiperProvider(VoiceProvider):
     @staticmethod
     def _download(url: str, path: Path) -> None:
         """Download with retries (3 attempts, exponential backoff), atomic."""
+        import time as _time
         import urllib.error
         import urllib.request
-        import time as _time
         last_exc = None
         tmp = path.with_suffix(path.suffix + ".part")
         for attempt in range(3):
@@ -284,7 +283,7 @@ class KokoroONNXProvider(VoiceProvider):
     requires_internet = False
     latency_ms = 200
 
-    VOICE_MAP = {
+    VOICE_MAP: ClassVar[dict[VoiceMode, str]] = {
         VoiceMode.CONVERSATION: "af_bella",   # Warm, friendly
         VoiceMode.BRIEFING: "am_michael",     # Professional male
         VoiceMode.ALERT: "am_adam",           # Urgent male
@@ -401,7 +400,7 @@ class EdgeTTSProvider(VoiceProvider):
     requires_internet = True
     latency_ms = 1500
 
-    VOICE_MAP = {
+    VOICE_MAP: ClassVar[dict[VoiceMode, str]] = {
         VoiceMode.CONVERSATION: "en-IE-EmilyNeural",  # Irish female ≈ FRIDAY
         VoiceMode.BRIEFING: "en-IE-EmilyNeural",
         VoiceMode.ALERT: "en-GB-SoniaNeural",
@@ -423,6 +422,7 @@ class EdgeTTSProvider(VoiceProvider):
         voice_name = voice or self.VOICE_MAP.get(mode, "en-IE-EmilyNeural")
         try:
             import asyncio
+
             import edge_tts
 
             async def _synth():
@@ -570,10 +570,13 @@ class TextToSpeech:
             logger.warning("No TTS provider available — speech disabled")
         return list(order)
 
-    def _ensure_primary_loaded(self) -> None:
-        """Block once (max 180s) for the primary kokoro model if it is still
-        downloading. Called lazily on the first speak(), NOT in __init__, so
+    def _ensure_primary_loaded(self, timeout: float = 600.0) -> None:
+        """Block once for the primary model if it is still downloading.
+
+        Called lazily on the first speak(), NOT in __init__, so
         `voice status` / `voice setup` never hang on a model download.
+        ``timeout`` bounds the wait (diagnostic callers like `doctor`
+        pass a tighter bound than the 600 s speak-path default).
         """
         # If a fallback (edge/pyttsx3) won the init race while the primary
         # was still loading async, promote the primary once it's ready —
@@ -591,7 +594,7 @@ class TextToSpeech:
             if not callable(wait):
                 return
             try:
-                wait()
+                wait(timeout=timeout)
             except Exception:
                 pass
             if getattr(p, "is_available", False):

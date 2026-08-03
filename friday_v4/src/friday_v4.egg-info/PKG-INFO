@@ -9,30 +9,32 @@ Description-Content-Type: text/markdown
 Requires-Dist: edge-tts>=7.0
 Requires-Dist: pyttsx3>=2.90
 Provides-Extra: full
-Requires-Dist: kokoro-onnx; extra == "full"
-Requires-Dist: faster-whisper; extra == "full"
-Requires-Dist: openwakeword; extra == "full"
-Requires-Dist: onnxruntime; extra == "full"
-Requires-Dist: sounddevice; extra == "full"
-Requires-Dist: webrtcvad; extra == "full"
+Requires-Dist: kokoro-onnx>=0.5.0; extra == "full"
+Requires-Dist: faster-whisper>=1.2.1; extra == "full"
+Requires-Dist: openwakeword>=0.4.0; extra == "full"
+Requires-Dist: onnxruntime>=1.28.0; extra == "full"
+Requires-Dist: sounddevice>=0.5.5; extra == "full"
+Requires-Dist: webrtcvad>=2.0.10; extra == "full"
 Requires-Dist: edge-tts>=7.0; extra == "full"
-Requires-Dist: pyttsx3; extra == "full"
-Requires-Dist: espeakng_loader; extra == "full"
+Requires-Dist: pyttsx3>=2.99; extra == "full"
+Requires-Dist: piper-tts>=1.6.0; extra == "full"
+Requires-Dist: espeakng_loader>=0.2.4; extra == "full"
 Requires-Dist: numpy<2.5,>=1.26; extra == "full"
 Provides-Extra: voice
-Requires-Dist: kokoro-onnx; extra == "voice"
-Requires-Dist: sounddevice; extra == "voice"
-Requires-Dist: webrtcvad; extra == "voice"
-Requires-Dist: onnxruntime; extra == "voice"
+Requires-Dist: kokoro-onnx>=0.5.0; extra == "voice"
+Requires-Dist: sounddevice>=0.5.5; extra == "voice"
+Requires-Dist: webrtcvad>=2.0.10; extra == "voice"
+Requires-Dist: onnxruntime>=1.28.0; extra == "voice"
 Requires-Dist: edge-tts>=7.0; extra == "voice"
-Requires-Dist: pyttsx3; extra == "voice"
-Requires-Dist: espeakng_loader; extra == "voice"
+Requires-Dist: pyttsx3>=2.99; extra == "voice"
+Requires-Dist: piper-tts>=1.6.0; extra == "voice"
+Requires-Dist: espeakng_loader>=0.2.4; extra == "voice"
 Requires-Dist: numpy<2.5,>=1.26; extra == "voice"
 Provides-Extra: stt
-Requires-Dist: faster-whisper; extra == "stt"
+Requires-Dist: faster-whisper>=1.2.1; extra == "stt"
 Provides-Extra: hotword
-Requires-Dist: openwakeword; extra == "hotword"
-Requires-Dist: onnxruntime; extra == "hotword"
+Requires-Dist: openwakeword>=0.4.0; extra == "hotword"
+Requires-Dist: onnxruntime>=1.28.0; extra == "hotword"
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
 Requires-Dist: pytest-cov>=5.0; extra == "dev"
@@ -51,13 +53,27 @@ Provides-Extra: collab
 Requires-Dist: websockets>=12.0; extra == "collab"
 Requires-Dist: zeroconf>=0.131; extra == "collab"
 Provides-Extra: security
-Requires-Dist: grype-py>=0.1; extra == "security"
+Requires-Dist: pip-audit>=2.7; extra == "security"
+Requires-Dist: ruff>=0.4; extra == "security"
 Requires-Dist: truffleHog>=3.0; extra == "security"
 
 # Friday V4 🚀
 
 > **An ambient, proactive, multi-modal AI operating partner.**
-> Inspired by Tony Stark's FRIDAY, built on Friday V3's frozen core.
+> Inspired by Tony Stark's FRIDAY.
+
+## ⭐ Project Status: V4 Is the Main Project
+
+**V4 is the project being actively built right now.**
+
+- V3 is largely built but **inconsistent** — it is not the deliverable.
+- V4 has its own roadmap (`docs/ROADMAP.md`) and is developed here on its
+  own terms.
+- V4 **imports only the V3 modules that are properly built** and useful
+  (e.g. persona/IdentityEngine, ambient feed, db layer) — as a dependency,
+  never as the foundation V4 is subordinated to.
+- If a V3 module is missing or broken, the answer is to build it properly
+  in V4 — not to patch V3 wholesale.
 
 ## Quick Start
 
@@ -116,7 +132,9 @@ env -u APPIMAGE -u APPDIR .venv312/bin/pip install -e . -e ../  # reinstall edit
 
 ## Architecture
 
-V4 builds *on top of* V3's frozen core. It never modifies V3.
+V4 is the main project. It selectively imports only properly-built V3
+modules (persona/IdentityEngine, ambient, db) — nothing is treated as a
+"frozen core" V4 must preserve.
 
 ```
 ┌────────────────────────────────────────┐
@@ -127,8 +145,8 @@ V4 builds *on top of* V3's frozen core. It never modifies V3.
 ├────────────────────────────────────────┤
 │    Friday V4 Intelligence Layer        │
 ├────────────────────────────────────────┤
-│      Friday V3 Core (Frozen)           │
-│  106K LOC │ 273 files │ 1656 tests     │
+│  V3 modules selectively imported       │
+│  persona │ ambient │ db               │
 └────────────────────────────────────────┘
 ```
 

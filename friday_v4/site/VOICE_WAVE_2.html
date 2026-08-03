@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Wave 2 — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Voice Wave 2</h1>
+<h1>Voice Wave 2.0 — Rebuild Design</h1>
+<blockquote><strong>Status:</strong> In development</blockquote>
+<blockquote><strong>Date:</strong> 2026-07-31</blockquote>
+<blockquote><strong>Supersedes:</strong> VOICE_SPEC.md (original Phase 1 design) for implementation decisions.</blockquote>
+<blockquote><strong>Why:</strong> The first voice wave shipped a torch-based stack that was too heavy and</blockquote>
+<blockquote>inconsistent for this machine. This rebuild is **zero-torch, ONNX/ctranslate2</blockquote>
+<blockquote>first**, hardware-optimized, and architected for clean extensibility.</blockquote>
+<hr>
+<h2>1. Hardware Reality Check</h2>
+<p>This machine dictates every choice in this design:</p>
+<table><thead><tr><th>|</th><th></th><th>R</th><th>e</th><th>s</th><th>o</th><th>u</th><th>r</th><th>c</th><th>e</th><th></th><th>|</th><th></th><th>V</th><th>a</th><th>l</th><th>u</th><th>e</th><th></th><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>e</th><th>q</th><th>u</th><th>e</th><th>n</th><th>c</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>CPU</td><td>AMD A9-9425, <strong>2 cores</strong></td><td>No LLM TTS (Orpheus 3B, XTTS) on CPU. ONNX + int8 everywhere.</td><td></td></tr><tr><td></td><td>RAM</td><td><strong>3.2 GB total</strong></td><td>torch is out. <code>faster-whisper int8</code>, <code>kokoro-onnx</code>, <code>openwakeword</code> all fit.</td><td></td></tr><tr><td></td><td>Audio</td><td>PipeWire/PulseAudio, libportaudio present, 1 real mic</td><td><code>sounddevice</code> (pure ctypes over libportaudio) — no compile needed.</td><td></td></tr><tr><td></td><td>Disk</td><td>44 GB free</td><td>Model cache budget ~2 GB.</td><td></td></tr><tr><td></td><td>OS</td><td>Linux (Hyprland), ZCode AppImage env quirk</td><td>venv must be built with <code>env -u APPIMAGE -u APPDIR</code>.</td><td></td></tr></tbody></table>
+<p><strong>Golden rule: no <code>torch</code>, no <code>transformers</code>, no <code>TTS</code> (Coqui) at runtime.</strong></p>
+<p>The old stack pulled torch (~2 GB, 14-30 s import) just to run Kokoro. This</p>
+<p>rebuild runs the same model quality through ONNX at a fraction of the cost.</p>
+<hr>
+<h2>2. Provider Matrix (v2)</h2>
+<table><thead><tr><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>g</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>r</th><th>i</th><th>m</th><th>a</th><th>r</th><th>y</th><th></th><th>(</th><th>l</th><th>o</th><th>c</th><th>a</th><th>l</th><th>)</th><th></th><th>|</th><th></th><th>S</th><th>e</th><th>c</th><th>o</th><th>n</th><th>d</th><th>a</th><th>r</th><th>y</th><th></th><th>|</th><th></th><th>E</th><th>m</th><th>e</th><th>r</th><th>g</th><th>e</th><th>n</th><th>c</th><th>y</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>TTS</strong></td><td><code>kokoro-onnx</code> (54 voices, fast CPU, Apache-2.0)</td><td><code>edge-tts</code> (internet, en-IE-EmilyNeural ≈ FRIDAY)</td><td><code>pyttsx3</code> (system)</td><td></td></tr><tr><td></td><td><strong>STT</strong></td><td><code>faster-whisper</code> (<code>base.en</code>, int8, ctranslate2)</td><td><code>whisper.cpp</code> (subprocess)</td><td><code>speech_recognition</code></td><td></td></tr><tr><td></td><td><strong>Hotword</strong></td><td><code>openwakeword</code> (<code>hey_jarvis</code> → &quot;hey friday&quot;)</td><td>—</td><td>energy detection</td><td></td></tr><tr><td></td><td><strong>VAD</strong></td><td>Silero VAD (onnxruntime, mode 3)</td><td>WebRTC VAD (mode 1/2)</td><td>energy threshold</td><td></td></tr><tr><td></td><td><strong>Audio I/O</strong></td><td><code>sounddevice</code> (libportaudio)</td><td><code>pyaudio</code></td><td>—</td><td></td></tr></tbody></table>
+<h3>Why these?</h3>
+<ul><li><strong>kokoro-onnx</strong> — same Kokoro-82M quality as the old torch build, but runs on</li></ul>
+<p><code>onnxruntime</code> (no torch). ~10-30× realtime on CPU, Apache-2.0, 54 voices,</p>
+<p><code>af_bella</code> warm voice / <code>am_michael</code> briefing / <code>am_adam</code> alert map.</p>
+<ul><li><strong>edge-tts</strong> — free, high quality, zero local cost. <code>en-IE-EmilyNeural</code> is an</li></ul>
+<p>Irish female voice — the closest free match to FRIDAY (Kerry Condon). Requires</p>
+<p>internet; auto-selected when <code>kokoro</code> isn&#x27;t loaded yet.</p>
+<ul><li><strong>faster-whisper</strong> — CTranslate2 <code>int8</code> halves memory vs torch whisper, has</li></ul>
+<p>built-in Silero VAD. <code>base.en</code> ≈ 400 MB RAM. <code>tiny.en</code> for constrained mode.</p>
+<ul><li><strong>openwakeword</strong> — Apache-2.0, no API key (old spec said Porcupine + key; this</li></ul>
+<p>is strictly better). <code>hey_jarvis</code> model is the closest prebuilt phrase.</p>
+<ul><li><strong>sounddevice</strong> — pure-ctypes bindings to the already-present <code>libportaudio.so</code>;</li></ul>
+<p>no portaudio-dev compile, no pyaudio wheel pain.</p>
+<hr>
+<h2>3. Architecture</h2>
+<pre><code class="language-">┌───────────────────────────────────────────────────────────────┐
+│                        VoiceRouter                            │
+│   desktop commands → proactive engine → V3 IdentityEngine     │
+│   → fallback                                                  │
+└──────────────────────────┬────────────────────────────────────┘
+                           │ text-in / text-out
+┌──────────────────────────▼────────────────────────────────────┐
+│                      VoicePipeline (state machine)            │
+│   IDLE → HOTWORD → LISTENING → PROCESSING → SPEAKING          │
+│   • interruption handling (VAD barge-in)                      │
+│   • anti-echo refractory window                               │
+│   • silence / max-duration timers                             │
+└──┬──────────┬───────────┬─────────────┬───────────┬──────────┘
+   │          │           │             │           │
+┌──▼───┐  ┌───▼────┐  ┌───▼────┐  ┌─────▼────┐  ┌───▼────┐
+│ audio│  │  vad   │  │ hotword│  │   stt    │  │  tts   │
+│      │  │        │  │        │  │          │  │        │
+│ sound│  │ silero │  │ open-  │  │ faster-  │  │ kokoro-│
+│device│  │ /webrtc│  │ wake-  │  │ whisper  │  │ onnx   │
+│      │  │        │  │ word   │  │ (int8)   │  │ edge   │
+└──────┘  └────────┘  └────────┘  └──────────┘  └────────┘</code></pre>
+<h3>Design principles (vs v1)</h3>
+<p>1. <strong>One provider per module.</strong> <code>tts.py</code> was 1081 lines. Now each provider is a</p>
+<p>small class behind a common interface; the facade (<code>TextToSpeech</code>,</p>
+<p><code>SpeechToText</code>, <code>HotwordDetector</code>, <code>VoiceActivityDetector</code>, <code>AudioStream</code>)</p>
+<p>owns auto-selection + fallback.</p>
+<p>2. <strong>Lazy + async loading.</strong> Heavy models (kokoro, faster-whisper) load in a</p>
+<p>background thread; <code>start()</code> never blocks on downloads. <code>voice status</code> shows</p>
+<p><code>loading… / available / unavailable</code>.</p>
+<p>3. <strong>Never crash.</strong> Every provider import and call is wrapped; failures degrade</p>
+<p>to the next provider, never to a traceback.</p>
+<p>4. <strong>Config-first.</strong> <code>~/.friday/v4_config.json</code> controls model sizes, voices,</p>
+<p>thresholds. Env vars <code>FRIDAY_STT_MODEL</code>, <code>FRIDAY_TTS_PROVIDER</code> override.</p>
+<hr>
+<h2>4. Module Map (v2)</h2>
+<pre><code class="language-">src/friday_v4/voice/
+├── __init__.py        # public API surface
+├── audio.py           # AudioStream, device listing (sounddevice)
+├── vad.py             # SileroVAD / WebRTCVAD / VoiceActivityDetector
+├── hotword.py         # OpenWakeWordProvider / EnergyDetector / HotwordDetector
+├── stt.py             # FasterWhisperProvider / WhisperCPP / SpeechRecognition / SpeechToText
+├── tts.py             # KokoroONNXProvider / EdgeTTS / PyTTS / TextToSpeech
+├── chimes.py          # audio cues (listen/done/alert/error/think) + playback
+├── pipeline.py        # VoicePipeline state machine
+├── router.py          # VoiceRouter (desktop → proactive → V3 → fallback)
+└── utils.py           # pure-python WAV I/O (no soundfile dependency)</code></pre>
+<h3>Key interfaces</h3>
+<pre><code class="language-python"># audio.py
+class AudioStream:
+    def start(self, callback: Callable[[np.ndarray], None]) -&gt; bool
+    def stop(self)
+    @property is_active
+
+# tts.py
+class TextToSpeech:
+    def speak(self, text, mode=None) -&gt; bool       # non-blocking, interruptible
+    def stop(self)
+    @property active_provider_name
+    @property is_available
+    def list_providers() -&gt; list[dict]
+
+# stt.py
+class SpeechToText:
+    def transcribe(self, audio: np.ndarray, sample_rate=16000) -&gt; STTResult
+    @property is_available
+
+# pipeline.py
+class VoicePipeline:
+    def start() -&gt; bool
+    def stop()
+    route_function: Callable[[str], str]
+    on_transcription / on_state_change / on_error</code></pre>
+<hr>
+<h2>5. CLI Surface (unchanged UX, better internals)</h2>
+<pre><code class="language-">friday talk                          # hotword session
+friday talk --push-to-talk
+friday talk --tts-provider kokoro|edge|pyttsx3
+friday talk --silero-vad
+friday talk --no-chimes
+friday voice setup / status / test</code></pre>
+<p><code>cli_desktop.py</code> still spawns <code>python -m friday_v4.cli_talk talk</code> (module path</p>
+<p>unchanged), and the integrated <code>friday</code> CLI keeps <code>talk/voice/desktop/proactive</code>.</p>
+<hr>
+<h2>6. Voice Modes &amp; Chimes</h2>
+<p>Voice modes adapt tone: <code>CONVERSATION</code> (af_bella), <code>BRIEFING</code> (&gt;200 chars or</p>
+<p>&quot;here&#x27;s…&quot;, am_michael), <code>ALERT</code> (vulnerability/security/critical keywords,</p>
+<p>am_adam), <code>WHISPER</code> (23:00-07:00, af_heart). Chimes: listen (double-chime),</p>
+<p>done (single), alert (sharp), error (descending), think (quiet hum) — generated</p>
+<p>in pure Python, no asset files.</p>
+<hr>
+<h2>7. Config (v2 defaults)</h2>
+<pre><code class="language-json">{
+  &quot;voice&quot;: {
+    &quot;enabled&quot;: true,
+    &quot;stt_model&quot;: &quot;base.en&quot;,
+    &quot;tts_provider&quot;: &quot;kokoro&quot;,
+    &quot;hotword&quot;: &quot;hey friday&quot;,
+    &quot;hotword_sensitivity&quot;: 0.7,
+    &quot;vad_mode&quot;: 1,
+    &quot;silence_timeout_seconds&quot;: 2.0,
+    &quot;max_utterance_seconds&quot;: 30.0,
+    &quot;enable_chimes&quot;: true,
+    &quot;push_to_talk_key&quot;: &quot;ctrl+shift+space&quot;
+  }
+}</code></pre>
+<hr>
+<h2>8. Testing Strategy</h2>
+<ul><li>Unit tests mock providers; assert facade fallback logic, WAV roundtrip, chime</li></ul>
+<p>generation, auto voice-mode, state transitions, router routing.</p>
+<ul><li><code>tests/test_voice.py</code> recreated for the new API (the old one was archived).</li><li>Integration smoke test (<code>friday voice status</code>) confirms provider discovery</li></ul>
+<p>without hardware.</p>
+<ul><li>Real mic round-trip is a manual step (requires hardware).</li></ul>
+<hr>
+<h2>9. What&#x27;s intentionally out of scope (v2)</h2>
+<ul><li>Voice cloning (XTTS/Orpheus) — needs 4-6 GB RAM; revisit when a GPU or bigger</li></ul>
+<p>machine exists. The <code>~/.friday/voices/friday.wav</code> sample is preserved for that</p>
+<p>future work.</p>
+<ul><li>Streaming/word-by-word TTS — sentence-level is enough for v2.</li><li>Mobile push-to-talk — that&#x27;s the mobile wave.</li><li><strong>Custom &quot;hey friday&quot; hotword retraining</strong> — v2 ships openwakeword&#x27;s prebuilt</li></ul>
+<p><code>hey_jarvis</code> model, which sounds close to but is not literally &quot;hey friday&quot;.</p>
+<p>Retraining a custom model needs ~15 s of user voice samples + a training run;</p>
+<p>deferred. <code>friday4 voice train-hotword</code> is the planned command.</p>
+<p>*This document supersedes the v1 implementation choices while keeping the</p>
+<p>VOICE_SPEC.md and VOICE_EXPERIENCE.md product goals intact.*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

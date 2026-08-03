@@ -15,13 +15,10 @@ Modes:
 from __future__ import annotations
 
 import logging
-import os
-import shutil
-import struct
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
 import numpy as np
 
@@ -190,7 +187,7 @@ class WebRTCVAD:
     is_available = False
     _vad = None
 
-    MODES = {0: 0, 1: 1, 2: 2, 3: 3}
+    MODES: ClassVar[dict[int, int]] = {0: 0, 1: 1, 2: 2, 3: 3}
 
     def __init__(self, mode: int = 1):
         self.mode = mode

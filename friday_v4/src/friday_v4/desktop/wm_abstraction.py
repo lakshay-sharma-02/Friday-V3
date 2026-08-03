@@ -29,7 +29,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Optional
+from typing import ClassVar, Optional
 
 logger = logging.getLogger("friday_v4.desktop.wm")
 
@@ -133,7 +133,7 @@ class SmartWindowResolver:
     """
 
     # Natural name → possible window classes
-    SEMANTIC_MAP: dict[str, list[str]] = {
+    SEMANTIC_MAP: ClassVar[dict[str, list[str]]] = {
         "code editor": ["kitty", "Code", "code-oss", "alacritty",
                         "wezterm", "foot", "zcode"],
         "terminal": ["kitty", "alacritty", "wezterm", "foot",
@@ -160,8 +160,9 @@ class SmartWindowResolver:
     }
 
     # Common words to strip from natural language queries
-    _STOP_WORDS = {"the", "a", "an", "my", "to", "please", "could",
-                   "would", "can", "switch", "focus", "open", "go"}
+    _STOP_WORDS: ClassVar[set[str]] = {"the", "a", "an", "my", "to",
+                                        "please", "could", "would", "can",
+                                        "switch", "focus", "open", "go"}
 
     @classmethod
     def resolve(cls, query: str, open_windows: list[WindowInfo]) -> Optional[str]:
@@ -213,6 +214,137 @@ class SmartWindowResolver:
             if window.app_class.lower() in [c.lower() for c in classes]:
                 suggestions.append(name)
         return suggestions
+
+
+# ---------------------------------------------------------------------------
+# Natural-language desktop command router (CLI/web surface)
+# ---------------------------------------------------------------------------
+
+#: Verbs that resolve to desktop actions, mapped to the WM operation.
+_DESKTOP_TEXT_ACTIONS: dict[str, str] = {
+    "focus": "focus", "show": "focus", "switch": "workspace",
+    "go to": "workspace", "open": "open", "launch": "launch",
+    "screenshot": "screenshot", "capture": "screenshot",
+    "snapshot": "screenshot", "take": "screenshot",
+}
+
+
+def _has_word(text: str, word: str) -> bool:
+    import re
+    return bool(re.search(rf"\b{re.escape(word)}\b", text))
+
+
+def desktop_text_command(text: str) -> str:
+    """Route one natural-language desktop command to the window manager.
+
+    The §2 Wave-2 hardening entry point for the text surfaces (``friday4
+    talk`` and the web dashboard chat) — desktop control is no longer
+    voice-only. Same verbs as the voice router: focus / switch workspace /
+    open / launch / screenshot / status. Never raises: an unavailable
+    desktop degrades to an honest message (never a crash).
+
+    Returns the response string, or "" when nothing matched (callers fall
+    through to the normal chat fallback).
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    lower = raw.lower()
+    try:
+        wm = WindowManager()
+    except Exception as exc:
+        logger.debug(f"desktop_text_command: no WM ({exc})")
+        return "Desktop control isn't available on this system."
+    if not wm.is_available:
+        return "Desktop control isn't available on this system."
+
+    # Read-queries take precedence over action words.
+    if ("what am i working on" in lower or "what's on my screen" in lower
+            or "what is open" in lower or "what's open" in lower
+            or "what windows" in lower or "whats open" in lower
+            or "show desktop" in lower):
+        return _desktop_status_text(wm)
+
+    for action, op in _DESKTOP_TEXT_ACTIONS.items():
+        if not _has_word(lower, action):
+            continue
+        idx = lower.index(action) + len(action)
+        target = raw[idx:].strip()
+        for prefix in ("to", "the", "me"):
+            target = target.removeprefix(prefix).strip()
+        if op == "focus":
+            if not target:
+                return "What would you like me to focus?"
+            resolved = wm.focus_smart(target)
+            return f"Focused {resolved}." if resolved else \
+                f"I couldn't find '{target}'."
+        if op == "open":
+            return _desktop_open_or_launch(wm, target, "open")
+        if op == "launch":
+            return _desktop_open_or_launch(wm, target, "launch")
+        if op == "workspace":
+            return _desktop_workspace(wm, target)
+        if op == "screenshot":
+            return "Screenshot saved." if wm.take_screenshot() \
+                else "Sorry, I couldn't take a screenshot."
+    return ""
+
+
+def _desktop_open_or_launch(wm, target: str, verb: str) -> str:
+    if not target:
+        return f"What would you like me to {verb}?"
+    resolved = wm.focus_smart(target)
+    if resolved:
+        return f"Focused {resolved}."
+    if wm.launch_app(target):
+        return f"Launching {target}."
+    return f"I couldn't {verb} '{target}'."
+
+
+def _desktop_workspace(wm, target: str) -> str:
+    target = target.strip()
+    for prefix in ("workspace", "to workspace", "desktop", "to desktop"):
+        if target.lower().startswith(prefix):
+            target = target[len(prefix):].strip()
+    nums = [int(n) for n in target.split() if n.isdigit()]
+    if nums:
+        if wm.switch_workspace(nums[0]):
+            return f"Switched to workspace {nums[0]}."
+    if target:
+        try:
+            for ws in wm.list_workspaces():
+                if target.lower() in ws.name.lower():
+                    if wm.switch_workspace(ws.id):
+                        return f"Switching to workspace {ws.id}."
+        except Exception:
+            pass
+        windows = wm.list_windows()
+        resolved = SmartWindowResolver.resolve(target, windows)
+        if resolved:
+            for w in windows:
+                if w.app_class.lower() == resolved.lower():
+                    if wm.switch_workspace(w.workspace_id):
+                        return (f"Switching to workspace {w.workspace_id} "
+                                f"where {resolved} is open.")
+    return f"I couldn't find workspace '{target}'."
+
+
+def _desktop_status_text(wm) -> str:
+    try:
+        active = wm.get_active_window()
+        windows = wm.list_windows()
+        workspaces = wm.list_workspaces()
+        parts = []
+        if active:
+            parts.append(f"You're in {active.app_name} on "
+                         f"workspace {active.workspace_id}")
+            if active.title and "friday" not in active.title.lower():
+                parts.append(f"Working on {active.title[:40]}")
+        parts.append(f"{len(windows)} windows open across "
+                     f"{len(workspaces)} workspaces")
+        return ". ".join(parts) + "."
+    except Exception:
+        return "I couldn't check your desktop status right now."
 
 
 # ---------------------------------------------------------------------------
@@ -271,11 +403,24 @@ def detect_desktop_environment() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _notify_linux(title: str, message: str, urgency: str = "normal") -> bool:
-    """Send a desktop notification via notify-send (Linux)."""
+def _notify_linux(title: str, message: str, urgency: str = "normal",
+                  timeout_ms: Optional[int] = None) -> bool:
+    """Send a desktop notification via notify-send (Linux).
+
+    Args:
+        timeout_ms: Auto-dismiss timeout in milliseconds. Passed as
+            ``notify-send -t`` so the banner fades on daemons that honor
+            it (dunst, mako, KDE). GNOME ignores this only for
+            ``critical`` urgency, which is why auto-dismissable
+            notifications must not use ``critical``. When None the server
+            default applies.
+    """
     try:
+        cmd = ["notify-send", "-a", "Friday", "-u", urgency]
+        if timeout_ms is not None:
+            cmd += ["-t", str(int(timeout_ms))]
         subprocess.run(
-            ["notify-send", "-a", "Friday", "-u", urgency, title, message],
+            cmd + [title, message],
             capture_output=True, timeout=3,
         )
         return True
@@ -435,19 +580,25 @@ class DesktopAbstraction:
         )
 
     @staticmethod
-    def notify(title: str, message: str, urgency: str = "normal") -> bool:
+    def notify(title: str, message: str, urgency: str = "normal",
+               timeout_ms: Optional[int] = None) -> bool:
         """Send a desktop notification on the current platform.
 
         Args:
             title: Notification title
             message: Notification body
             urgency: "low", "normal", or "critical" (Linux only)
+            timeout_ms: Auto-dismiss timeout in milliseconds (Linux only).
+                Defaults to the server default when None. Prefer an
+                explicit timeout over ``urgency="critical"`` for anything
+                that should fade on its own — critical banners are
+                persistent on GNOME and several other desktops.
         """
         if os.name == "nt":
             return _notify_windows(title, message)
         if sys.platform == "darwin":
             return _notify_macos(title, message)
-        return _notify_linux(title, message, urgency)
+        return _notify_linux(title, message, urgency, timeout_ms)
 
     # ── Helpers ───────────────────────────────────────────────────
 

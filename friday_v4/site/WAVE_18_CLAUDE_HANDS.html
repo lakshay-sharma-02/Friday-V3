@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 18 Claude Hands — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 18 Claude Hands</h1>
+<h1>Wave 18 — Claude Code Hands</h1>
+<blockquote><strong>The sentence clause:</strong> *no task it can&#x27;t pick up* — capability</blockquote>
+<blockquote>composition, made real with an agent that can actually do the work.</blockquote>
+<blockquote></blockquote>
+<blockquote><strong>One-line summary:</strong> Friday stays the brain (NLU → gate → audit →</blockquote>
+<blockquote>memory); the local <strong>Claude Code CLI</strong> becomes the hands for complex</blockquote>
+<blockquote>agentic goals. &quot;figure out why the build fails and fix it&quot; now</blockquote>
+<blockquote>delegates to Claude Code — through the same gated, sandboxed, audited</blockquote>
+<blockquote>pipeline as every other action.</blockquote>
+<blockquote></blockquote>
+<blockquote><strong>Status:</strong> ✅ SHIPPED — 2026-08. 25 hermetic tests. Suite green.</blockquote>
+<hr>
+<h2>1. Why this wave</h2>
+<p>The honest gap review (Wave 16/17 close-out) found Friday could</p>
+<p>*execute, reason, remember, and learn* — but **&quot;figure out why the</p>
+<p>build fails and fix it&quot; was the one sentence that didn&#x27;t work**: the</p>
+<p>resolver produced an EXECUTE with an *empty command* (a guaranteed</p>
+<p>&quot;empty command&quot; failure) or a thin 0-step mission. The MCU test #1 /</p>
+<h1>5 moment — capability *composition* — needed an agent that can read a</h1>
+<p>repo, run the build, see the failure, fix it, and re-run.</p>
+<p>The user&#x27;s directive was explicit: **&quot;let&#x27;s not make our Friday run the</p>
+<p>code itself — use the Claude Code CLI on the system. Claude Code is</p>
+<p>smart itself so it won&#x27;t mess up either.&quot;**</p>
+<p>So: Friday = orchestrator + safety floor. Claude Code = the hands.</p>
+<h2>2. Design</h2>
+<h3>Where it plugs in</h3>
+<p>A new <strong>executor</strong> in the Wave 9 pipeline — <code>ClaudeCodeExecutor</code></p>
+<p>(<code>action_type = &quot;claude&quot;</code>), registered in <code>execution/executors.py</code> and</p>
+<p>exported from <code>execution/__init__.py</code>. Nothing else about the pipeline</p>
+<p>changed: it is <code>classify → record → confirm? → sandbox.run → finish</code></p>
+<p>like every other executor.</p>
+<p>The executor&#x27;s <strong>command IS the task</strong>:</p>
+<pre><code class="language-">claude -p &quot;&lt;task&gt;&quot; --output-format json --model fable \
+       --allowedTools &quot;Bash Read Edit Write Glob Grep&quot;</code></pre>
+<ul><li><code>-p</code> (print mode) + <code>--output-format json</code> → a single JSON result line</li></ul>
+<p>with <code>result</code> / <code>is_error</code> / <code>terminal_reason</code> / <code>permission_denials</code></p>
+<p>/ <code>total_cost_usd</code>.</p>
+<ul><li><code>--model fable</code> → the gateway model proven in this workspace</li></ul>
+<p>(settings.json&#x27;s <code>ANTHROPIC_MODEL=cc/claude-sonnet-5</code> env is broken —</p>
+<p>404; the CLI flag overrides it). Configurable via</p>
+<p><code>FRIDAY_V4_CLAUDE_MODEL</code>.</p>
+<ul><li><code>--allowedTools &quot;Bash Read Edit Write Glob Grep&quot;</code> → Claude can read,</li></ul>
+<p>edit, run bash — but <strong>no network tools</strong> (WebFetch absent from the</p>
+<p>allowlist), so it can&#x27;t exfiltrate or reach out.</p>
+<h3>The gate (safety floor stays Friday&#x27;s)</h3>
+<p>The task text is classified like any command:</p>
+<ul><li><strong>CONFIRM by default</strong> — delegating is state-changing, so the</li></ul>
+<p>operator confirms (interactive y/N, voice ask, or <code>--force</code>).</p>
+<ul><li>**Destructive *phrases* escalate to NEVER** — but phrase-level, not</li></ul>
+<p>bare-word: <code>&quot;push my changes to origin&quot;</code>, <code>&quot;deploy to production&quot;</code>,</p>
+<p><code>&quot;rm -rf&quot;</code>, <code>&quot;drop database&quot;</code> → NEVER (operator override only). A</p>
+<p>*diagnostic* request — `&quot;investigate the deploy failure and tell me</p>
+<p>why&quot;` — stays CONFIRM. Bare-word sniffing (&quot;push&quot;/&quot;deploy&quot;) would</p>
+<p>false-positive on exactly the diagnostic tasks this wave exists for.</p>
+<p><code>_CLAUDE_DANGEROUS_PHRASES</code> in <code>execution/executors.py</code>.</p>
+<h3>The sandbox</h3>
+<ul><li>cwd-rooted (path allowlist follows the workspace being acted on)</li><li><strong>timeout-bounded</strong> — default 600s (<code>FRIDAY_V4_CLAUDE_TIMEOUT</code>),</li></ul>
+<p>never hangs the daemon</p>
+<ul><li><strong>env-sanitized</strong> — secret-looking vars stripped (Claude Code&#x27;s own</li></ul>
+<p>auth comes from its settings file, not the child env)</p>
+<ul><li><strong>stdin=/dev/null</strong> — the sandbox&#x27;s <code>run()</code> now defaults stdin to</li></ul>
+<p>DEVNULL so a delegated task never waits on the operator&#x27;s terminal</p>
+<p>(Claude prints a &quot;no stdin&quot; warning otherwise)</p>
+<h3>Result parsing</h3>
+<p><code>_parse_result</code> maps the CLI&#x27;s JSON back onto a <code>SandboxResult</code>:</p>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>L</th><th>I</th><th></th><th>J</th><th>S</th><th>O</th><th>N</th><th></th><th>|</th><th></th><th>R</th><th>e</th><th>s</th><th>u</th><th>l</th><th>t</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>is_error: false</code></td><td>succeeded — <code>result</code> text surfaced</td><td></td></tr><tr><td></td><td><code>is_error: true</code></td><td>failed — the CLI&#x27;s own message surfaced</td><td></td></tr><tr><td></td><td><code>terminal_reason: error_limit/max_turns</code></td><td>failed (context exhausted)</td><td></td></tr><tr><td></td><td>non-JSON stdout</td><td>raw text surfaced (proxy warning etc.)</td><td></td></tr><tr><td></td><td><code>permission_denials: [...]</code></td><td>succeeded + a note that N tool calls were denied</td><td></td></tr></tbody></table>
+<p>A missing <code>claude</code> CLI → structured failure (&quot;claude CLI not found&quot;),</p>
+<p>never an exception — the daemon law.</p>
+<h2>3. The NL path (Law 1)</h2>
+<p>Every surface uses the ONE NLU point, so routing lives in the resolver:</p>
+<ul><li><strong><code>nlu/resolver.py</code></strong> — <code>_EXECUTION_TYPES</code> gains <code>&quot;claude&quot;</code>. When an</li></ul>
+<p>EXECUTE intent resolves to an empty/no command <strong>and</strong> the utterance</p>
+<p>reads like a complex goal (<code>_AGENTIC_MARKERS</code>: &quot;figure out&quot;, &quot;find</p>
+<p>out why&quot;, &quot;debug&quot;, &quot;investigate&quot;, &quot;troubleshoot&quot;, &quot;diagnose&quot;,</p>
+<p>&quot;root cause&quot;, &quot;fix the&quot;, &quot;make the&quot;, &quot;get the tests&quot;, …) → route to</p>
+<p><code>claude</code>, command = the full task text.</p>
+<ul><li><strong><code>nlu/intent.py</code></strong> — <code>is_agentic_goal()</code> (shared markers) + the</li></ul>
+<p>fallback scores agentic verbs (&quot;debug&quot;, &quot;investigate&quot;, …) so offline</p>
+<p>classification also lands on EXECUTE, and sets <code>action_type=&quot;claude&quot;</code></p>
+<p>directly so the offline path doesn&#x27;t ask &quot;what would you like me to</p>
+<p>run?&quot;.</p>
+<ul><li><strong><code>nlu/llm.py</code></strong> — the LLM prompt gains <code>claude</code> as a valid</li></ul>
+<p>action_type with the same rule (&quot;complex agentic goal with no single</p>
+<p>concrete command → action_type &#x27;claude&#x27;, command = the full goal&quot;).</p>
+<p><strong>Concrete commands stay native</strong> (the user&#x27;s choice — complex only):</p>
+<p><code>&quot;git status&quot;</code> → git, <code>&quot;run the tests&quot;</code> → testing, <code>&quot;read README.md&quot;</code></p>
+<p>→ file. Claude is not a toll gate on every command.</p>
+<h3>What now works (verified)</h3>
+<table><thead><tr><th>|</th><th></th><th>Y</th><th>o</th><th>u</th><th></th><th>s</th><th>a</th><th>y</th><th></th><th>|</th><th></th><th>F</th><th>r</th><th>i</th><th>d</th><th>a</th><th>y</th><th></th><th>d</th><th>o</th><th>e</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>&quot;figure out why the build fails and fix it&quot;</td><td>→ claude executor → Claude Code reads/runs/fixes → result surfaced</td><td></td></tr><tr><td></td><td>&quot;fix the failing test&quot;</td><td>→ claude (no path entity → not a bare pytest)</td><td></td></tr><tr><td></td><td>&quot;debug the memory leak&quot;</td><td>→ claude</td><td></td></tr><tr><td></td><td>&quot;investigate the crash&quot;</td><td>→ claude</td><td></td></tr><tr><td></td><td>&quot;push my changes to origin&quot;</td><td><strong>NEVER</strong> — denied without <code>--force</code></td><td></td></tr><tr><td></td><td>&quot;git status&quot; / &quot;run the tests&quot; / &quot;read README.md&quot;</td><td>native executors, instant</td><td></td></tr></tbody></table>
+<h2>4. Surfaces</h2>
+<ul><li><strong>CLI:</strong> <code>friday4 execute claude &quot;&lt;task&gt;&quot;</code> (choices list updated) +</li></ul>
+<p><code>friday4 talk &quot;figure out why the build fails and fix it&quot;</code> (NL path,</p>
+<p>with confirm/force semantics) — exit codes: 0 ok / 2 denied / 1 failed.</p>
+<ul><li><strong>Voice / web:</strong> inherited automatically — they route through</li></ul>
+<p><code>nl_router</code>/the ONE NLU point, so a spoken &quot;figure out why the build</p>
+<p>fails&quot; delegates the same way (voice confirm asks aloud).</p>
+<ul><li><strong>Capability registry:</strong> <code>executor:claude</code> — &quot;what can you do&quot; tells</li></ul>
+<p>the truth.</p>
+<h2>4.5 Planning through Claude Code (close-out)</h2>
+<p>Friday stays the planner too, when opted in. The Wave 9 <code>Planner</code></p>
+<p>(<code>missions/planner.py</code>) has an unused <code>enhancer</code> hook — an</p>
+<p>LLM-style <code>(goal) -&gt; list[StepPlan] | None</code> that enriches the</p>
+<p>deterministic decomposition. <strong><code>ClaudePlanner</code></strong></p>
+<p>(<code>missions/claude_planner.py</code>) fills it: an agentic goal</p>
+<p>(&quot;ship the auth refactor by Friday&quot;) is decomposed by Claude Code</p>
+<p>through the same gate → sandbox → audit shape as the executor, with</p>
+<p>one deliberate difference — planning is <strong>read-only</strong>:</p>
+<pre><code class="language-">claude -p &quot;&lt;plan prompt&gt;&quot; --output-format json --model &lt;model&gt; \
+       --allowedTools &quot;Read Glob Grep&quot;        # inspect, never edit/run</code></pre>
+<ul><li><strong>Gate</strong> — the goal text is classified with the same</li></ul>
+<p><code>_CLAUDE_DANGEROUS_PHRASES</code>; a NEVER goal (&quot;deploy to production by</p>
+<p>Friday&quot;) is refused outright, and the deterministic planner turns it</p>
+<p>into a *manual* step (nothing executes).</p>
+<ul><li><strong>Sandbox</strong> — cwd-rooted, timeout-bounded, env-sanitized,</li></ul>
+<p>stdin=/dev/null, read-only tools. The steps it produces execute</p>
+<p>later through the *real* gate → sandbox → audit pipeline, one by</p>
+<p>one, with the operator&#x27;s confirm at each state-changing step.</p>
+<ul><li><strong>Audit</strong> — the delegation is recorded (<code>action_type = &quot;claude_plan&quot;</code>)</li></ul>
+<p>with its gate level and outcome.</p>
+<ul><li><strong>Parse</strong> — the plan JSON maps onto <code>StepPlan</code> objects; unknown</li></ul>
+<p><code>action_type</code> values become manual steps (Friday never invents an</p>
+<p>executor). Any failure (missing CLI, is_error, timeout, malformed</p>
+<p>JSON) → <code>None</code> → the deterministic planner stands.</p>
+<ul><li><strong>Opt-in</strong> — <code>FRIDAY_V4_CLAUDE_PLANNER=1</code> (same convention as Wave</li></ul>
+<p>13&#x27;s <code>FRIDAY_V4_LLM</code>); without it, mission planning is pure</p>
+<p>deterministic and never touches claude (hermetic by default).</p>
+<p>Config: model/timeout reuse <code>FRIDAY_V4_CLAUDE_MODEL</code> /</p>
+<p><code>FRIDAY_V4_CLAUDE_TIMEOUT</code>; tool allowlist is</p>
+<p><code>FRIDAY_V4_CLAUDE_PLAN_TOOLS</code>.</p>
+<ul><li><strong>One construction point</strong> — <code>make_planner(cwd, conn)</code> (in</li></ul>
+<p><code>missions/claude_planner.py</code>, re-exported from <code>missions/</code>) returns</p>
+<p>the claude-enhanced <code>Planner</code> when the opt-in env is set and the</p>
+<p>plain deterministic one otherwise. <code>MissionEngine.__init__</code> uses it</p>
+<p>for its default planner, so <strong><code>create()</code> and <code>replan()</code></strong> both</p>
+<p>decompose through Claude Code under the same opt-in — the autonomy</p>
+<p>loop, CLI, and NL surface all inherit one planner.</p>
+<ul><li><strong>Replan by NL</strong> — &quot;replan this mission&quot; / &quot;change the plan&quot; /</li></ul>
+<p>&quot;revise my plan&quot; route to <code>nl_router._replan_response</code>: the latest</p>
+<p>ACTIVE mission (else the latest) is re-decomposed on its own goal</p>
+<p>through Claude Code, and the Wave 9 adaptation contract reports</p>
+<p>&quot;plan changed because …&quot; honestly. Mission *creation* phrases</p>
+<p>(&quot;create a plan&quot;, &quot;ship the auth refactor by Friday&quot;) never match</p>
+<p>— <code>_is_replan_request</code> is conservative.</p>
+<ul><li><strong>The Wiring Law CLI (W19 slice 0)</strong> — `friday4 mission</li></ul>
+<p>create|list|status|replan|advance|start|pause|cancel|complete|delete`</p>
+<p>(<code>cli_missions.py</code>): the missions layer&#x27;s debug hatch, using the</p>
+<p>SAME <code>make_planner</code> construction point, so Claude Code decomposition</p>
+<p>honors the same <code>FRIDAY_V4_CLAUDE_PLANNER</code> opt-in and never</p>
+<p>diverges from the NL path. <code>--json</code> for scripting.</p>
+<p><strong>MCU test #1, upgraded:</strong> &quot;ship the auth refactor by Friday&quot; with the</p>
+<p>opt-in set gets a repo-grounded step plan from Claude Code, still</p>
+<p>persisted, tracked, and advanced by Friday&#x27;s mission engine — and</p>
+<p>&quot;replan this mission&quot; re-decomposes it through the same path, reporting</p>
+<p>exactly what changed.</p>
+<h2>5. Wiring table</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>W</th><th>i</th><th>r</th><th>e</th><th>d</th><th>?</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Mission planning — create + replan (<code>make_planner</code>; <code>MissionEngine</code> default; <code>nl_router</code> PLAN + replan paths, <code>FRIDAY_V4_CLAUDE_PLANNER</code> opt-in)</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 mission</code> CLI (create/list/status/replan/advance/lifecycle — same <code>make_planner</code> point)</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 talk</code> (nl_router <code>_run_execution</code>)</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 execute claude &quot;&lt;task&gt;&quot;</code></td><td>✅</td><td></td></tr><tr><td></td><td>Voice router (via nl_router fallback)</td><td>✅ (inherited)</td><td></td></tr><tr><td></td><td>Web chat (via nl_router)</td><td>✅ (inherited)</td><td></td></tr><tr><td></td><td>Capability registry (<code>executor:claude</code>)</td><td>✅</td><td></td></tr><tr><td></td><td>Daemon</td><td>n/a (on-demand executor, like ssh)</td><td></td></tr><tr><td></td><td>Reasoning</td><td>n/a (not a question type — it&#x27;s an action)</td><td></td></tr></tbody></table>
+<h2>6. What was learned</h2>
+<ul><li><strong>The model env in settings.json was broken</strong> (<code>cc/claude-sonnet-5</code></li></ul>
+<p>→ 404). The fix is passing <code>--model fable</code> explicitly; the executor</p>
+<p>defaults to that and reads <code>FRIDAY_V4_CLAUDE_MODEL</code> for overrides.</p>
+<ul><li><strong>Print mode + <code>--allowedTools</code> works for a full agent</strong>: Claude ran</li></ul>
+<p><code>git status --short</code> through the gateway and returned the count — no</p>
+<p>permission prompt, <code>permission_denials: []</code>.</p>
+<ul><li><strong>stdin matters</strong>: without stdin=/dev/null, <code>claude -p</code> waits ~3s</li></ul>
+<p>for &quot;no stdin data&quot; before proceeding. The sandbox now defaults stdin</p>
+<p>to DEVNULL (safe for every executor).</p>
+<ul><li><strong>Bare-word gate sniffing is wrong for tasks</strong>: a natural-language</li></ul>
+<p>task mentioning &quot;push&quot;/&quot;deploy&quot; is often a *diagnostic* (&quot;why does</p>
+<p>the deploy fail&quot;). Phrase-level sniffing keeps the safety floor</p>
+<p>without blocking the exact requests this wave exists for.</p>
+<h2>7. Tests</h2>
+<p><code>tests/test_claude_executor.py</code> — 25 hermetic tests:</p>
+<ul><li>registration + gate (CONFIRM default, phrase→NEVER, diagnostic stays</li></ul>
+<p>CONFIRM), capability registry</p>
+<ul><li>fake <code>claude</code> binary (parametrized modes: ok / error / denied_tools /</li></ul>
+<p>naked / hang) → success parse, structured failure, denied-tools note,</p>
+<p>raw-text fallback</p>
+<ul><li>missing CLI → graceful failure, still audited</li><li>gate semantics: denied without force, NEVER even with a bare confirm,</li></ul>
+<p><code>--force</code> overrides, confirm_fn approves</p>
+<ul><li>timeout (hang mode → timed_out, never hangs)</li><li>resolver routing (agentic → claude; concrete → native; LLM-explicit</li></ul>
+<p>claude; ask stays ask)</p>
+<ul><li>NL router end-to-end (success surfaces Claude&#x27;s result; failure</li></ul>
+<p>surfaces Claude&#x27;s error)</p>
+<ul><li>CLI exit codes (0 / 1 / 2)</li></ul>
+<p><code>tests/test_claude_planner.py</code> — 27 hermetic tests (close-out): plan</p>
+<p>JSON parsing (bare/fenced), unknown action_type → manual step, every</p>
+<p>failure mode → <code>None</code> (deterministic floor), gate refusal of</p>
+<p>NEVER goals (audited <code>denied</code>, <code>permission_level=never</code>), audit rows</p>
+<p>(<code>action_type=&quot;claude_plan&quot;</code>), CLI arg shape (<code>-p</code> / <code>--model</code> /</p>
+<p>read-only <code>--allowedTools</code>), NL router end-to-end with the</p>
+<p><code>FRIDAY_V4_CLAUDE_PLANNER</code> opt-in (mission created from Claude&#x27;s plan;</p>
+<p>no-cli fallback; claude failure survives), the hermeticity guard</p>
+<p>(claude never consulted without the opt-in), and the replan close-out</p>
+<p>(<code>make_planner</code> env gating, <code>MissionEngine.replan</code> through Claude,</p>
+<p>NL &quot;replan this mission&quot; path, no-mission honesty, failure survival,</p>
+<p>conservative replan detection).</p>
+<p><code>tests/test_cli_missions.py</code> — 11 hermetic tests (W19 slice 0):</p>
+<p>create/status roundtrip, JSON output, list + status filter, lifecycle</p>
+<p>transitions, replan reports &quot;plan changed because…&quot; through the</p>
+<p><code>make_planner</code> point, advance of a manual step, and the hermeticity</p>
+<p>guard (claude never consulted without the opt-in).</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

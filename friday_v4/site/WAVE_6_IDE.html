@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 6 Ide — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 6 Ide</h1>
+<h1>Wave 6 — IDE Integration</h1>
+<p><strong>Status:</strong> ✅ SHIPPED (2026-08)</p>
+<p><strong>Date:</strong> 2026-08-03</p>
+<p><strong>Promise:</strong> *&quot;Friday lives inside your editor.&quot;*</p>
+<p><strong>MCU connection:</strong> *no task it can&#x27;t pick up* — the editor is a</p>
+<p>capability like any other: detected, analyzed, controlled, and composed</p>
+<p>with execution and the Claude Code arms.</p>
+<hr>
+<h2>Why this wave exists</h2>
+<p>Wave 6 was the plan&#x27;s <strong>empty placeholder</strong> — <code>desktop/ide/__init__.py</code></p>
+<p>tried to import a nonexistent <code>lsp_client</code> and set `_LSP_AVAILABLE =</p>
+<p>False`. The ROADMAP promised an LSP client, a VS Code extension, inline</p>
+<p>review, and status-bar integration, and none of it existed. This wave</p>
+<p>built the real thing: not a stub, a masterpiece.</p>
+<h2>What shipped</h2>
+<h3>1. Adaptive editor detection — <code>desktop/ide/detection.py</code></h3>
+<p>Friday figures out <strong>which editor is actually there</strong> and adapts to it:</p>
+<ul><li><strong>Environment</strong> (strongest): <code>TERM_PROGRAM=vscode</code> / <code>VSCODE_*</code> →</li></ul>
+<p>VS Code; <code>NVIM</code> → Neovim; <code>GIO_LAUNCHED_DESKTOP_FILE</code> → JetBrains /</p>
+<p>VS Code.</p>
+<ul><li><strong>Processes</strong> (POSIX <code>ps</code>): <code>code</code>, <code>idea</code>, <code>pycharm</code>, <code>webstorm</code>,</li></ul>
+<p><code>goland</code>, <code>nvim</code>, <code>sublime_text</code>, <code>emacs</code>, …</p>
+<ul><li><strong>Config dirs</strong>: <code>~/.config/Code</code>, <code>~/.config/JetBrains/&lt;Product&gt;</code>,</li></ul>
+<p><code>~/.config/nvim</code>, <code>~/.config/sublime-text</code>, <code>~/.emacs.d</code>.</p>
+<p>Each <code>DetectedIDE</code> carries its launcher, LSP capability, control</p>
+<p>capability, and confidence + source. <code>friday4 status</code> reports it; the</p>
+<p>CLI&#x27;s <code>open</code>/<code>reveal</code> adapt their argv per kind.</p>
+<h3>2. Pure-stdlib LSP client — <code>desktop/ide/lsp_client.py</code></h3>
+<p><strong>No pygls, no lsprotocol</strong> — a hand-rolled JSON-RPC 2.0 client over</p>
+<p>stdio that speaks enough of the Language Server Protocol to be useful:</p>
+<ul><li><code>initialize</code> / <code>initialized</code> handshake</li><li><code>textDocument/didOpen</code> with the file&#x27;s real text</li><li><code>textDocument/diagnostic</code> (LSP 3.17 on-demand pull) with a</li></ul>
+<p><code>publishDiagnostics</code> push fallback</p>
+<ul><li><code>textDocument/documentSymbol</code> (hierarchical + flat)</li><li><code>shutdown</code> / <code>exit</code>, timeout-bounded, background reader thread,</li></ul>
+<p>graceful degrade (<code>start() -&gt; False</code> on a missing/broken server)</p>
+<p>Project markers select the server (<code>pyproject.toml</code> → pyright /</p>
+<p>basedpyright / pylsp; <code>package.json</code> → typescript-language-server;</p>
+<p><code>go.mod</code> → gopls; <code>Cargo.toml</code> → rust-analyzer), with single-file</p>
+<p>extension fallback so a lone <code>.ts</code> still gets TypeScript tooling.</p>
+<h3>3. Always-on analyzer — <code>desktop/ide/ast_analyzer.py</code></h3>
+<p>When no server is available, Friday <strong>still has an opinion</strong>: the</p>
+<p>stdlib <code>ast</code> finds syntax errors, undefined names (F821), unused</p>
+<p>imports (F401), and shadowed builtins (A002) — deterministic,</p>
+<p>conservative, capped, sorted by line. <code>analyze_file()</code> tries LSP first</p>
+<p>and degrades to AST; the result&#x27;s <code>method</code> (<code>lsp</code> / <code>ast</code> / <code>none</code>)</p>
+<p>keeps the answer honest about which analyzer produced it.</p>
+<h3>4. Editor control — <code>desktop/ide/controller.py</code></h3>
+<p><code>open</code> / <code>reveal</code> / <code>run</code>, argv-adapted per editor:</p>
+<table><thead><tr><th>|</th><th></th><th>E</th><th>d</th><th>i</th><th>t</th><th>o</th><th>r</th><th></th><th>|</th><th></th><th>o</th><th>p</th><th>e</th><th>n</th><th></th><th>|</th><th></th><th>r</th><th>e</th><th>v</th><th>e</th><th>a</th><th>l</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>VS Code</td><td><code>code -r file</code></td><td><code>code -r -g file:line</code></td><td></td></tr><tr><td></td><td>JetBrains</td><td><code>idea file</code></td><td><code>idea --line N file</code></td><td></td></tr><tr><td></td><td>Neovim</td><td><code>nvim file</code></td><td><code>nvim +N file</code></td><td></td></tr><tr><td></td><td>Sublime</td><td><code>subl file</code></td><td><code>subl file:N</code></td><td></td></tr><tr><td></td><td>Emacs</td><td><code>emacs file</code></td><td><code>emacs +N file</code></td><td></td></tr></tbody></table>
+<p>No editor detected → platform opener (<code>xdg-open</code> / <code>open</code>). Everything</p>
+<p>argv-based, timeout-bounded, never raises.</p>
+<h3>5. One command language — NL on every surface</h3>
+<p><code>Intent.IDE</code> is a first-class intent with <strong>conservative</strong> tie-breaks</p>
+<p>(ordered last so bare-word ties keep the pre-existing meaning):</p>
+<ul><li><code>&quot;what&#x27;s wrong with src/main.py&quot;</code> → IDE, target <code>src/main.py</code></li><li><code>&quot;diagnose auth.py&quot;</code>, <code>&quot;lint src/main.py&quot;</code>, <code>&quot;why won&#x27;t this compile&quot;</code></li><li>Guards regression-tested: <code>&quot;run the tests&quot;</code> → EXECUTE,</li></ul>
+<p><code>&quot;diagnose the memory leak&quot;</code> → EXECUTE/claude (no file),</p>
+<p><code>&quot;analyze vivaha&quot;</code> → RESEARCH, <code>&quot;check my deps&quot;</code> → SECURITY,</p>
+<p><code>&quot;git status&quot;</code> → EXECUTE.</p>
+<p>The answer is evidence-shaped: `&quot;I found 2 error(s) in auth.py (via</p>
+<p>ast): line 3: undefined name &#x27;get_token&#x27;; line 5: shadowed builtin:</p>
+<p>list.&quot;<code> — or </code>&quot;no issues found&quot;<code> for a clean file, or </code>&quot;Which file?&quot;`</p>
+<p>when no target is named. <strong>Never fabricates.</strong></p>
+<h3>6. Reasoning — the CODE backstop</h3>
+<p><code>QuestionType.CODE</code> + <code>code_provider</code> answer code questions asked as</p>
+<p>questions (the LLM can classify &quot;what&#x27;s wrong with X&quot; as ASK): evidence</p>
+<p>is cited as <code>v4.ide.lsp</code> / <code>v4.ide.ast</code>. No file → honest &quot;I don&#x27;t know</p>
+<p>yet&quot;.</p>
+<h3>7. Composition — the arms</h3>
+<ul><li><strong>Claude Code arms:</strong> <code>FRIDAY_V4_IDE_PREFLIGHT=1</code> → Friday&#x27;s own</li></ul>
+<p>diagnostics for the workspace/file the delegated task touches ride</p>
+<p>along via <code>claude --append-system-prompt</code> — the agent starts from</p>
+<p>what Friday already knows. Never blocks, never raises.</p>
+<ul><li><strong>Execution preflight:</strong> the same opt-in adds a heads-up</li></ul>
+<p>(<code>N issue(s) in auth.py</code>) to the audit goal and the spoken reply when</p>
+<p>a command names a source file.</p>
+<ul><li><strong>CLI:</strong> `friday4 ide detect / diagnose / symbols / open / reveal /</li></ul>
+<p>run<code> — </code>run` goes through the <strong>same gated execution pipeline</strong></p>
+<p>(gate → sandbox → audit) as <code>friday4 talk</code>.</p>
+<h2>The Wiring Law table</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>W</th><th>i</th><th>r</th><th>e</th><th>d</th><th>?</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Entry points</strong> (talk / voice / web)</td><td>✅ all route through <code>nl_router</code> → <code>Intent.IDE</code> → <code>_ide_response</code></td><td></td></tr><tr><td></td><td><strong>CLI surface</strong></td><td>✅ <code>friday4 ide …</code> registered in <code>cli_talk.main</code></td><td></td></tr><tr><td></td><td><strong>Reasoning provider</strong></td><td>✅ <code>QuestionType.CODE</code> + <code>code_provider</code> (evidence <code>v4.ide.*</code>)</td><td></td></tr><tr><td></td><td><strong>Status feed</strong></td><td>✅ <code>_probe_ide</code> in <code>STATUS_PROBES</code> (<code>friday4 status</code>)</td><td></td></tr><tr><td></td><td><strong>Capability registry</strong></td><td>✅ <code>surface:ide</code>, <code>provider:code</code>, <code>intent:ide</code></td><td></td></tr><tr><td></td><td><strong>Execution / Claude arms</strong></td><td>✅ <code>FRIDAY_V4_IDE_PREFLIGHT</code> → preflight note + <code>--append-system-prompt</code></td><td></td></tr><tr><td></td><td><strong>Daemon schedules</strong></td><td>✅ none needed — IDE analysis is on-demand (no decay/sweep); the status probe covers liveness</td><td></td></tr></tbody></table>
+<h2>Not built (honest)</h2>
+<ul><li><strong>TypeScript VS Code extension</strong> (sidebar, status bar, decorations) —</li></ul>
+<p>the editor is reachable today via the CLI (<code>code -r</code>, `code -g</p>
+<p>file:line`) and the LSP protocol; an extension would only add an</p>
+<p>in-UI surface. A future refinement, not a gap in the wave&#x27;s promise:</p>
+<p>analysis, control, and NL review all work now.</p>
+<h2>Tests (hermetic — no real editor, no real server)</h2>
+<p><code>tests/test_ide_wave6.py</code> — <strong>39 tests</strong>:</p>
+<ul><li><strong>LSP client</strong> against a fake language server script (initialize →</li></ul>
+<p>diagnostic pull → symbols → shutdown; missing binary degrades).</p>
+<ul><li><strong>AST analyzer</strong> (syntax error, undefined name, unused import,</li></ul>
+<p>shadowed builtin, clean file, missing file).</p>
+<ul><li><strong>Facade</strong> (<code>analyze_file</code> AST fallback / LSP path / missing file;</li></ul>
+<p>symbol outline; language-server lookup).</p>
+<ul><li><strong>Detection</strong> (env / process / config signals; none-detected).</li><li><strong>NL</strong> (IDE phrases classify; existing intents not hijacked; handler</li></ul>
+<p>answers with diagnostics; clean-file and clarification paths).</p>
+<ul><li><strong>Reasoning</strong> (CODE backstop; clean-file; unknown-target silence).</li><li><strong>Wiring</strong> (capability registry ids; status probe; CLI import).</li><li><strong>Composition</strong> (claude <code>--append-system-prompt</code> on/off; router</li></ul>
+<p>preflight note).</p>
+<h2>Close-out</h2>
+<ul><li>Wave 6 is no longer a placeholder: detection + LSP + AST + control +</li></ul>
+<p>NL + reasoning + CLI + composition all ship and are wired.</p>
+<ul><li>The ROADMAP table now shows <strong>✅ SHIPPED (2026-08)</strong>; PLAN.md Phase 7</li></ul>
+<p>and the command table are updated; MASTER_PLAN §1 has the Wave 6 row.</p>
+<ul><li>Validation: full suite green (see the wave&#x27;s test run), targeted</li></ul>
+<p>suites green, code review applied.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

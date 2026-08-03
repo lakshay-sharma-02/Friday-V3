@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User Guide — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>User Guide</h1>
+<h1>Friday V4 — User Guide (Use the Real Product)</h1>
+<blockquote>Everything below was verified live on 2026-08-01. If a command behaves</blockquote>
+<blockquote>differently, file it — that&#x27;s a bug.</blockquote>
+<p>State lives at <code>~/.friday/v4.db</code> (schema v3, 9 tables). V3 data</p>
+<p>(<code>~/.friday/friday.db</code>) is read through the read-only bridge when present</p>
+<p>and never written.</p>
+<hr>
+<h2>1. One-line health check</h2>
+<pre><code class="language-bash">friday4 status</code></pre>
+<p>Shows all 10 subsystems: daemon, voice, desktop, security, proactive,</p>
+<p>intelligence, web, collab, db, v3 bridge. Everything degrades gracefully —</p>
+<p>a missing subsystem prints <code>◐</code>/<code>✘</code>, never crashes.</p>
+<h2>2. Talk to Friday (the brain — Wave 9)</h2>
+<p><strong>One-shot:</strong></p>
+<pre><code class="language-bash">friday4 talk &quot;git status&quot;                # executes, audited, exit 0
+friday4 talk &quot;run the tests&quot;             # pytest via gate → sandbox → audit
+friday4 talk &quot;ship the auth refactor&quot;    # creates a mission (planner)
+friday4 talk &quot;hello&quot;                     # greeting
+friday4 talk --json &quot;git log -1&quot;         # machine-readable output</code></pre>
+<p><strong>Interactive REPL:</strong></p>
+<pre><code class="language-bash">friday4 talk                            # no text → conversational session</code></pre>
+<p><strong>Manual mission steps</strong> (Friday never invents a result):</p>
+<pre><code class="language-bash">friday4 talk --manual &lt;mission_id&gt; &quot;done&quot;</code></pre>
+<p>Exit codes: <code>0</code> ok / <code>1</code> failed / <code>2</code> denied / <code>3</code> usage. Everything is</p>
+<p>recorded verbatim into the conversation log — the brain learns from what</p>
+<p>you actually said.</p>
+<h2>3. Ask Friday (evidence-cited answers — Wave 9 reasoning)</h2>
+<pre><code class="language-bash">friday4 ask &quot;what&#x27;s the status of my projects&quot;   # missions + recent actions
+friday4 ask &quot;what did I do recently&quot;             # audit trail + V3 observations
+friday4 ask &quot;who are you&quot;                        # Friday&#x27;s self-declaration
+friday4 ask &quot;who am I&quot;                           # your own words, quoted back
+friday4 ask &quot;how&#x27;s the auth refactor going&quot;      # mission progress
+friday4 ask &quot;what do you know about Rust&quot;        # stored memory facts</code></pre>
+<p><strong>No answer without evidence</strong> — empty evidence → honest &quot;I don&#x27;t know</p>
+<p>yet&quot;. Every answer cites its source (<code>v4.actions</code>, <code>v4.exchanges</code>, …).</p>
+<h2>4. Memory &amp; identity (Wave 10)</h2>
+<pre><code class="language-bash">friday4 persona remember &quot;call me Lakshay&quot;       # explicit-consent learning
+friday4 persona profile                          # what Friday remembers about you
+friday4 memory store operator.prefers &quot;Rust for performance-critical code&quot;
+friday4 memory list / recall &lt;key&gt; / forget &lt;key&gt;
+friday4 relationship status                      # depth → tone → verbosity
+friday4 relationship refresh
+friday4 skills list                              # shadow → verified → promoted
+friday4 skills learn                             # form a skill from your patterns
+friday4 skills promote &lt;skill&gt;                   # explicit approval to promote</code></pre>
+<p><code>friday4 ask &quot;who am I&quot;</code> quotes your stored facts back with provenance.</p>
+<h2>5. Voice</h2>
+<pre><code class="language-bash">friday4 voice talk          # interactive voice session (hotword + push-to-talk)
+friday4 voice setup         # audio wizard
+friday4 voice status        # provider + hardware diagnostics
+friday4 voice test          # speak a phrase aloud</code></pre>
+<p>Spoken &quot;run the tests&quot; flows through the same brain as typed — voice</p>
+<p>confirmations are asked aloud (TTS → STT) and fail closed on silence.</p>
+<h2>6. Ambient presence</h2>
+<pre><code class="language-bash">friday4 daemon start        # observer + notifier + sampler + security + memory
+                            #   sweep + skill learner + relationship refresh
+friday4 daemon status
+friday4 web                 # http://127.0.0.1:8899/ — live dashboard</code></pre>
+<p>Dashboard APIs (all read-only except <code>/api/talk</code> + <code>/api/scan</code>):</p>
+<p><code>/api/overview</code>, <code>/api/security</code>, <code>/api/ambient</code>, <code>/api/projects</code>,</p>
+<p><code>/api/memory</code>, <code>/api/relationship</code>, <code>/api/skills</code>, <code>/api/talk</code>.</p>
+<h2>7. Security &amp; ops</h2>
+<pre><code class="language-bash">friday4 security scan [path] [--threshold high] [--json]
+friday4 security status        # tool availability
+friday4 doctor                 # one-command subsystem diagnostics
+friday4 status db              # DB schema + row counts
+friday4 execute --list         # available executors</code></pre>
+<h2>8. Collaboration (multi-instance)</h2>
+<pre><code class="language-bash">friday4 collab start           # UDP beacon + TCP sync (pure stdlib)
+friday4 collab status / peers / obs / share / perms</code></pre>
+<h2>9. Desktop control</h2>
+<pre><code class="language-bash">friday4 desktop status / windows / switch / focus / launch / screenshot
+friday4 desktop platforms</code></pre>
+<h2>Suggested first hour</h2>
+<pre><code class="language-bash">friday4 status                                  # see the whole system
+friday4 persona remember &quot;call me &lt;your name&gt;&quot;  # teach identity
+friday4 memory store operator.prefers &quot;...&quot;     # store a fact
+friday4 ask &quot;who am I&quot;                          # Friday knows you now
+friday4 talk &quot;git status&quot;                       # say it, Friday does it
+friday4 daemon start                            # ambient presence
+friday4 web                                     # dashboard</code></pre>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

@@ -17,7 +17,8 @@ import logging
 import os
 import tempfile
 import threading
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -146,7 +147,8 @@ class FasterWhisperProvider:
             segments_gen, info = model.transcribe(
                 audio, beam_size=3, language="en",
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500, threshold=0.5),
+                vad_parameters={"min_silence_duration_ms": 500,
+                                "threshold": 0.5},
             )
             segments = list(segments_gen)
             result_text = " ".join(seg.text for seg in segments)
@@ -183,15 +185,15 @@ class WhisperCPPProvider:
     name = "whisper.cpp"
     is_available = False
 
-    _BINARY_PATHS = [
+    _BINARY_PATHS: tuple[Path, ...] = (
         Path.home() / ".friday" / "stt_models" / "whisper.cpp" / "main",
         Path("/usr/local/bin/whisper"),
         Path("/usr/bin/whisper"),
-    ]
-    _MODEL_PATHS = [
+    )
+    _MODEL_PATHS: tuple[Path, ...] = (
         Path.home() / ".friday" / "stt_models" / "ggml-base.en.bin",
         Path.home() / ".friday" / "stt_models" / "ggml-tiny.en.bin",
-    ]
+    )
 
     def __init__(self):
         self._binary = self._find_binary()
@@ -202,8 +204,11 @@ class WhisperCPPProvider:
         for p in self._BINARY_PATHS:
             if p.exists() and p.stat().st_size > 0:
                 return str(p)
-        import shutil
-        return shutil.which("whisper")
+        # venv-aware discovery: whisper.cpp may be installed in the active
+        # venv's bin even when it isn't on PATH (same bug class as the
+        # security scanners' tools).
+        from friday_v4.security.tooling import find_tool
+        return find_tool("whisper")
 
     def _find_model(self) -> Optional[str]:
         for p in self._MODEL_PATHS:
@@ -214,8 +219,8 @@ class WhisperCPPProvider:
     def transcribe(self, audio_path: str) -> STTResult:
         if not self.is_available:
             return STTResult(error="whisper.cpp not available")
-        import subprocess
         import json
+        import subprocess
         try:
             result = subprocess.run(
                 [self._binary, "--model", self._model, "--file", audio_path,
@@ -315,16 +320,33 @@ class SpeechToText:
             pass
 
     def _promote_async_loads(self) -> None:
-        """Activate faster-whisper once its background load completes."""
+        """Activate faster-whisper once its background load completes.
+
+        Joining ``_load_thread`` is not enough to promote: the provider's
+        own ``_finish`` thread publishes ``is_available`` a moment AFTER
+        the load thread dies, so this waiter can wake first, see
+        ``is_available is False``, and skip promotion — leaving the facade
+        permanently deaf (``active=none`` while the provider reports
+        available). Poll the flag briefly post-join to win that race.
+        """
         pending = [p for p in self._providers
                    if isinstance(p, FasterWhisperProvider) and not p.is_available]
 
         def _wait():
             for provider in pending:
-                try:
-                    provider._load_thread.join(timeout=180)
-                except Exception:
-                    pass
+                if provider._load_thread is not None:
+                    try:
+                        provider._load_thread.join(timeout=180)
+                    except Exception:
+                        pass
+                    if not provider.is_available:
+                        # Race window: _finish sets is_available right after
+                        # _load_thread dies. Bound the wait so a genuinely
+                        # failed load still moves on quickly.
+                        deadline = time.time() + 3.0
+                        while (time.time() < deadline
+                               and not provider.is_available):
+                            time.sleep(0.02)
                 if provider.is_available and self._active is None:
                     self._active = provider
                     break

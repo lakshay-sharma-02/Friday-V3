@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 13A One Nlu Point — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 13A One Nlu Point</h1>
+<h1>Wave 13a — ONE NLU Point (LLM-first, rules fallback) ✅ SHIPPED</h1>
+<blockquote><strong>The directive:</strong> *speaks natural language* — **no regex/keyword</blockquote>
+<blockquote>matching anywhere in the input path.** Every surface (voice, `friday4</blockquote>
+<blockquote>talk<code>, web chat) routes through ONE parser, </code>resolve()`, which is</blockquote>
+<blockquote><strong>LLM-first</strong>; the deterministic rules are a fallback only when the</blockquote>
+<blockquote>LLM is absent/offline — never the product.</blockquote>
+<blockquote></blockquote>
+<blockquote>Parent wave: <a href="WAVE_13_THINKING_CORE.md">Wave 13 — Thinking Core</a>.</blockquote>
+<blockquote>Governance: <a href="MCU_FRIDAY_STANDARD.md">THE MCU FRIDAY STANDARD</a> — Law 1</blockquote>
+<blockquote>(natural language first), Law 4 (never crash), Law 6 (LLM enhances,</blockquote>
+<blockquote>never gates).</blockquote>
+<hr>
+<h2>1. The design</h2>
+<h3>ONE parser, every surface</h3>
+<pre><code class="language-">utterance ──► resolve() ──► LLM parse (primary: intent + slots + entities)
+                     └──► deterministic rules (fallback: no LLM / offline)
+                            └──► canonical ResolvedAction (the command language)</code></pre>
+<ul><li><strong>One point:</strong> voice router, <code>friday4 talk</code>, and web chat all call</li></ul>
+<p><code>resolve(text, llm=LLMClient())</code>. No surface parses language itself —</p>
+<p>a surface may add *behavior* after resolution, never *interpretation*.</p>
+<ul><li><strong>LLM primary:</strong> intent, entities, and confidence come from the model</li></ul>
+<p>through the 9router proxy (<code>localhost:20128/v1</code>, configurable model) —</p>
+<p>the same client Wave 13 reuses for synthesis.</p>
+<ul><li><strong>Deterministic fallback:</strong> only when the LLM is absent/offline — keeps</li></ul>
+<p>the never-crash law without keyword-matching being the product. The</p>
+<p>fallback produces the *same canonical shape* as the LLM path, so</p>
+<p>callers never know which path ran.</p>
+<ul><li><strong>Never crash:</strong> every branch guarded; unknown input → clarification,</li></ul>
+<p>never an error.</p>
+<h3><code>nlu/</code> — the ONE point</h3>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>R</th><th>o</th><th>l</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>llm.py</code></td><td>9router OpenAI-compatible client (pure stdlib, SSE-trailer quirk handled)</td><td></td></tr><tr><td></td><td><code>intent.py</code></td><td><code>classify(text, llm)</code> — LLM intent + slots, rules fallback</td><td></td></tr><tr><td></td><td><code>entities.py</code></td><td><code>extract(text, entity_values)</code> — LLM entities, rules fallback</td><td></td></tr><tr><td></td><td><code>confidence.py</code></td><td><code>assess(result, llm_clarification)</code> — ambiguity → clarification</td><td></td></tr><tr><td></td><td><code>resolver.py</code></td><td><code>resolve(text, llm)</code> — utterance → canonical <code>ResolvedAction</code></td><td></td></tr></tbody></table>
+<h3><code>understanding/</code> — a thin shim</h3>
+<p><code>friday_v4.understanding</code> re-exports every name from <code>nlu</code> so legacy</p>
+<p>importers (<code>missions/planner.py</code>, older tests) keep working. **The old</p>
+<p>Wave 9 implementation submodules were removed** — there is exactly one</p>
+<p>NLU implementation in the package tree.</p>
+<hr>
+<h2>2. Wiring (the Wiring Law)</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>C</th><th>a</th><th>l</th><th>l</th><th></th><th>s</th><th>i</th><th>t</th><th>e</th><th></th><th>|</th><th></th><th>L</th><th>L</th><th>M</th><th></th><th>p</th><th>a</th><th>s</th><th>s</th><th>e</th><th>d</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>nl_router.py</code></td><td><code>resolve(raw, llm=self.llm)</code></td><td><code>TextCommandHandler(llm=…)</code></td><td></td></tr><tr><td></td><td><code>voice/router.py</code></td><td><code>TextCommandHandler(conn=…, llm=LLMClient())</code> via <code>_try_nlu_route</code></td><td><code>LLMClient()</code></td><td></td></tr><tr><td></td><td><code>web/dashboard.py</code></td><td><code>TextCommandHandler(conn, llm=LLMClient())</code></td><td><code>LLMClient()</code></td><td></td></tr><tr><td></td><td><code>cli_nl.py</code></td><td><code>TextCommandHandler(conn, llm=_default_llm())</code></td><td><code>LLMClient()</code> or None</td><td></td></tr><tr><td></td><td><code>missions/planner.py</code></td><td><code>from ..understanding import resolve</code> (shim)</td><td>n/a (fallback)</td><td></td></tr></tbody></table>
+<p>Config: <code>FRIDAY_V4_LLM_URL</code> (default 9router proxy), <code>FRIDAY_V4_LLM_MODEL</code>,</p>
+<p><code>FRIDAY_V4_LLM_KEY</code> (optional), explicit opt-in via <code>FRIDAY_V4_LLM</code>.</p>
+<hr>
+<h2>3. What actually shipped (close-out)</h2>
+<p>1. <strong><code>nlu/</code> verified as the ONE point</strong> — every surface confirmed to call</p>
+<p><code>resolve(text, llm=…)</code>; no surface parses language itself.</p>
+<p>2. <strong><code>understanding/</code> made genuinely thin</strong> — old Wave 9 implementation</p>
+<p>submodules (<code>entities/confidence/resolver/intent.py</code>) deleted; only the</p>
+<p>re-export <code>__init__.py</code> remains, identity-checked by tests.</p>
+<p>3. <strong>Never-crash fix (real bug):</strong> the fallback&#x27;s confidence calculation</p>
+<p>used the <code>Intent</code> enum key (a str) where it needed the score</p>
+<p>(<code>scores[best]</code>) — any *ambiguous* utterance raised a <code>TypeError</code> and</p>
+<p>crashed <code>resolve()</code>, silently degrading every surface to <code>&#x27;unknown&#x27;</code>.</p>
+<p>Now scores correctly and never raises.</p>
+<p>4. <strong>ASK/RESEARCH targets threaded</strong> — <code>resolve()</code> now carries the</p>
+<p>LLM/fallback <code>target</code> through for ASK and RESEARCH intents (previously</p>
+<p>only EXECUTE/DESKTOP/PLAN did).</p>
+<p>5. <strong>Research routing fixed</strong> — the fallback now recognizes <code>X vs Y</code> as</p>
+<p>RESEARCH (bare <code>vs</code>/<code>versus</code> tokens so <code>\b</code> matches after paths), the</p>
+<p>correlate path strips leading verbs (<code>analyze X</code> → <code>X</code>), splits the</p>
+<p>original (case-preserved) text, and <code>cross_project.py</code> no longer</p>
+<p>passes str paths where <code>RepoProfile</code>s are expected.</p>
+<p>6. <strong>Tests</strong> — <code>test_understanding.py</code> rewritten as 25 shim-contract</p>
+<p>tests (re-export identity, <code>resolve_with_llm</code>, fallback, never-crash,</p>
+<p>target threading); <code>test_nlu.py</code> (12) + research/CLI tests green;</p>
+<p>stale tests updated (SSE <code>_extract_text</code> call, <code>cmd_report</code></p>
+<p><code>--daily/--weekly</code> Namespace).</p>
+<p><strong>MCU test:</strong> &quot;Friday, what&#x27;s the deal between vivaha and MindWell?&quot; →</p>
+<p>one parser, LLM intent → research → cited answer. No surface</p>
+<p>keyword-matches anything. ✅</p>
+<hr>
+<h2>4. What we learned</h2>
+<ul><li>The transition was *mostly* wired already (surfaces called <code>resolve</code></li></ul>
+<p>with <code>LLMClient()</code>), but two latent bugs made the whole suite red: the</p>
+<p>fallback confidence <code>TypeError</code> and the shadow NLU implementation still</p>
+<p>living in <code>understanding/</code>. &quot;One point&quot; is a *maintenance* law as much</p>
+<p>as an architecture law — two NLU implementations in the tree will</p>
+<p>silently drift apart.</p>
+<ul><li>The never-crash law must be tested *through the surface path*: the</li></ul>
+<p>crash was invisible to <code>test_nlu.py</code> (fallback tests used unambiguous</p>
+<p>input) and only surfaced via the NL research routing test.</p>
+<ul><li><strong>Known offline limitation (documented, accepted):</strong> the fallback&#x27;s</li></ul>
+<p><code>&quot;what&#x27;s the deal between X and Y&quot;</code> correlate form still feeds</p>
+<p><code>correlate(&quot;what&#x27;s the deal&quot;, &quot;X and Y&quot;)</code> — <code>_strip_research_lead</code></p>
+<p>verbs require a trailing space the <code>&quot; between &quot;</code> split operand lacks.</p>
+<p>It degrades gracefully to &quot;no shared signals&quot; (never crashes), and</p>
+<p>the LLM-primary path handles it correctly — but it is not the shipped</p>
+<p>correlate path. The <code>analyze X vs Y</code> form is the tested path.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

@@ -52,8 +52,8 @@ class SystemTray:
 
     def _check_available(self) -> bool:
         try:
-            import pystray  # noqa: F401
             import PIL  # noqa: F401
+            import pystray  # noqa: F401
             return True
         except ImportError:
             logger.info("pystray/PIL not installed — system tray unavailable")

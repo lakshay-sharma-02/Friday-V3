@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Experience — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Voice Experience</h1>
+<h1>Friday V4 — Voice Experience Design</h1>
+<blockquote><strong>Not &quot;text-to-speech.&quot; A voice that feels alive.</strong></blockquote>
+<blockquote></blockquote>
+<blockquote>This document defines how the voice interaction *feels*. Not the implementation</blockquote>
+<blockquote>details (those are in VOICE_SPEC.md), but the aesthetic — the sound, the</blockquote>
+<blockquote>cadence, the presence. This is what makes it FRIDAY, not Siri.</blockquote>
+<hr>
+<h2>The Voice</h2>
+<h3>The FRIDAY Voice Profile</h3>
+<p>In the MCU, FRIDAY (voiced by Kerry Condon) has a specific vocal identity:</p>
+<table><thead><tr><th>|</th><th></th><th>Q</th><th>u</th><th>a</th><th>l</th><th>i</th><th>t</th><th>y</th><th></th><th>|</th><th></th><th>D</th><th>e</th><th>s</th><th>c</th><th>r</th><th>i</th><th>p</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th><th></th><th>W</th><th>h</th><th>y</th><th></th><th>I</th><th>t</th><th></th><th>W</th><th>o</th><th>r</th><th>k</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Crisp</strong></td><td>Clear, articulate, no slurring</td><td>Conveys precision and competence</td><td></td></tr><tr><td></td><td><strong>Calm</strong></td><td>Never rushed, never panicked</td><td>You feel safe — Friday handles it</td><td></td></tr><tr><td></td><td><strong>Warm</strong></td><td>Not cold or robotic, has feeling</td><td>You trust her, she&#x27;s on your side</td><td></td></tr><tr><td></td><td><strong>Direct</strong></td><td>Says what needs to be said, no fluff</td><td>Efficient communication</td><td></td></tr><tr><td></td><td><strong>Subtle Irish lilt</strong></td><td>Kerry Condon&#x27;s natural accent</td><td>Distinctive, memorable, human</td><td></td></tr></tbody></table>
+<p>For V4, our cloned FRIDAY voice should capture these qualities. We&#x27;re not just</p>
+<p>&quot;making a voice sound robotic but slightly better&quot; — we&#x27;re aiming for a voice</p>
+<p>you could mistake for a real person.</p>
+<h3>Voice Stack</h3>
+<pre><code class="language-mermaid">flowchart TD
+    subgraph &quot;Voice Cloning (One-time setup)&quot;
+        Audio[FRIDAY Audio Sample&lt;br/&gt;15-30 seconds, clean] --&gt; XTTS[XTTS-v2 / Chatterbox]
+        XTTS --&gt; VoiceModel[FRIDAY Voice Model File]
+    end
+
+    subgraph &quot;Runtime (Every interaction)&quot;
+        VoiceModel --&gt; TTS[TTS Engine]
+        TTS --&gt; Post[Post-Processing]
+        Post --&gt; Output[Speaker Output]
+    end
+
+    style Audio fill:#1a1a2e,stroke:#e94560
+    style Output fill:#1a1a2e,stroke:#e94560,stroke-width:3px</code></pre>
+<p><strong>For Synthesis (TTS):</strong></p>
+<ul><li><strong>Primary:</strong> XTTS-v2 with cloned FRIDAY voice — most natural, captures the</li></ul>
+<p>accent and cadence perfectly. ~4-6GB VRAM, ~2x real-time speed.</p>
+<ul><li><strong>Fast Fallback:</strong> MeloTTS or Kokoro-82M — clean, fast, but uses a generic</li></ul>
+<p>voice (not FRIDAY). When you need speed over character.</p>
+<ul><li><strong>Emergency Fallback:</strong> Piper — robotic, but works on any hardware.</li></ul>
+<p><strong>For Recognition (STT):</strong></p>
+<ul><li><strong>Primary:</strong> whisper.cpp with <code>base.en</code> model — sub-second transcription on</li></ul>
+<p>CPU, excellent accuracy.</p>
+<ul><li><strong>Lightweight:</strong> whisper.cpp with <code>tiny.en</code> — ~300ms latency, slightly worse</li></ul>
+<p>accuracy. Use when CPU is under load.</p>
+<hr>
+<h2>The Sound Design</h2>
+<p>A voice isn&#x27;t just the words. It&#x27;s the sound *around* the words.</p>
+<h3>Signature Audio Cues</h3>
+<p>Every FRIDAY interaction has audio signatures that make it feel like the MCU:</p>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>m</th><th>e</th><th>n</th><th>t</th><th></th><th>|</th><th></th><th>S</th><th>o</th><th>u</th><th>n</th><th>d</th><th></th><th>|</th><th></th><th>E</th><th>m</th><th>o</th><th>t</th><th>i</th><th>o</th><th>n</th><th>a</th><th>l</th><th></th><th>E</th><th>f</th><th>f</th><th>e</th><th>c</th><th>t</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Friday starts listening</strong></td><td>Subtle double-chime (like Iron Man HUD activating) 🎵 *ding ding*</td><td>You know she&#x27;s ready</td><td></td></tr><tr><td></td><td><strong>Friday has processed</strong></td><td>Single acknowledgment chime 🎵 *ding*</td><td>Confirmation without words</td><td></td></tr><tr><td></td><td><strong>Friday is speaking</strong></td><td>Her voice — clear, warm, present</td><td>The main event</td><td></td></tr><tr><td></td><td><strong>Friday finishes</strong></td><td>Soft fade-out (not abrupt cut)</td><td>Natural conversation end</td><td></td></tr><tr><td></td><td><strong>Alert/Urgent</strong></td><td>Lower, faster cadence + sharper chime 🎵 *DING DING*</td><td>Gets your attention</td><td></td></tr><tr><td></td><td><strong>Error/Failure</strong></td><td>Brief descending tone 🎵 *dee dow*</td><td>Something went wrong</td><td></td></tr><tr><td></td><td><strong>Friday is thinking</strong></td><td>Subtle ambient processing hum (very quiet)</td><td>Not silence, she&#x27;s working</td><td></td></tr></tbody></table>
+<p><strong>Important:</strong> These cues are subtle. Not a Mario game. Think Iron Man HUD —</p>
+<p>a gentle chime that blends into the background. You notice it when it&#x27;s absent,</p>
+<p>not when it&#x27;s present.</p>
+<h3>Voice Modes</h3>
+<p>FRIDAY&#x27;s voice adapts to context:</p>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>e</th><th></th><th>|</th><th></th><th>T</th><th>o</th><th>n</th><th>e</th><th></th><th>|</th><th></th><th>S</th><th>p</th><th>e</th><th>e</th><th>d</th><th></th><th>|</th><th></th><th>V</th><th>o</th><th>l</th><th>u</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>W</th><th>h</th><th>e</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Conversation</strong></td><td>Warm, natural</td><td>Normal</td><td>Normal</td><td>Casual Q&amp;A, chitchat</td><td></td></tr><tr><td></td><td><strong>Briefing</strong></td><td>Professional, clear</td><td>Steady</td><td>Slightly louder</td><td>Morning summary, status reports</td><td></td></tr><tr><td></td><td><strong>Alert</strong></td><td>Urgent, direct</td><td>Faster</td><td>Louder</td><td>Vulnerabilities, build failures</td><td></td></tr><tr><td></td><td><strong>Whisper</strong></td><td>Soft, quiet</td><td>Slower</td><td>Quiet</td><td>Late night, presence detection</td><td></td></tr><tr><td></td><td><strong>Off</strong></td><td>Silent</td><td>—</td><td>—</td><td>Focus mode, quiet hours</td><td></td></tr></tbody></table>
+<p>These modes are automatically selected based on context (time of day, current</p>
+<p>activity, severity of message).</p>
+<hr>
+<h2>The Interaction Model</h2>
+<h3>How A Voice Session Feels</h3>
+<pre><code class="language-">🎤 [You&#x27;re working. Silence. Ambient hum.]
+
+[You lean toward your mic, or press the hotkey]
+
+DING DING  ← Friday acknowledges she&#x27;s listening
+
+🎤 You: &quot;Hey Friday, what&#x27;s the status of the build?&quot;
+
+[Brief pause. ~1 second of processing]
+
+DING  ← Friday has the answer
+
+🎧 Friday: &quot;Build is green. All 1,402 tests passed.
+           There&#x27;s one thing worth noting — the scheduler module
+           took 2 seconds longer than usual. Probably nothing,
+           but I&#x27;m watching it.&quot;
+
+[She finishes. Soft fade-out of audio. Back to ambient silence.]
+
+🎤 You: &quot;Deploy it.&quot;
+
+DING DING  ← Friday acknowledges the command
+
+🎧 Friday: &quot;Deploying to staging now. Estimated time: 45 seconds.
+           I&#x27;ll let you know when it&#x27;s live.&quot;</code></pre>
+<p><strong>What makes this feel like FRIDAY, not a chatbot:</strong></p>
+<p>1. The audio cues — they signal state transitions without words</p>
+<p>2. The pause — Friday &quot;thinks&quot; for a natural beat (not instant, not slow)</p>
+<p>3. The proactive observation — she noticed the scheduler and mentioned it</p>
+<p>4. The estimated time — she gives you information you didn&#x27;t ask for</p>
+<p>5. The &quot;I&#x27;ll let you know&quot; — she sets expectations for follow-up</p>
+<h3>Interruption (The Secret Sauce)</h3>
+<p>The most important feature for feeling like a real conversation:</p>
+<pre><code class="language-">🎧 Friday: &quot;Here&#x27;s the deploy status — the build is...&quot;
+🎤 You: &quot;Wait, Friday, what about the tests?&quot;
+  [Friday STOPS mid-sentence immediately]
+DING DING
+🎧 Friday: &quot;Tests passed. All 1,402. The deploy was proceeding.&quot;</code></pre>
+<p><strong>How it works technically:</strong></p>
+<p>1. VAD detects speech from the microphone while TTS is playing</p>
+<p>2. TTS stops playing immediately (within 50ms)</p>
+<p>3. STT transcribes the interruption</p>
+<p>4. The new query is processed</p>
+<p>5. New response is spoken</p>
+<p>This is the single feature that separates &quot;AI voice interface&quot; from &quot;press</p>
+<p>button, listen to robot talk.&quot; Without interruption, it&#x27;s a voicemail. With</p>
+<p>it, it&#x27;s a conversation.</p>
+<h3>Push-to-Talk vs Hotword</h3>
+<p>Both modes, for different situations:</p>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>e</th><th></th><th>|</th><th></th><th>K</th><th>e</th><th>y</th><th>b</th><th>i</th><th>n</th><th>d</th><th>i</th><th>n</th><th>g</th><th></th><th>|</th><th></th><th>B</th><th>e</th><th>s</th><th>t</th><th></th><th>W</th><th>h</th><th>e</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Hotword (&quot;Hey Friday&quot;)</strong></td><td>Voice-activated</td><td>Hands are busy coding</td><td></td></tr><tr><td></td><td><strong>Push-to-Talk</strong></td><td>Ctrl+Shift+Space</td><td>Open office, quiet environment</td><td></td></tr><tr><td></td><td><strong>Tap-to-Talk</strong></td><td>System tray click</td><td>Quick one-off commands</td><td></td></tr><tr><td></td><td><strong>Always Listening</strong></td><td>(configurable)</td><td>Solo workspace, no privacy concerns</td><td></td></tr></tbody></table>
+<p>Default mode: Hotword + Push-to-Talk (both active). If you say &quot;Hey Friday&quot; or</p>
+<p>press the hotkey, Friday listens.</p>
+<hr>
+<h2>Visual Feedback</h2>
+<p>Even when you&#x27;re speaking, you need visual confirmation that Friday is present.</p>
+<h3>Terminal Mode (<code>friday talk</code>)</h3>
+<pre><code class="language-">┌─────────────────────────────────────────────────────┐
+│ ◆ FRIDAY                                    ● Live │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  🎤 [Listening...]                                   │
+│  You: what&#x27;s the status of my projects               │
+│                                                     │
+│  🎧 [Thinking...]                                    │
+│                                                     │
+│  🎧 3 repositories have changed since your last       │
+│      observation. codebuff has 12 new commits,       │
+│      vivaha has 3, and Aether has 1.                 │
+│                                                     │
+│  ───────────────────────────────────────────────    │
+│  Press Ctrl+Shift+Space to talk · Say &quot;exit&quot; to quit │
+└─────────────────────────────────────────────────────┘</code></pre>
+<p>The visual shows:</p>
+<ul><li>Live indicator (with audio level meter)</li><li>What Friday heard you say (transcribed)</li><li>What Friday is saying (real-time)</li><li>Status bar with commands</li></ul>
+<h3>System Tray</h3>
+<pre><code class="language-">◆ FRIDAY ● Active
+─────────────────
+Last check: 2m ago
+3 repos changed
+2 vulns found
+─────────────────
+Talk       Ctrl+Shift+Space
+Dashboard
+Settings
+Quit</code></pre>
+<p>The tray icon:</p>
+<ul><li>Shows daemon status (green = active, yellow = busy, red = error)</li><li>Has an audio level indicator when listening</li><li>Right-click for quick actions</li><li>Left-click to toggle voice mode</li></ul>
+<h3>Desktop Notification</h3>
+<pre><code class="language-">┌─────────────────────────────────┐
+│ ◆ FRIDAY                        │
+│                                 │
+│  🛡️ 2 High-severity              │
+│    vulnerabilities found in      │
+│    your dependencies.            │
+│                                 │
+│  [Review] [Remind Later]        │
+└─────────────────────────────────┘</code></pre>
+<p>Notifications are:</p>
+<ul><li>Minimal (title + 2 lines max)</li><li>Actionable (buttons to act on them)</li><li>Grouped (not one notification per finding)</li><li>Respectful (never during fullscreen/recording)</li></ul>
+<hr>
+<h2>The FRIDAY Voice Itself</h2>
+<h3>Voice Cloning Process</h3>
+<p>Here&#x27;s how we get FRIDAY&#x27;s actual voice:</p>
+<p><strong>Step 1: Find Clean Audio</strong></p>
+<p>Extract 15-30 seconds of Kerry Condon as FRIDAY from:</p>
+<ul><li>YouTube scene compilations (&quot;FRIDAY MCU lines&quot;)</li><li>Soundboard archives (101soundboards.com)</li><li>Game audio files (Marvel games with FRIDAY cameos)</li></ul>
+<p><strong>Step 2: Clean The Audio</strong></p>
+<p>Remove background music, explosions, UI sounds using:</p>
+<ul><li>Ultimate Vocal Remover (UVR5) — free, local, excellent</li><li>Audacity — manual cleanup</li></ul>
+<p><strong>Step 3: Clone The Voice</strong></p>
+<pre><code class="language-python"># Using XTTS-v2 (free, local, offline)
+from TTS.api import TTS
+
+tts = TTS(&quot;tts_models/multilingual/multi-dataset/xtts_v2&quot;)
+tts.tts_to_file(
+    text=&quot;Hello boss. What can I help you with?&quot;,
+    speaker_wav=&quot;friday_clean_sample.wav&quot;,
+    language=&quot;en&quot;,
+    file_path=&quot;friday_says_hello.wav&quot;
+)</code></pre>
+<p><strong>Step 4: Apply The FRIDAY Filter</strong></p>
+<p>Post-process the raw output:</p>
+<p>1. Subtle compression (even out volume)</p>
+<p>2. Light EQ (cut below 80Hz, slight boost at 3kHz for clarity)</p>
+<p>3. Very subtle reverb (small room, not cathedral)</p>
+<p>4. Optional: layer with the HUD chime signature</p>
+<p>The result: FRIDAY&#x27;s voice, speaking your words, running locally.</p>
+<h3>Voice Preservation</h3>
+<p>Once we have the voice model:</p>
+<ul><li>Store it in <code>~/.friday/voices/friday/</code></li><li>It&#x27;s ~2GB for the full XTTS model + voice embedding</li><li>The voice can speak anything — it&#x27;s not limited to pre-recorded phrases</li><li>Can be backed up and shared (it&#x27;s your personal FRIDAY voice)</li></ul>
+<hr>
+<h2>Hardware Requirements</h2>
+<h3>Minimum (CPU Only)</h3>
+<ul><li><strong>STT:</strong> whisper.cpp + tiny.en (~300MB RAM, ~300ms latency)</li><li><strong>TTS:</strong> MeloTTS or Kokoro-82M (~2GB RAM, ~500ms latency)</li><li><strong>VAD:</strong> Silero VAD (~100MB RAM)</li><li><strong>Hotword:</strong> Porcupine (~50MB RAM)</li><li><strong>Total:</strong> ~3GB RAM, works on any modern laptop</li></ul>
+<h3>Recommended (With GPU)</h3>
+<ul><li><strong>STT:</strong> whisper.cpp + base.en (~500MB VRAM, ~100ms latency)</li><li><strong>TTS:</strong> XTTS-v2 with FRIDAY clone (~4GB VRAM, ~500ms latency)</li><li><strong>VAD:</strong> Silero VAD (CPU, negligible)</li><li><strong>Hotword:</strong> Porcupine (CPU, negligible)</li><li><strong>Total:</strong> ~5GB RAM + 4GB VRAM</li></ul>
+<h3>Premium (Dedicated)</h3>
+<ul><li><strong>STT:</strong> whisper.cpp + medium.en (~3GB VRAM, ~50ms latency)</li><li><strong>TTS:</strong> XTTS-v2 with FRIDAY clone + enhanced post-processing</li><li><strong>VAD:</strong> Silero VAD</li><li><strong>Hotword:</strong> Porcupine</li><li><strong>Total:</strong> Full FRIDAY experience with &lt;1s round-trip</li></ul>
+<hr>
+<h2>What&#x27;s NOT Included (On Purpose)</h2>
+<p>To keep this beautiful and focused, we&#x27;re NOT doing:</p>
+<ul><li>❌ <strong>Voice cloning of other characters</strong> — One voice. FRIDAY.</li><li>❌ <strong>Emotion detection from voice</strong> — Too complex, too unreliable.</li><li>❌ <strong>Music playback</strong> — Friday speaks, she doesn&#x27;t DJ.</li><li>❌ <strong>Multi-language</strong> — English only. Adding languages later is easy with</li></ul>
+<p>XTTS-v2&#x27;s multilingual support, but not now.</p>
+<ul><li>❌ <strong>Voice commands for smart home</strong> — We&#x27;re software engineering focused.</li></ul>
+<p>Maybe V5.</p>
+<hr>
+<h2>Success Looks Like</h2>
+<p>You sit down at your desk. Friday is there — ambient, quiet, present.</p>
+<pre><code class="language-">DING DING  ← Friday notices you&#x27;re here
+
+🎧 Friday: &quot;Good morning. While you were away, 3 repositories changed.
+           codebuff has 12 new commits from 2 contributors.
+           There&#x27;s a build warning in Aether&#x27;s scheduler module.
+           
+           I&#x27;ve already run the security scan — clean.
+           Your tests are passing.
+           
+           What are we working on today?&quot;
+
+🎤 You: &quot;Let&#x27;s look at that Aether scheduler warning.&quot;
+
+DING
+
+🎧 Friday: &quot;Pulling it up now. The issue is in scheduler.rs line 147 —
+           a potential race condition in the task dispatch loop.
+           I&#x27;ve opened the file. Want me to run the specific test?&quot;</code></pre>
+<p>**You didn&#x27;t type a single command. You didn&#x27;t navigate a single menu.</p>
+<p>You talked to Friday like a partner, and she responded like one.**</p>
+<hr>
+<p>*This is the experience we&#x27;re building. Every line of code exists to make this</p>
+<p>feeling real. If it doesn&#x27;t feel like this, it&#x27;s not done.*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

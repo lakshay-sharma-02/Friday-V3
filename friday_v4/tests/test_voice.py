@@ -10,14 +10,11 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
-import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
-
 
 # ==========================================================================
 # Utils tests
@@ -26,7 +23,7 @@ import pytest
 
 class TestUtils:
     def test_write_and_read_wav_roundtrip(self):
-        from friday_v4.voice.utils import write_wav, read_wav
+        from friday_v4.voice.utils import read_wav, write_wav
         audio = np.sin(np.linspace(0, 2 * np.pi * 440, 16000)).astype(np.float32) * 0.5
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             path = f.name
@@ -41,7 +38,7 @@ class TestUtils:
             Path(path).unlink(missing_ok=True)
 
     def test_write_wav_clips_properly(self):
-        from friday_v4.voice.utils import write_wav, read_wav
+        from friday_v4.voice.utils import read_wav, write_wav
         audio = np.array([-2.0, -1.5, 0.0, 1.5, 2.0], dtype=np.float32)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             path = f.name
@@ -110,19 +107,20 @@ class TestConfig:
 
 class TestTTSUtils:
     def test_auto_voice_mode_alert(self):
-        from friday_v4.voice.tts import auto_voice_mode, VoiceMode
+        from friday_v4.voice.tts import VoiceMode, auto_voice_mode
         assert auto_voice_mode("Critical vulnerability found") == VoiceMode.ALERT
         assert auto_voice_mode("Security breach detected in deps") == VoiceMode.ALERT
         assert auto_voice_mode("CVE-2024-1234 affects your package") == VoiceMode.ALERT
 
     def test_auto_voice_mode_briefing(self):
-        from friday_v4.voice.tts import auto_voice_mode, VoiceMode
+        from friday_v4.voice.tts import VoiceMode, auto_voice_mode
         long_text = ". ".join(["status report"] * 15)
         assert auto_voice_mode(long_text) == VoiceMode.BRIEFING
 
     def test_auto_voice_mode_conversation_default(self):
-        from friday_v4.voice.tts import auto_voice_mode, VoiceMode
         import datetime
+
+        from friday_v4.voice.tts import VoiceMode, auto_voice_mode
         result = auto_voice_mode("Hello, how are you?")
         hour = datetime.datetime.now().hour
         if hour < 7 or hour >= 23:
@@ -259,7 +257,7 @@ class TestConfigFromFile:
 
 class TestPipelineState:
     def test_state_transition_calls_callback(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineState, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, PipelineState, VoicePipeline
         pipeline = VoicePipeline(PipelineConfig(hotword_sensitivity=0.0))
         states = []
 
@@ -272,7 +270,7 @@ class TestPipelineState:
 
     def test_start_stop_lifecycle(self):
         """Pipeline starts and stops without crashing (no mic in CI)."""
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         pipeline = VoicePipeline(PipelineConfig())
         result = pipeline.start()  # False is fine without audio hardware
         pipeline.stop()
@@ -419,14 +417,14 @@ class TestAudio:
 
 class TestRouter:
     def test_router_init(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline)
         assert router.route("") == ""
 
     def test_router_greeting_fallback(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline, enable_proactive=False)
@@ -434,14 +432,14 @@ class TestRouter:
         assert len(response) > 10
 
     def test_router_status_fallback(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline, enable_proactive=False)
         assert len(router.route("what's new")) > 0
 
     def test_router_identity_fallback(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline, enable_proactive=False)
@@ -449,7 +447,7 @@ class TestRouter:
         assert "friday" in response.lower()
 
     def test_router_desktop_command_fallback(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline, enable_proactive=False)
@@ -458,7 +456,7 @@ class TestRouter:
 
     @patch("friday_v4.desktop.wm_abstraction.WindowManager")
     def test_router_launch_app_command(self, mock_wm_cls):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         wm = MagicMock()
         wm.is_available = True
@@ -474,9 +472,44 @@ class TestRouter:
         wm.launch_app.assert_called_once()
         assert "spotify" in response.lower()
 
+    def test_router_ask_reaches_reasoning(self):
+        """ASK intents (action='chat') must reach the reasoning brain —
+        the Wiring Law fix that made spoken questions get real answers
+        instead of the canned fallback."""
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
+        from friday_v4.voice.router import VoiceRouter
+
+        from friday_v4.nl_router import TalkResult
+
+        class _FakeHandler:
+            def __init__(self, **kw):
+                pass
+
+            def handle(self, text, **kw):
+                return TalkResult(text, "ask", "chat",
+                                  response="You're Lakshay. You prefer "
+                                           "Python for tooling.")
+
+        with patch("friday_v4.nl_router.TextCommandHandler", _FakeHandler):
+            pipeline = VoicePipeline(PipelineConfig())
+            router = VoiceRouter(pipeline, enable_proactive=False)
+            response = router.route("who am I?")
+
+        assert "Lakshay" in response
+        assert "prefer" in response
+
+    def test_router_greeting_still_canned(self):
+        """Non-ASK chat (greetings) keeps the canned fallback flavor."""
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
+        from friday_v4.voice.router import VoiceRouter
+        pipeline = VoicePipeline(PipelineConfig())
+        router = VoiceRouter(pipeline, enable_proactive=False)
+        response = router.route("hello")
+        assert "Friday" in response or "help" in response.lower()
+
     @patch("friday_v4.desktop.wm_abstraction.WindowManager")
     def test_router_launch_focuses_if_running(self, mock_wm_cls):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         wm = MagicMock()
         wm.is_available = True
@@ -489,6 +522,39 @@ class TestRouter:
 
         wm.launch_app.assert_not_called()
         assert "focused" in response.lower()
+
+    def test_router_persists_spoken_utterances_with_conn(self, tmp_path):
+        """Spoken utterances must land in the conversation log when a DB
+        conn is provided — the Wiring Law: voice is a first-class
+        entrypoint into the brain (persona identity + conversation
+        providers read what the operator *said*)."""
+        from friday_v4 import db
+        from friday_v4.persona import recent_statements
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
+        from friday_v4.voice.router import VoiceRouter
+
+        conn = db.connect(tmp_path / "v4.db")
+        try:
+            pipeline = VoicePipeline(PipelineConfig())
+            router = VoiceRouter(pipeline, enable_proactive=False, conn=conn)
+            router.route("call me Lakshay")
+            stmts = recent_statements(conn, limit=5)
+            # The router lowercases before routing, so the persisted
+            # exchange is the lowercased utterance — the exact words the
+            # brain received.
+            assert any(s["content"] == "call me lakshay" for s in stmts)
+        finally:
+            conn.close()
+
+    def test_router_no_conn_is_graceful(self, tmp_path):
+        """Without a conn (hermetic tests / degraded mode) the router
+        must still work and never touch the real conversation log."""
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
+        from friday_v4.voice.router import VoiceRouter
+        pipeline = VoicePipeline(PipelineConfig())
+        router = VoiceRouter(pipeline, enable_proactive=False)
+        response = router.route("who are you")
+        assert "friday" in response.lower()
 
 
 # ==========================================================================
@@ -600,7 +666,7 @@ class TestPushToTalk:
 
 class TestProactiveIntegration:
     def test_proactive_notify_graceful_when_disabled(self):
-        from friday_v4.voice.pipeline import VoicePipeline, PipelineConfig
+        from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline, enable_proactive=False)

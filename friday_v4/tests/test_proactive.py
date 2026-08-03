@@ -7,12 +7,8 @@ bug where repos_active is a set in memory but a list after reload.
 
 from __future__ import annotations
 
-import json
 import time as _time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestSessionStore:

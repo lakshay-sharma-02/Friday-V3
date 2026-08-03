@@ -26,34 +26,37 @@ ruff>=0.4
 mypy>=1.8
 
 [full]
-kokoro-onnx
-faster-whisper
-openwakeword
-onnxruntime
-sounddevice
-webrtcvad
+kokoro-onnx>=0.5.0
+faster-whisper>=1.2.1
+openwakeword>=0.4.0
+onnxruntime>=1.28.0
+sounddevice>=0.5.5
+webrtcvad>=2.0.10
 edge-tts>=7.0
-pyttsx3
-espeakng_loader
+pyttsx3>=2.99
+piper-tts>=1.6.0
+espeakng_loader>=0.2.4
 numpy<2.5,>=1.26
 
 [hotword]
-openwakeword
-onnxruntime
+openwakeword>=0.4.0
+onnxruntime>=1.28.0
 
 [security]
-grype-py>=0.1
+pip-audit>=2.7
+ruff>=0.4
 truffleHog>=3.0
 
 [stt]
-faster-whisper
+faster-whisper>=1.2.1
 
 [voice]
-kokoro-onnx
-sounddevice
-webrtcvad
-onnxruntime
+kokoro-onnx>=0.5.0
+sounddevice>=0.5.5
+webrtcvad>=2.0.10
+onnxruntime>=1.28.0
 edge-tts>=7.0
-pyttsx3
-espeakng_loader
+pyttsx3>=2.99
+piper-tts>=1.6.0
+espeakng_loader>=0.2.4
 numpy<2.5,>=1.26

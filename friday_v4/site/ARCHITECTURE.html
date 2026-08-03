@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Architecture</h1>
+<h1>Friday V4 — Architecture Reference</h1>
+<p><strong>Status:</strong> Active development (ADR record — PLAN.md is the living authority)</p>
+<p><strong>Date:</strong> 2026-07-30 (updated 2026-08-01 for the V3-boundary decision)</p>
+<p><strong>Supersedes:</strong> V3 architecture document for V4-specific decisions</p>
+<blockquote><strong>⚠️ Update note (2026-08-01):</strong> The V3-boundary decision in PLAN.md</blockquote>
+<blockquote>supersedes the older &quot;selective V3 imports&quot; language in this doc. V4 now</blockquote>
+<blockquote>imports <strong>no V3 code</strong> — the single touchpoint is <code>proactive/v3source.py</code>,</blockquote>
+<blockquote>a read-only sqlite bridge. The ADRs below reflect that. Waves 9–11 (see</blockquote>
+<blockquote><code>WAVE_9_AGENCY_CORE.md</code>, <code>WAVE_10_MEMORY_IDENTITY.md</code>,</blockquote>
+<blockquote><code>WAVE_11_RESEARCH_REFLECTION.md</code>) add the reasoning/memory/execution core.</blockquote>
+<hr>
+<h2>⭐ Status: V4 Is the Main Project</h2>
+<p><strong>V4 is the project being actively built.</strong> V3 is largely built but</p>
+<p>inconsistent — it is NOT the foundation V4 is subordinated to. Per the</p>
+<p>V3-boundary decision (PLAN.md §3), V4 imports <strong>no V3 code</strong>: the single</p>
+<p>touchpoint is <code>proactive/v3source.py</code>, a read-only sqlite bridge to</p>
+<p><code>~/.friday/friday.db</code>. Everything V4 needs (voice, desktop, security,</p>
+<p>proactive intelligence, and — from Waves 9–11 — reasoning, memory, and</p>
+<p>execution) is built V4-native.</p>
+<h2>Architectural Invariants</h2>
+<p>Laws carried forward from V3 that V4 chooses to honor (V4 is the main</p>
+<p>project; these are adopted because they&#x27;re sound, not because V3 mandates</p>
+<p>them):</p>
+<p>1. <strong>Reality First:</strong> Reality is the only source of truth.</p>
+<p>2. <strong>Knowledge Is Evidence:</strong> Every knowledge entry cites evidence.</p>
+<p>3. <strong>Reasoning Never Mutates Reality:</strong> Reasoning is deterministic; V4&#x27;s</p>
+<p>interaction modes don&#x27;t mutate the world behind the operator&#x27;s back.</p>
+<p>4. <strong>Single Responsibility:</strong> Every V4 layer owns exactly one</p>
+<p>responsibility.</p>
+<p>5. <strong>Downward Dependencies Only:</strong> V4 layers depend downward only. V3 is</p>
+<p>never a dependency — the read-only <code>v3source.py</code> bridge is the only</p>
+<p>touchpoint and nothing depends on V4.</p>
+<p>6. <strong>Determinism First:</strong> Voice/mobile/desktop are interaction surfaces;</p>
+<p>the reasoning core remains deterministic.</p>
+<p>7. <strong>Wire Before Done:</strong> A feature is not complete until it is wired into</p>
+<p>every consumer that should reach it — voice/CLI/web entry points,</p>
+<p>daemon schedules, reasoning providers, and briefings. &quot;Follow-up</p>
+<p>suggestion&quot; is not an acceptable definition of done.</p>
+<hr>
+<h2>The Wiring Law</h2>
+<p><strong>Every capability ships with its wiring.</strong> A layer is done when its module</p>
+<p>+ tests pass <strong>and</strong> every existing consumer that should reach it does:</p>
+<ul><li><strong>Entry points</strong> — voice (<code>VoiceRouter</code>), CLI (<code>friday4 talk/ask/…</code>), and</li></ul>
+<p>web (<code>/api/talk</code>) all route through the shared <code>nl_router</code>/reasoning</p>
+<p>brain; a new intent type reaches all of them.</p>
+<ul><li><strong>Daemon schedules</strong> — anything time-driven (decay sweeps, scans,</li></ul>
+<p>samplers) gets a daemon component in the same change.</p>
+<ul><li><strong>Reasoning providers</strong> — new state (memories, relationships, skills)</li></ul>
+<p>gains a provider so ASK answers cite it.</p>
+<ul><li><strong>Consumers</strong> — briefings, proactive suggestions, and status feeds</li></ul>
+<p>surface the new state where the design says they should.</p>
+<ul><li><strong>CLI surface</strong> — a new layer gets its <code>friday4 &lt;layer&gt; …</code> command</li></ul>
+<p>(as promised by its wave doc), not just a library API.</p>
+<p><strong>Checklist before a layer is called done:</strong></p>
+<ul><li>[ ] Every entry point that should reach it does (voice / CLI / web)?</li><li>[ ] Does the daemon run the scheduled maintenance it needs (decay,</li></ul>
+<p>refresh)?</p>
+<ul><li>[ ] Does the reasoning layer have a provider citing its state?</li><li>[ ] Does a CLI command expose it (<code>friday4 &lt;layer&gt; …</code>)?</li><li>[ ] Is the existing consumer (briefing/status/proactive) updated?</li><li>[ ] Are the wiring tests hermetic and green?</li></ul>
+<p><strong>Origin:</strong> <code>memory/</code> (Wave 10) shipped while <code>reasoning/providers.py</code></p>
+<p>still read the raw <code>memories</code> table instead of the typed layer, the daemon</p>
+<p>ran no decay sweep, no <code>friday4 memory</code> CLI existed, and <code>VoiceRouter</code></p>
+<p>dropped ASK intents before they reached reasoning. Those gaps were caught</p>
+<p>as follow-up suggestions instead of at build time — this law makes that a</p>
+<p>process violation.</p>
+<hr>
+<h2>V4-Specific Architecture Decisions</h2>
+<h3>ADR-1: V4 Lives in a Separate Package (Main Project)</h3>
+<p><strong>Decision:</strong> <code>friday_v4/</code> is the main project — a separate Python package</p>
+<p>that imports <strong>no V3 code</strong>. V3 is optional legacy *data* read through the</p>
+<p><code>proactive/v3source.py</code> bridge (<code>mode=ro</code> sqlite). V4 is NOT a fork or</p>
+<p>subpackage of V3 and is NOT built on a &quot;frozen core&quot; it must preserve.</p>
+<p><strong>Rationale:</strong> V3 is largely built but inconsistent. V4 is developed on its</p>
+<p>own terms with its own roadmap. Every V3 capability V4 wants (persona,</p>
+<p>ambient feed, db, missions, executors, memory) is rebuilt V4-native —</p>
+<p>clean, stdlib-first, hermetic-tested.</p>
+<p><strong>Consequence:</strong> V4 has zero runtime dependency on V3. If a V3 module is</p>
+<p>missing or broken, V4 is unaffected; V3&#x27;s *capability map* is design</p>
+<p>reference only. Waves 9–11 rebuild the brain (see WAVE docs).</p>
+<h3>ADR-2: V4 Owns Its Daemon; V3 Pieces Reused Where Solid</h3>
+<p><strong>Decision:</strong> V4 owns its own daemon and services (<code>friday_v4/daemon.py</code> —</p>
+<p>observer + notifier + sampler + security scanner, one process). V3&#x27;s</p>
+<p>daemon is never launched or wrapped; V4&#x27;s daemon is fully standalone.</p>
+<p><strong>Rationale:</strong> V3 is largely built but inconsistent. Building the daemon</p>
+<p>V4-native keeps momentum without inheriting V3&#x27;s inconsistencies, and it</p>
+<p>makes &quot;V4 works with zero V3 code present&quot; literally true.</p>
+<p><strong>Consequence:</strong> V4&#x27;s daemon is the product&#x27;s own. Ambient notifications</p>
+<p>read V3&#x27;s feed via the read-only bridge when present; everything else is</p>
+<p>V4 state.</p>
+<h3>ADR-3: Voice Is an Interaction Mode, Not a New Pipeline</h3>
+<p><strong>Decision:</strong> Voice is an interaction mode, not a new pipeline. The V4</p>
+<p><code>VoiceRouter</code> (<code>voice/router.py</code>) routes utterances desktop → proactive →</p>
+<p>fallback today; Wave 9 upgrades it to route through the shared</p>
+<p><code>understanding/</code> NLU + <code>reasoning/</code> answer engine, and Wave 10 adds</p>
+<p>persona/memory/relationship so voice responses are persona-aware.</p>
+<p><strong>Rationale:</strong> Duplicating conversation logic for voice would violate</p>
+<p>single responsibility. One shared NLU surface (voice, CLI, web) keeps</p>
+<p>behavior identical everywhere.</p>
+<p><strong>Consequence:</strong> Voice inherits V4&#x27;s identity, memory, and reasoning —</p>
+<p>rebuilt V4-native (Waves 9–10), never by importing V3&#x27;s persona engine.</p>
+<h3>ADR-4: Multi-Instance Uses CRDT for Observation Sync</h3>
+<p><strong>Decision:</strong> Observations are synchronized between instances using</p>
+<p>Conflict-Free Replicated Data Types (CRDT). Each instance writes locally,</p>
+<p>and sync merges are commutative, associative, and idempotent.</p>
+<p><strong>Rationale:</strong> CRDTs avoid the complexity of distributed locking, conflict</p>
+<p>resolution, and centralized coordination. Append-only observations (V3</p>
+<p>Law 20) are naturally CRDT-friendly.</p>
+<p><strong>Consequence:</strong> Sync is eventually consistent. Two instances observing the</p>
+<p>same repo simultaneously may see different observation counts until sync</p>
+<p>completes. This is acceptable for a local-first system.</p>
+<h3>ADR-5: Cross-Platform WM Uses Adapter Pattern</h3>
+<p><strong>Decision:</strong> A <code>DesktopAbstraction</code> base class with platform-specific</p>
+<p>adapters. Each adapter implements the same interface using the platform&#x27;s</p>
+<p>native API (Hyprland IPC, GNOME D-Bus, macOS Accessibility, Win32).</p>
+<p><strong>Rationale:</strong> V3&#x27;s Hyprland executor is tightly coupled to a single WM.</p>
+<p>The adapter pattern allows progressive platform support without altering</p>
+<p>the consumer API.</p>
+<p><strong>Consequence:</strong> Each platform requires its own adapter implementation.</p>
+<p>Tests use a mock adapter for platform-independent testing.</p>
+<hr>
+<h2>V4 Data Flow</h2>
+<h3>Voice Interaction Flow</h3>
+<pre><code class="language-">User speaks → Microphone → VAD (voice activity detection)
+                                   ↓
+                     Hotword detected? → No → Discard
+                                   ↓ Yes
+                     STT (speech-to-text) → &quot;Hey Friday, what&#x27;s new?&quot;
+                                   ↓
+                     VoiceRouter → Wave 9 understanding/ NLU (intent)
+                                   ↓
+                     Wave 9 reasoning/ (evidence-cited answer)
+                                   ↓
+                     TTS (text-to-speech) → &quot;3 repos changed today...&quot;
+                                   ↓
+                     Speaker → User hears</code></pre>
+<h3>Desktop Monitoring Flow</h3>
+<pre><code class="language-">Desktop Adapter → Window change detected
+                       ↓
+           V4 Desktop Observer → V4 event (Wave 11 ambient/ bus)
+                       ↓
+           V4 memory/db → Dashboard + proactive engine
+                       ↓
+           (Optional) Voice notification: &quot;You just switched to VS Code&quot;</code></pre>
+<h3>Security Scanning Flow</h3>
+<pre><code class="language-">V4 Daemon Cycle Completion
+       ↓
+Trigger security scan on changed repos
+       ↓
+Scanner → vulnerabilities? → V4 event → desktop notification (HIGH)
+       ↓                       ↓
+Secrets detector → secrets? → V4 event (critical urgency)
+       ↓
+Quality gates → issues? → V4 event (normal urgency)
+       ↓
+All clean → V4 event: &quot;Security scan passed&quot;</code></pre>
+<h3>Multi-Instance Sync Flow</h3>
+<pre><code class="language-">Instance A observes repo
+       ↓
+Instance A writes observation to local CRDT store
+       ↓
+Instance A broadcasts observation via TCP JSON-lines (stdlib)
+       ↓
+Instance B receives observation
+       ↓
+Instance B merges via CRDT (LWW per source:subject:aspect)
+       ↓
+Instance B persists merged observation
+       ↓
+Instance B can now answer: &quot;Instance A also saw changes in repo X&quot;</code></pre>
+<hr>
+<h2>Module Dependency Graph</h2>
+<pre><code class="language-">friday_v4/
+│
+├── voice/           → understanding/ (Wave 9) · reasoning/ (Wave 9)
+│                    → (external, optional) whisper / piper / edge-tts
+│
+├── desktop/         → (platform-specific APIs) · db.py (Wave 9)
+│   └── ide/         → (editor extension APIs, Wave 6)
+│
+├── mobile/          → (future Wave 7) · ambient/ bus (Wave 11)
+│
+├── collab/          → pure stdlib (TCP/UDP) — no external deps
+│
+├── security/        → db.py (Wave 9) · ambient/ bus (Wave 11)
+│                    → (external, optional) pip-audit / ruff / trufflehog
+│
+├── intelligence/    → proactive/ · db.py (Wave 9)
+│
+├── network/         → SSH executor folded into execution/ (Wave 12);
+│                      cloud/webhook/db-client remain future
+│
+├── proactive/       → db.py (Wave 9) · memory/ (Wave 10)
+│   └── v3source.py  → ~/.friday/friday.db (read-only, THE only V3 touchpoint)
+│
+└── reasoning/ · understanding/ · missions/ · execution/
+                     → (Waves 9–11 brain core) · db.py (Wave 9)</code></pre>
+<hr>
+<h2>Testing Strategy</h2>
+<h3>V3 Boundary (read-only bridge)</h3>
+<ul><li><code>v3source.py</code> is the ONLY V3 touchpoint; tests cover graceful fallback</li></ul>
+<p>(missing DB / missing schema → empty results, never a crash)</p>
+<ul><li>V3&#x27;s broader suite (1,656 tests) is V3&#x27;s own concern, not V4&#x27;s gate</li></ul>
+<h3>V4 Unit Tests (390 today → ~680 after Waves 9–11)</h3>
+<ul><li>Hermetic: no real <code>~/.friday</code> writes (tmp_path connections)</li><li>Mock all external services (STT, TTS, scanners, tools)</li><li>Test each V4 module in isolation</li></ul>
+<h3>V4 Integration Tests</h3>
+<ul><li>Voice: record test audio → STT → expect text</li><li>Desktop: mock adapter → test abstraction</li><li>Collab: two local instances → sync → verify</li><li>Security: test repo with known vulnerabilities → expect findings</li></ul>
+<h3>Performance Tests</h3>
+<ul><li>Voice round-trip latency &lt; 2 seconds (local models)</li><li>Sync propagation &lt; 5 seconds (same LAN)</li><li>Security scan &lt; 30 seconds (typical repo)</li></ul>
+<hr>
+<h2>Error Handling</h2>
+<p>All V4 modules follow Friday&#x27;s error pattern:</p>
+<p>1. <strong>Never crash the daemon</strong> — wrap all external calls in try/except</p>
+<p>2. <strong>Never fabricate</strong> — if a service is unavailable, report the failure</p>
+<p>3. <strong>Log everything</strong> — log all daemon events</p>
+<h3>Service Degradation</h3>
+<table><thead><tr><th>|</th><th></th><th>S</th><th>e</th><th>r</th><th>v</th><th>i</th><th>c</th><th>e</th><th></th><th>D</th><th>o</th><th>w</th><th>n</th><th></th><th>|</th><th></th><th>V</th><th>4</th><th></th><th>B</th><th>e</th><th>h</th><th>a</th><th>v</th><th>i</th><th>o</th><th>r</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>STT (Whisper)</td><td>Voice mode unavailable; text input still works</td><td></td></tr><tr><td></td><td>TTS (Piper)</td><td>Voice responses disabled; text shown in CLI/feed</td><td></td></tr><tr><td></td><td>Security scanner</td><td>Cycle continues; scanning skipped; warning emitted</td><td></td></tr><tr><td></td><td>Collab peer</td><td>Sync paused; local operation continues independently</td><td></td></tr><tr><td></td><td>Desktop adapter</td><td>Desktop context unavailable; monitors screen/text only</td><td></td></tr><tr><td></td><td>Mobile push</td><td>Notifications queued; delivered on reconnection</td><td></td></tr></tbody></table>
+<hr>
+<h2>Configuration</h2>
+<p>V4 configuration lives in <code>~/.friday/v4_config.json</code> (separate from V3&#x27;s</p>
+<p><code>daemon.status</code>). Key configuration categories:</p>
+<pre><code class="language-json">{
+  &quot;voice&quot;: {
+    &quot;enabled&quot;: true,
+    &quot;stt_model&quot;: &quot;whisper-small&quot;,
+    &quot;tts_model&quot;: &quot;piper&quot;,
+    &quot;hotword&quot;: &quot;hey friday&quot;,
+    &quot;hotword_sensitivity&quot;: 0.7,
+    &quot;vad_mode&quot;: 1,
+    &quot;push_to_talk_key&quot;: &quot;ctrl+shift+space&quot;
+  },
+  &quot;desktop&quot;: {
+    &quot;enabled&quot;: true,
+    &quot;wm&quot;: &quot;auto&quot;,
+    &quot;system_tray&quot;: true,
+    &quot;global_hotkeys&quot;: true
+  },
+  &quot;collab&quot;: {
+    &quot;enabled&quot;: false,
+    &quot;discovery&quot;: &quot;udp_beacons&quot;,   // pure stdlib (replaced mdns)
+    &quot;workspace_name&quot;: null,
+    &quot;sync_interval_seconds&quot;: 30
+  },
+  &quot;security&quot;: {
+    &quot;enabled&quot;: true,
+    &quot;scan_on_change&quot;: true,
+    &quot;scan_interval_minutes&quot;: 60,
+    &quot;vulnerability_severity_threshold&quot;: &quot;medium&quot;,
+    &quot;secret_detection&quot;: true
+  },
+  &quot;mobile&quot;: {
+    &quot;enabled&quot;: false,
+    &quot;push_enabled&quot;: true,
+    &quot;quiet_hours_start&quot;: null,
+    &quot;quiet_hours_end&quot;: null
+  },
+  &quot;intelligence&quot;: {
+    &quot;drift_detection&quot;: true,
+    &quot;anomaly_detection&quot;: true,
+    &quot;predictive_analytics&quot;: false
+  }
+}</code></pre>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

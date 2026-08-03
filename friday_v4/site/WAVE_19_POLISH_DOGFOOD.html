@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 19 Polish Dogfood — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 19 Polish Dogfood</h1>
+<h1>Wave 19 — Polish, Scale &amp; Dogfood ✅ SHIPPED (2026-08)</h1>
+<blockquote><strong>The directive:</strong> *the sentence, proven under real use.* Waves 1–18</blockquote>
+<blockquote>built the surfaces, the safe core, and the sentence clauses; Wave 19</blockquote>
+<blockquote>is where the sentence has to *be true in daily use* — single</blockquote>
+<blockquote>presence, natural language, learning ceiling gone, any task,</blockquote>
+<blockquote>personality that adapts. Everything after this is refinement, not</blockquote>
+<blockquote>building.</blockquote>
+<blockquote></blockquote>
+<blockquote>Governance: <a href="MCU_FRIDAY_STANDARD.md">THE MCU FRIDAY STANDARD</a> —</blockquote>
+<blockquote>the five acceptance tests, the definition of done.</blockquote>
+<hr>
+<h2>Why this wave</h2>
+<p>The MASTER_PLAN exit condition for Wave 19:</p>
+<blockquote><strong>Exit condition:</strong> the sentence is *true in daily use* — single</blockquote>
+<blockquote>presence, natural language, learning ceiling gone, any task,</blockquote>
+<blockquote>personality that adapts.</blockquote>
+<p>That is not proven by more features. It is proven by:</p>
+<p>1. <strong>An instrument</strong> — the five MCU acceptance tests, runnable, green,</p>
+<p>hermetic, driven through natural language only (slice 1, shipped).</p>
+<p>2. <strong>A bug sweep</strong> — the five most annoying bugs found and fixed</p>
+<p>(slice 1 shipped the first two: the deterministic research</p>
+<p>classification gap + the correlate-pair extraction bug; slice 2</p>
+<p>shipped the other three: the &quot;with … and …&quot; research pair, failed</p>
+<p>commands hiding *why*, and &quot;how&#x27;s it going&quot; answering &quot;I don&#x27;t know</p>
+<p>yet&quot; with no mission).</p>
+<p>3. <strong>The dogfood loop</strong> — Friday used for Friday&#x27;s own engineering</p>
+<p>(this wave doc, the harness, the bug sweep, the benchmarks — and</p>
+<p>slice 3 found the benchmark tool itself reporting false <code>n/a</code>s).</p>
+<p>4. <strong>The floor</strong> — benchmarks, docs site, installer, migration guide,</p>
+<p><strong>1085</strong> hermetic tests.</p>
+<hr>
+<h2>Slice 1 — The MCU acceptance harness ✅ SHIPPED</h2>
+<h3>The instrument</h3>
+<p><code>tests/test_mcu_acceptance.py</code> — the five proof moments</p>
+<p>(MCU_FRIDAY_STANDARD.md §3), each driven through the <strong>shared NL brain</strong></p>
+<p>(<code>nl_router.TextCommandHandler</code> — the exact path talk / voice / web /</p>
+<p>mobile route through), no flags, no syntax, hermetic (tmp DBs, fake</p>
+<p><code>claude</code> binaries, seeded repos):</p>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>m</th><th>e</th><th>n</th><th>t</th><th></th><th>|</th><th></th><th>S</th><th>e</th><th>n</th><th>t</th><th>e</th><th>n</th><th>c</th><th>e</th><th></th><th>|</th><th></th><th>V</th><th>e</th><th>r</th><th>i</th><th>f</th><th>i</th><th>e</th><th>d</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>1 · Mission shepherding</td><td>&quot;ship the auth refactor by Friday&quot; → mission created → manual step completed → &quot;how&#x27;s it going&quot; names the next step (and honestly says &quot;no mission in flight&quot; when there is none) → &quot;replan this mission&quot; re-decomposes through Claude Code and reports &quot;plan changed because…&quot;</td><td>✅ 6 tests</td><td></td></tr><tr><td></td><td>2 · Workflow copying</td><td>&quot;watch me do this&quot; → captured → &quot;learn this&quot; → shadow skill → daemon sweep verifies → operator approves promotion → dispatch offers next step → &quot;yes, run it&quot; runs it through the gate</td><td>✅ 2 tests</td><td></td></tr><tr><td></td><td>3 · Deep reasoning</td><td>&quot;what&#x27;s the deal between X and Y&quot; (and the &quot;with … and …&quot; variant) → researched, evidence-cited, ranged estimate (seeded hermetic repos); a bare research lead never hijacks a stronger intent</td><td>✅ 4 tests</td><td></td></tr><tr><td></td><td>4 · Adaptive identity</td><td>&quot;be more casual, Tony&quot; → tone shifts → persists → &quot;why do you talk that way&quot; explains it; &quot;be yourself again&quot; resets</td><td>✅ 2 tests</td><td></td></tr><tr><td></td><td>5 · Capability composition</td><td>&quot;figure out why the build fails and fix it&quot; → decomposed onto the Claude Code CLI through the gate → audited → result surfaced (and honest when claude is absent)</td><td>✅ 2 tests</td><td></td></tr></tbody></table>
+<p><strong>11 hermetic tests.</strong> This is the instrument the exit condition is</p>
+<p>measured by: every future wave re-runs it, and the sentence stays</p>
+<p>proven.</p>
+<h3>Bug 1 — the deterministic research classification gap (fixed)</h3>
+<p><code>&quot;what&#x27;s the deal between X and Y&quot;</code> — the MCU deep-reasoning sentence —</p>
+<p>scored ASK (&quot;what&quot; + &quot;is&quot; = 2) above RESEARCH (&quot;what&#x27;s the deal&quot; = 1)</p>
+<p>in the deterministic NLU fallback, so on a no-LLM machine the answer</p>
+<p>was the honest but useless &quot;I don&#x27;t know yet&quot; instead of a researched</p>
+<p>estimate. The LLM path classified it correctly; the offline path never</p>
+<p>could.</p>
+<p><strong>Fix:</strong> a research-lead tie-break in <code>nlu/intent.py</code>&#x27;s fallback (same</p>
+<p>pattern as the desktop / deny / memory tie-breaks — fallback only, the</p>
+<p>LLM still decides in production). <code>&quot;what&#x27;s the deal between X and Y&quot;</code>,</p>
+<p><code>&quot;what is the deal between …&quot;</code>, <code>&quot;… vs …&quot;</code> / <code>&quot;… versus …&quot;</code>, and</p>
+<p>&quot;integration cost between …&quot; now route to RESEARCH deterministically.</p>
+<h3>Bug 2 — the correlate-pair extraction bug (fixed)</h3>
+<p>The research router split <code>&quot;analyze X vs Y&quot;</code> on a marker list that hit</p>
+<p><code>&quot; between &quot;</code> <strong>before</strong> the pair separator, then stripped the research</p>
+<p>lead off the first operand — so <code>&quot;what&#x27;s the deal between X and Y&quot;</code></p>
+<p>became <code>correlate(&quot;&quot;, &quot;Y&quot;)</code>. The lead was never an operand.</p>
+<p><strong>Fix:</strong> <code>nl_router._extract_pair</code> — <code>&quot;between X and Y&quot;</code> splits on</p>
+<p>&quot;between&quot; first and the pair on &quot;and&quot;, never treating the lead as an</p>
+<p>operand; <code>&quot;vs&quot;</code> / <code>&quot;versus&quot;</code> / plain <code>&quot;and&quot;</code> keep working.</p>
+<h3>Why these two bugs first</h3>
+<p>They are the two things that made the *exact* MCU sentences fail</p>
+<p>offline. The harness caught them because it tests the concrete</p>
+<p>sentences, not paraphrases (the lesson from Wave 16&#x27;s ordering bug).</p>
+<hr>
+<h2>Slice 2 — the remaining three annoying bugs ✅ SHIPPED (this change)</h2>
+<p>The sweep: a battery of ~35 real utterances driven through the shared</p>
+<p>NL brain (<code>TextCommandHandler</code>) on a fresh DB + <code>friday4 doctor</code>. Three</p>
+<p>truly annoying behaviors surfaced, all fixed with hermetic regression</p>
+<p>tests:</p>
+<h3>Bug 3 — &quot;what&#x27;s the deal <strong>with</strong> X and Y&quot; didn&#x27;t research</h3>
+<p>The MCU deep-reasoning sentence has a natural &quot;with&quot; variant</p>
+<p>(&quot;what&#x27;s the deal with vivaha and MindWell?&quot;) that the slice-1 tie-break</p>
+<p>didn&#x27;t cover — it classified ASK and answered &quot;I don&#x27;t know yet&quot;. Only</p>
+<p>the &quot;between … and …&quot; / &quot;… vs …&quot; forms researched.</p>
+<p><strong>Fix:</strong> <code>nlu/intent.py</code> — the research pair tie-break now fires when</p>
+<p>&quot;with … and …&quot; BOTH appear (a bare lead like &quot;what&#x27;s the deal with my</p>
+<p>security scan&quot; still scans — regression-guarded). <code>nl_router._extract_pair</code></p>
+<p>understands the &quot;with&quot; separator: the lead (&quot;what&#x27;s the deal&quot;) is never</p>
+<p>an operand, &quot;compare X with Y&quot; splits cleanly too.</p>
+<h3>Bug 4 — failed commands hid *why*</h3>
+<p>&quot;git status&quot; in a non-repo directory replied &quot;That didn&#x27;t work —</p>
+<p>failed.&quot; with the real reason (&quot;fatal: not a git repository…&quot;) buried.</p>
+<p>The failed path dropped the executor&#x27;s combined output.</p>
+<p><strong>Fix:</strong> <code>nl_router._run_execution</code> surfaces the first line of the</p>
+<p>output/stderr on failure — &quot;That didn&#x27;t work — failed. fatal: not a</p>
+<p>git repository…&quot; (claude failures already did this; now every</p>
+<p>executor does).</p>
+<h3>Bug 5 — &quot;how&#x27;s it going&quot; with no missions said &quot;I don&#x27;t know yet&quot;</h3>
+<p>With zero missions, the MISSION provider returned no evidence, so the</p>
+<p>honest-but-useless &quot;I don&#x27;t know yet&quot; came back — even though Friday</p>
+<p>*did* query the DB and *knows* there&#x27;s no mission.</p>
+<p><strong>Fix:</strong> <code>reasoning/providers.mission_provider</code> answers the empty case</p>
+<p>with real state (evidence <code>v4.missions</code>: &quot;no missions in flight&quot;) and</p>
+<p>points at how to start one: &quot;You don&#x27;t have a mission in flight right</p>
+<p>now — say &#x27;ship the auth refactor by Friday&#x27; and I&#x27;ll plan one.&quot;</p>
+<h3>Why these three</h3>
+<p>The slice-2 sweep rule: an utterance that a user would *naturally say*</p>
+<p>must do what it looks like it does. All three were natural phrasing</p>
+<p>hitting wrong/opaque outcomes offline, and all three now have hermetic</p>
+<p>tests (harness + <code>test_nl_router</code> + <code>test_reasoning</code>).</p>
+<hr>
+<h2>Slice 3 — dogfood, benchmarks, docs site, installer ✅ SHIPPED (this change)</h2>
+<h3>Benchmarks — and two silent <code>n/a</code> bugs fixed</h3>
+<p><code>tools/benchmarks.py</code> now measures <strong>all seven</strong> daily-use operations:</p>
+<p>the old run printed <code>n/a</code> for <code>v4.reasoning_answer</code> and</p>
+<p><code>v4.collab_merge_20</code> — which the tool reports for *failed* measurements</p>
+<p>(exceptions are caught, never raised). Both were real bugs in the</p>
+<p>benchmark itself:</p>
+<ul><li><code>reasoning_answer</code> called <code>answer(conn, &quot;…&quot;)</code> — the engine signature</li></ul>
+<p>is <code>answer(question_text, conn=None, …)</code>, so the sqlite connection</p>
+<p>was passed as the question text and <code>AttributeError</code>ed silently.</p>
+<ul><li><code>collab_merge</code> fed the CRDT the *display* entry shape</li></ul>
+<p>(<code>source</code>/<code>subject</code>/<code>timestamp</code>) instead of the wire shape</p>
+<p>(<code>id</code>/<code>peer_id</code>/<code>ts</code>/<code>payload</code>/<code>deleted</code>) — <code>state()</code> raised</p>
+<p><code>KeyError(&#x27;ts&#x27;)</code> silently.</p>
+<p>Both fixed with a comment so the shapes stay honest. Current floor</p>
+<p>(best-of-N ms): db_connect 0.31, mission roundtrip 1.79, reasoning</p>
+<p>answer 1.11, research analyze 0.21, collab merge 0.46, ambient publish</p>
+<p>1.01, security scan 367.72 (fixture).</p>
+<h3>Docs site — 23 pages, zero broken links</h3>
+<p><code>tools/build_docs_site.py</code> → <code>site/</code> writes the full docs corpus</p>
+<p>(index + every <code>docs/*.md</code>), verified: 23 pages, index links all</p>
+<p>resolve, and the Wave 19 page renders the slice close-outs.</p>
+<h3>Installer — verified end-to-end, one gap fixed</h3>
+<p><code>install.sh</code> verified in a throwaway venv (<code>--venv /tmp/...</code>): venv</p>
+<p>created, editable install succeeds, <code>friday4 doctor</code> green, `friday4</p>
+<p>talk &quot;hello&quot;<code> answers, </code>friday4 status` degrades gracefully for</p>
+<p>disabled subsystems. <strong>Gap fixed:</strong> <code>install.sh</code> lacked the executable</p>
+<p>bit (<code>-rw-r--r--</code>) while the docs say <code>./install.sh</code> — now <code>-rwxr-xr-x</code>,</p>
+<p>and <code>./install.sh --help</code> works.</p>
+<h3>Migration guide — claims verified against the real CLI</h3>
+<p>Every command the guide promises exists and matches: <code>friday4 talk</code>,</p>
+<p><code>ask</code>, <code>research analyze/correlate/briefing/report</code>, `execute</p>
+<p>shell/git/file/python/testing/ssh/claude<code>, </code>daemon start/status/stop`,</p>
+<p><code>web</code>, <code>memory store/recall/forget/list/status</code>, <code>security scan</code>. The</p>
+<p>V3→V4 mental model (read-only bridge, <code>v4.db</code> separate from</p>
+<p><code>friday.db</code>) matches the code.</p>
+<h3>Bonus find — a test hermeticity bug the smoke test exposed</h3>
+<p>The installer smoke test (<code>friday4 talk &quot;hello&quot;</code> in the fresh venv)</p>
+<p>popped a real shared session into <code>~/.friday/v4.db</code>, which flipped a</p>
+<p>previously-green Wave 15 test: <code>test_conversation_state_read_only_never_creates</code></p>
+<p>called <code>dashboard.conversation_state()</code> <strong>without</strong> pointing <code>db.connect</code></p>
+<p>at its tmp DB (its sibling test does), so it read the real home DB — a</p>
+<p>latent hermeticity violation that only passed because the home DB</p>
+<p>happened to be empty. Fixed to follow the sibling&#x27;s convention; the</p>
+<p>wave&#x27;s &quot;no real ~/.friday&quot; promise now holds for every test in the</p>
+<p>file. (The dogfood loop catching a test that reads real state is</p>
+<p>exactly why slice 3 exists.)</p>
+<h3>Suite</h3>
+<p><strong>1085 hermetic tests green</strong> (the 900+ floor was passed long ago).</p>
+<hr>
+<h2>Definition of done for Wave 19</h2>
+<ul><li>[x] The five MCU acceptance tests pass through <strong>speech only</strong> —</li></ul>
+<p>the harness (slice 1) is the instrument; voice surfaces route</p>
+<p>through the same <code>nl_router</code> brain it drives (voice uses</p>
+<p><code>TextCommandHandler</code> directly — the exact path the harness</p>
+<p>drives).</p>
+<ul><li>[x] The five most annoying bugs found and fixed (slice 1 shipped</li></ul>
+<p>two; slice 2 shipped the other three).</p>
+<ul><li>[x] Benchmarks / docs site / installer / migration guide verified.</li><li>[x] Suite ≥ 900 hermetic tests, nothing red (<strong>1085</strong>).</li><li>[x] The sentence is measurably true in daily use (tracker, §7 — all</li></ul>
+<p>five clauses ✅).</p>
+<hr>
+<h2>Close-out (the wave recipe)</h2>
+<p><strong>What was learned:</strong> the exit condition is an *instrument*, not a</p>
+<p>feature list. The harness (slice 1) caught real classification bugs in</p>
+<p>the exact MCU sentences; the sweep (slice 2) found natural phrasings</p>
+<p>hitting wrong/opaque outcomes; slice 3 found the *tools themselves*</p>
+<p>reporting false negatives (<code>n/a</code> = failed) — the dogfood loop is what</p>
+<p>makes the floor honest. Everything after this is refinement, not</p>
+<p>building.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

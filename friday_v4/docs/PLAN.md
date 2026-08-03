@@ -5,6 +5,17 @@
 >
 > Inspired by MCU Tony Stark's FRIDAY — voice-controlled, environment-aware,
 > proactively intelligent, deeply integrated, and personally loyal.
+>
+> **⚠️ Constitution first:** every wave, feature, and commit is judged
+> against [**THE MCU FRIDAY STANDARD**](MCU_FRIDAY_STANDARD.md) — ten laws,
+> five MCU acceptance tests, one definition of done. If a build doesn't
+> move Friday toward *that*, it doesn't get built.
+>
+> **📍 The route:** [**THE FRIDAY MASTER PLAN**](MASTER_PLAN.md) — one
+> sentence, decomposed into waves. "MCU FRIDAY is a single presence that
+> speaks natural language, has no learning ceiling, no task it can't pick
+> up, and adapts its personality to you." The waves in this PLAN.md are
+> the how; the MASTER_PLAN is the why.
 
 ---
 
@@ -24,33 +35,47 @@
 
 ## 1. Executive Summary
 
-**Date:** July 30, 2026
-**Status:** Planning Phase
-**Parent:** Friday V3 (frozen core, ~106K LOC, 1656 tests)
-**Approach:** Hybrid — keep V3's architecture laws and pipeline, re-architect
-the communication layer, add multi-instance support.
+**Date:** August 1, 2026
+**Status:** Active development — Waves 1–5 **shipped** (Voice, Desktop,
+Security & Quality, Proactive Intelligence, Collaboration) plus the
+`friday4 web` dashboard and `friday4 doctor` ops tooling. **Waves 9, 10,
+and 11 shipped** (Agency Core, Memory & Identity, Research & Reflection)
+and **Wave 12 (Polish & Scale) shipped** (benchmarks, docs site, installer,
+migration guide, SSH executor). Wave 9 ships the brain: `db.py`,
+`understanding/` (NLU), `reasoning/` (evidence-cited answers), `missions/`,
+`execution/` (gate → sandbox → audit → undo), `nl_router.py`, `friday4
+talk "…"`. Wave 10 ships identity: `memory/`, `persona/`, `relationship/`,
+`skills/` (shadow-first), all wired into the daemon. Wave 11 ships
+research/synthesis/briefing/ambient **push** (SSE `/api/events`; security,
+suggestions, and collab observations publish onto one shared bus) plus
+`report --daily/--weekly`. See `WAVE_9_AGENCY_CORE.md`,
+`WAVE_10_MEMORY_IDENTITY.md`, `WAVE_11_RESEARCH_REFLECTION.md`.
+**Product:** Friday V4 is **the product**. V3 is legacy heritage that V4 may
+read from — never a wrapper.
 
 ### Why V4?
 
-Friday V3 is an extraordinary foundation — a fully realized AI operating partner
-with a complete pipeline from observation to execution to self-improvement. But
-it was designed for a single-user, single-machine, CLI-driven world.
+Friday V3 (the `friday` package) was an ambitious exploration: a persistent AI
+operating partner with a full observation → execution → self-improvement
+pipeline. But it grew into a single-user, single-machine, CLI-first monolith
+that is hard to run, hard to package, and hard to polish.
 
-V4 is the leap to:
+V4 is a **clean rewrite of the product surface** — not a wrapper around V3:
 - **Voice-first interaction** — speak to Friday like Tony Stark
-- **Cross-platform presence** — every device, every OS
-- **Proactive intelligence** — anticipates needs before you ask
-- **Multi-instance collaboration** — Friday works with teams too
+- **Cross-platform desktop presence** — Hyprland/GNOME/KDE/macOS/Windows
 - **Security & quality** — code health as a first-class capability
+- **Proactive intelligence** — anticipates needs before you ask
+- **A modern dashboard** — live status, security grade, drift, ambient feed
+- **Owns its own runtime** — V4 daemon, V4 CLI, V4 state, V4 tests
 
-### The Hybrid Promise
+### The V4-First Promise
 
-- ✅ V3's **25 Architecture Laws** remain inviolable
-- ✅ V3's **frozen core** (Brain, Observation, Context, Knowledge) stays untouched
-- ✅ V3's **pipeline** (Reality → Repair) continues to run as-is
-- 🆕 V4 adds **new layers above and beside** the V3 core
-- 🆕 V4 re-architects **communication** (voice, mobile, web)
-- 🆕 V4 adds **multi-instance** coordination on top of V3's single-instance DB
+- ✅ V4 is the main product — its own daemon, CLI, config, state, tests
+- ✅ V3 is **optional legacy data** — read via a read-only bridge when present
+- ✅ V4 never writes V3's DB, never shells into V3's CLI, never wraps V3 commands
+- ✅ Missing V3 DB degrades gracefully — V4 works fully standalone
+- 🆕 Every new capability (voice, desktop, security, web) is V4-native
+- 🆕 V4's architecture laws: pure-stdlib-first, never crash, degrade silently
 
 ---
 
@@ -58,77 +83,81 @@ V4 is the leap to:
 
 ### Core Tenets
 
-1. **Voice-Native** — Every V4 interface speaks. Text is the fallback, not the primary.
-2. **Ambient, Not Intrusive** — Friday is present but quiet. It interrupts only for what matters.
-3. **Cross-Surface** — Desktop, mobile, web, terminal, IDE — Friday is everywhere you code.
-4. **Proactive, Not Reactive** — V3 reacts to cycles. V4 anticipates needs.
-5. **Federated, Not Centralized** — V4 runs locally but can coordinate with peers.
-6. **Secure By Default** — Every new capability assumes least privilege.
-7. **Learn Continuously** — Every interaction trains the model of you.
+1. **V4 Is The Product** — V3 is legacy data, not a dependency. V4 runs,
+   scans, speaks, and serves on its own.
+2. **Voice-Native** — Every V4 interface speaks. Text is the fallback.
+3. **Ambient, Not Intrusive** — present but quiet; interrupts only for what matters.
+4. **Cross-Surface** — Desktop, web, terminal, IDE, mobile (planned).
+5. **Pure-Stdlib First** — every capability has a stdlib implementation that
+   always works; optional tools (whisper, piper, ruff, pip-audit…) enhance,
+   never gate.
+6. **Never Crash** — every external call is wrapped; missing tools/subsystems
+   degrade silently (this is why `friday4 web` and `doctor` never 500).
+7. **Secure By Default** — least privilege, secrets scanned, findings owned by V4.
+8. **Learn Continuously** — patterns, sessions, drift, and anomalies feed suggestions.
 
-### What Stays from V3
+### What We Keep From V3 (as heritage)
 
-| V3 Feature | V4 Strategy |
+| V3 Asset | V4 Strategy |
 |-----------|-------------|
-| 25 Architecture Laws | **Frozen.** Inviolable. |
-| Observation Engine | **Frozen.** New observers plug in. |
-| Context Engine | **Frozen.** New signals added inside. |
-| Knowledge Engine | **Frozen.** New knowledge types. |
-| Understanding Engine | **Frozen.** New detectors. |
-| The Brain (ask pipeline) | **Frozen.** Bug fixes only. |
-| Planning → Runtime pipeline | **Extended.** V4 adds new executor types. |
-| Executors (18) | **Kept.** V4 adds more. |
-| Persona Engine | **Extended.** Voice personality layer on top. |
-| Ambient Feed | **Extended.** Multi-channel routing. |
-| Autonomy System | **Extended.** Per-instance + per-user config. |
+| `~/.friday/friday.db` observations/actions/ambient | **Read-only bridge** via `V3DataSource` when the DB exists |
+| Ambient feed | **Read** for the web dashboard / anticipation; never written |
+| V3 CLI | **Not wrapped.** V4 ships its own `friday4` commands |
+| V3 daemon | **Not launched.** V4 runs its own `friday4 daemon` |
+| V3 tests | **Not a gate.** V4 has its own test suite |
 
-### What Changes
+### What Changes (V4-native solutions)
 
 | V3 Limitation | V4 Solution |
 |-------------|-------------|
-| Single-instance DB | Multi-instance with CRDT-based observation sync |
-| CLI-only interaction | Voice + Mobile + Web + Desktop + CLI |
-| Hyprland-only WM | Cross-platform desktop abstraction (Hyprland/GNOME/KDE/macOS/Windows) |
-| Polling daemon cycle | WebSocket + push-based real-time events |
-| No IDE integration | VS Code / IntelliJ extension |
-| No voice | Speech-to-text + text-to-speech + hotword detection |
-| No mobile | Companion app (React Native) |
-| No collaboration | Team workspaces, shared observations, permissions |
-| No security | Dependency scanning, secret detection, quality gates |
+| CLI-only interaction | Voice + Desktop + Web dashboard + CLI (`friday4`) |
+| Hyprland-only WM | `desktop/` WM abstraction (Hyprland/GNOME/KDE/macOS/Windows adapters) |
+| Monolithic single-process | `friday4 daemon` — one process, per-component health |
+| No voice | `voice/` — STT (faster-whisper), TTS (kokoro/piper/edge/pyttsx3), VAD, hotword |
+| No security | `security/` — dependency audit, secret detection, quality gates |
+| No proactive layer | `proactive/` + `intelligence/` — anticipation, drift, anomalies, health |
+| No dashboard | `web/` — `friday4 web` pure-stdlib local dashboard |
 
 ---
 
-## 3. V3 Inheritance
+## 3. V3 Interop (Read-Only Bridge)
 
-### What We Keep from V3
+### What V4 Actually Imports from V3
 
-The entire V3 codebase at `src/friday/` is inherited. V3 modules are
-**imported, not forked.** The `FRIDAY_CORE_FROZEN.md` contract (frozen
-modules: Brain, Observation Engine, Context, evidence_scope, portfolio,
-identity) remains in effect. V4 code lives in `friday_v4/` and depends
-on V3's public APIs — never on its internals.
-
-### V3 Import Surface (V4's Public API)
+One module, one direction, read-only:
 
 ```python
-# These V3 modules form V4's API surface. Changes here need V4 review.
-from friday.ask import ask
-from friday.db import connect, get_repositories, now_iso
-from friday.observation import ObservationEngine, default_registry
-from friday.observe import refresh
-from friday.knowledge.engine import KnowledgeEngine
-from friday.ambient import push_event, AmbientEvent
-from friday.persona.engine import IdentityEngine
-from friday.runtime.engine import RuntimeEngine
-from friday.runtime.executors import resolve_executor, execute_with_fallback
-from friday.autonomy import is_kill_switch_active
-from friday.memory import WorkingMemory, MemoryEngine
+# friday_v4/proactive/v3source.py — the ONLY V3 touchpoint.
+from friday_v4.proactive.v3source import V3DataSource
+
+src = V3DataSource()              # points at ~/.friday/friday.db
+if src.is_available():            # DB exists AND has V3 schema
+    obs = src.recent_observations(hours=24)
+    acts = src.recent_actions(hours=24)
+    events = src.recent_ambient_events(hours=24)
+    digest = src.workspace_digest()
 ```
 
-### Test Inheritance
+- `V3DataSource` opens the DB **read-only** (URI `mode=ro`) and never writes.
+- Every query is guarded: a missing DB, missing schema, or unreadable file
+  yields empty results / `is_available() == False` — never a crash.
+- V4's ambient feed, anticipation, and web dashboard all consume V3 *data*
+  through this single bridge when it's present, and work fully standalone
+  when it isn't.
 
-All 1,656 V3 tests must continue to pass. V4 adds its own test suite
-at `friday_v4/tests/`. A CI gate ensures no V4 change breaks V3 tests.
+### What V4 Does NOT Do with V3
+
+- ✗ No `from friday import ...` anywhere in `friday_v4/src` (except the
+  read-only sqlite access in `v3source.py`).
+- ✗ No subprocess calls to the `friday` CLI.
+- ✗ No writes to `~/.friday/friday.db`.
+- ✗ No dependency on V3's tests, laws, or internal APIs.
+
+### Test Strategy
+
+V4 has its own suite at `friday_v4/tests/` (currently ~740 tests, growing
+toward ~820 after Wave 11). V3's 1,656 tests are **not** a gate on V4 —
+V4 must be testable, installable, and runnable with zero V3 code present.
 
 ---
 
@@ -140,31 +169,25 @@ at `friday_v4/tests/`. A CI gate ensures no V4 change breaks V3 tests.
 ┌─────────────────────────────────────────────────────────────────┐
 │                     FRIDAY V4 SURFACES                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────┐ │
-│  │  Voice   │ │  Mobile  │ │   Web    │ │  Desktop │ │  CLI │ │
-│  │ Interface│ │  App     │ │ Dashboard│ │ Extension│ │(V3)  │ │
+│  │  Voice   │ │ Mobile   │ │   Web    │ │  Desktop │ │  CLI │ │
+│  │ Pipeline │ │ (future) │ │ Dashboard│ │  Suite   │ │friday4│ │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └──┬───┘ │
 │       │            │            │            │          │      │
 ├───────┴────────────┴────────────┴────────────┴──────────┴──────┤
-│                  FRIDAY V4 COMMUNICATION BUS                     │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐  │
-│  │  Voice   │ │ WebSocket│ │  Push    │ │ Multi-Instance   │  │
-│  │ Pipeline │ │  Server  │ │Notif.   │ │  Coordinator     │  │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────────┬─────────┘  │
-│       │            │            │                │             │
-├───────┴────────────┴────────────┴────────────────┴─────────────┤
+│                        FRIDAY V4 DAEMON                         │
+│   observer · notifier · sampler · security scanner · proactive   │
+│   (one process, per-component health, never crashes)             │
+├─────────────────────────────────────────────────────────────────┤
 │                FRIDAY V4 INTELLIGENCE LAYER                      │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐          │
-│  │  Drift   │ │ Security │ │  Health  │ │ Predictive│          │
-│  │ Detection│ │ Scanning │ │ Dash.    │ │ Analytics│          │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘          │
-│       │            │            │            │                 │
-├───────┴────────────┴────────────┴────────────┴─────────────────┤
-│                  FRIDAY V3 CORE (Frozen)                         │
-│  Reality → Observation → Context → Knowledge → Understanding → │
-│  Initiatives → Insights → Brain → Planning → Task Graph →      │
-│  Resolver → Scheduler → Runtime → Review → Repair              │
-│                                                                 │
-│  V3 Modules: 273 Python files, 106K LOC, 1656 tests            │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐      │
+│  │  Drift   │ │ Security │ │  Health  │ │ Proactive     │      │
+│  │ Detection│ │ Scanning │ │ Diagnostics│ │ Anticipation │      │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬───────┘      │
+│       │            │            │               │               │
+├───────┴────────────┴────────────┴───────────────┴───────────────┤
+│               OPTIONAL V3 DATA (read-only bridge)               │
+│   ~/.friday/friday.db via V3DataSource — observations, actions,  │
+│   ambient feed. Missing DB degrades gracefully; never written.   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -181,87 +204,83 @@ friday_v4/
 │   ├── COLLAB_SPEC.md                 # Multi-instance design
 │   └── SECURITY_SPEC.md               # Security scanning design
 │
-├── specs/                             # Formal specifications
-│   └── api.yaml                       # V4 API contract (OpenAPI)
-│
 ├── src/friday_v4/
 │   ├── __init__.py
+│   ├── config.py                      # ✅ Config loader (file + FRIDAY_V4_* env)
+│   ├── daemon.py                      # ✅ `friday4 daemon` (ambient service + SecurityScanner)
 │   │
-│   ├── voice/                         # Voice Interface Layer
-│   │   ├── __init__.py
-│   │   ├── stt.py                     # Speech-to-text (Whisper)
-│   │   ├── tts.py                     # Text-to-speech
-│   │   ├── hotword.py                 # Hotword/wake word detection
-│   │   ├── pipeline.py                # Voice processing pipeline
-│   │   ├── router.py                  # Voice → V3 persona routing
-│   │   └── vad.py                     # Voice activity detection
+│   ├── voice/                         # ✅ Voice Interface Layer (Wave 1)
+│   │   ├── stt.py                     # Speech-to-text (faster-whisper)
+│   │   ├── tts.py                     # TTS (kokoro/piper/edge-tts/pyttsx3, auto-fallback)
+│   │   ├── hotword.py                 # Hotword detection (openwakeword)
+│   │   ├── vad.py                     # Voice activity detection
+│   │   ├── pipeline.py                # Voice pipeline + barge-in
+│   │   ├── router.py                  # Voice → desktop/proactive/fallback routing
+│   │   ├── audio.py · chimes.py · utils.py · core.py
 │   │
-│   ├── desktop/                       # Desktop Integration Suite
-│   │   ├── __init__.py
+│   ├── desktop/                       # ✅ Desktop Suite (Wave 2)
 │   │   ├── wm_abstraction.py          # Cross-platform WM abstraction
-│   │   ├── hyprland_adapter.py        # Hyprland backend
-│   │   ├── gnome_adapter.py           # GNOME backend
-│   │   ├── kde_adapter.py             # KDE backend
-│   │   ├── macos_adapter.py           # macOS backend
-│   │   ├── windows_adapter.py         # Windows backend
-│   │   ├── tray.py                    # System tray integration
-│   │   ├── hotkeys.py                 # Global hotkeys
-│   │   └── ide/
-│   │       ├── __init__.py
-│   │       ├── lsp_client.py          # LSP protocol client
-│   │       ├── vscode_extension/      # VS Code extension
-│   │       └── jetbrains_plugin/      # IntelliJ plugin
+│   │   ├── hyprland/gnome/kde/macos/windows_adapter.py
+│   │   ├── tray.py · hotkeys.py · watcher.py · notifier.py
+│   │   └── ide/                       # ✅ IDE Integration (Wave 6)
 │   │
-│   ├── mobile/                        # Mobile Companion
-│   │   ├── __init__.py
-│   │   ├── api.py                     # REST/WS API for mobile clients
-│   │   ├── push.py                    # Push notification service
-│   │   └── app/                       # React Native app source
+│   ├── security/                      # ✅ Security & Quality (Wave 3)
+│   │   ├── scanner.py                 # VulnerabilityScanner orchestrator
+│   │   ├── deps.py                    # Dependency auditor (curated CVE DB + pip-audit)
+│   │   ├── secrets.py                 # Secret detection (regex/entropy + trufflehog)
+│   │   ├── quality.py                 # Quality gates (AST + ruff/mypy)
+│   │   ├── reporter.py                # SecurityReport / Finding model
+│   │   └── tooling.py                 # ✅ venv-aware tool discovery (find_tool)
 │   │
-│   ├── collab/                        # Collaboration Layer
-│   │   ├── __init__.py
-│   │   ├── coordinator.py             # Multi-instance coordinator
-│   │   ├── crdt.py                    # CRDT-based observation merge
-│   │   ├── peer.py                    # Peer discovery & connection
-│   │   ├── permissions.py             # Access control
-│   │   └── sync.py                    # Real-time sync engine
+│   ├── intelligence/                  # ✅ Advanced Intelligence (Wave 4)
+│   │   ├── drift.py · anomaly.py · health.py · predictor.py · learner.py
 │   │
-│   ├── security/                      # Security & Quality
-│   │   ├── __init__.py
-│   │   ├── scanner.py                 # Vulnerability scanner
-│   │   ├── secrets.py                 # Secret detection
-│   │   ├── deps.py                    # Dependency auditor
-│   │   ├── quality.py                 # Code quality gates
-│   │   └── reporter.py               # Security report generator
+│   ├── proactive/                     # ✅ Proactive Intelligence (Wave 4)
+│   │   ├── anticipation.py            # Anticipation engine
+│   │   ├── context_engine.py · session_memory.py · pattern_learner.py · priority.py
+│   │   └── v3source.py                # ✅ the ONLY V3 touchpoint (read-only)
 │   │
-│   ├── intelligence/                  # Advanced Intelligence
-│   │   ├── __init__.py
-│   │   ├── drift.py                   # Predictive drift detection
-│   │   ├── anomaly.py                 # Anomaly detection
-│   │   ├── health.py                  # Code health diagnostics
-│   │   ├── predictor.py               # Predictive analytics
-│   │   └── learner.py                 # Continuous learning engine
+│   ├── web/                           # ✅ Web Dashboard (Wave 7 slice)
+│   │   ├── server.py                  # pure-stdlib http.server + dashboard page
+│   │   └── dashboard.py               # guarded JSON accessors for every subsystem
 │   │
-│   ├── network/                       # Network & Remote
-│   │   ├── __init__.py
-│   │   ├── ssh.py                     # SSH executor
-│   │   ├── webhook.py                 # Webhook listener
-│   │   ├── cloud.py                   # Cloud API integration
-│   │   └── db_client.py               # Database client executor
+│   ├── collab/                        # ✅ Collaboration (Wave 5)
+│   │   └── crdt.py · peer.py · sync.py · coordinator.py · permissions.py
 │   │
-│   └── proactive/                     # Proactive Intelligence
-│       ├── __init__.py
-│       ├── anticipation.py            # Need anticipation engine
-│       ├── scheduler.py               # Intelligent scheduling
-│       ├── context_engine.py          # Deep context understanding
-│       └── priority.py                # Priority inference
+│   ├── db.py                          # ✅ V4 state DB (sqlite, migrations, typed helpers)
+│   │
+│   ├── understanding/                 # ✅ NLU (Wave 9) — intent/entities/confidence/resolver
+│   ├── reasoning/                     # ✅ Evidence-cited answers (Wave 9) — engine/evidence/judgment/providers
+│   ├── missions/                      # ✅ Persistent goals (Wave 9) — engine/models/planner/scheduler/progress
+│   ├── execution/                     # ✅ Gated execution (Wave 9) — executors/gate/sandbox/audit/undo
+│   ├── nl_router.py                   # ✅ NL → act (Wave 9) — shared CLI/voice handler
+│   │
+│   ├── memory/                        # ✅ Memory & Identity (Wave 10) — facts/working/store
+│   ├── persona/                       # ✅ — engine/learn/prompts (explicit-consent)
+│   ├── relationship/                  # ✅ — depth/tones (interaction → tone)
+│   ├── skills/                        # ✅ — replay/shadow/registry/dispatch (shadow-first)
+│   │
+│   ├── mobile/ · network/             # ⏳ stubs (future waves / decision)
+│   │
+│   └── cli_*.py                       # `friday4` subcommands: talk (NL brain),
+│                                      # voice (session lives under `voice talk`),
+│                                      # desktop, security, proactive, intelligence,
+│                                      # doctor, daemon, web, collab, status,
+│                                      # execute, ask, memory, persona,
+│                                      # relationship, skills (waves 11 adds:
+│                                      # analyze, correlate, briefing, narrative,
+│                                      # report)
 │
-├── tests/                             # V4 test suite
-│   ├── test_voice_pipeline.py
-│   ├── test_desktop_abstraction.py
-│   ├── test_collab_crdt.py
-│   ├── test_security_scanner.py
-│   └── ...
+├── tests/                             # ✅ V4 test suite (~740 today, → ~820)
+│   ├── test_voice.py · test_desktop_abstraction.py · test_security.py
+│   ├── test_proactive.py · test_intelligence.py · test_anticipation_v3.py
+│   ├── test_v3source.py · test_daemon.py · test_config.py · test_web.py
+│   ├── test_collab_*.py · test_cli_collab.py
+│   ├── test_db.py · test_understanding.py · test_execution.py · test_cli_execute.py
+│   ├── test_reasoning.py · test_nl_router.py · test_cli_ask.py · test_cli_nl.py
+│   ├── test_memory.py · test_persona.py · test_relationship.py · test_skills.py
+│   ├── test_cli_memory.py · test_cli_status.py
+│   └── test_package_imports.py · test_voice_engine.py
 │
 └── pyproject.toml                     # V4 project configuration
 ```
@@ -270,138 +289,162 @@ friday_v4/
 
 ## 5. Phase Roadmap
 
-### Phase 0 — Foundation (Weeks 1-2)
-**Goal:** V4 project structure, CI, shared infrastructure, SSoT with V3
+### Phase 0 — Foundation ✅
+**Goal:** V4 project structure, own CLI, own config, own tests
 
 **Deliverables:**
 - [x] `friday_v4/` directory scaffolded
-- [x] `PLAN.md` (this document)
-- [x] `ARCHITECTURE.md` — V4 architecture reference
+- [x] `PLAN.md` / `ARCHITECTURE.md` / `ROADMAP.md`
 - [x] `pyproject.toml` — V4 dependencies
-- [ ] CI pipeline (V3 tests + V4 tests)
-- [ ] V3 API compatibility layer
-- [x] `friday4` CLI entry point (wraps V3 CLI + adds V4 commands)
+- [x] `friday4` CLI entry point (V4-native commands — does NOT wrap V3 CLI)
+- [x] `config.py` — defaults + file + `FRIDAY_V4_*` env overrides
+- [x] `tests/` suite with `conftest.py` (hermetic, no real `~/.friday` writes)
 
-### Phase 1 — Voice Interface (Weeks 3-5)
+### Phase 1 — Voice Interface ✅ (Wave 1)
 **Goal:** Talk to Friday like Tony Stark talks to FRIDAY
 
 **Deliverables:**
-- [x] Speech-to-text pipeline (faster-whisper / whisper.cpp)
-- [x] Text-to-speech pipeline (kokoro-onnx / piper / edge-tts / pyttsx3)
-- [x] Voice activity detection (Silero / WebRTC)
-- [x] Hotword/wake word ("Hey Friday" via openwakeword)
-- [x] Voice → V3 persona engine routing (VoiceRouter: desktop → proactive → V3 → fallback)
-- [x] `friday4 talk` — interactive voice session
-- [x] Desktop push-to-talk hotkey
+- [x] Speech-to-text (faster-whisper)
+- [x] Text-to-speech (kokoro / piper / edge-tts / pyttsx3, auto-fallback)
+- [x] Voice activity detection
+- [x] Hotword detection (openwakeword)
+- [x] VoiceRouter: desktop → proactive → fallback (no V3 dependency)
+- [x] `friday4 talk` — interactive voice session + push-to-talk + barge-in
+- [x] `friday4 voice setup/status/test`
 
-**Key Integration Points:**
-- Voice pipeline outputs text → feeds into V3 `IdentityEngine.process()`
-- V3 `IdentityEngine` response → read aloud via TTS
-- Ambient events trigger spoken notifications
-
-### Phase 2 — Desktop Integration (Weeks 6-8)
+### Phase 2 — Desktop Integration ✅ (Wave 2)
 **Goal:** Friday controls your entire desktop environment
 
 **Deliverables:**
 - [x] Cross-platform WM abstraction API
-- [x] Hyprland adapter (ported from V3)
-- [x] GNOME adapter
-- [x] KDE adapter
-- [x] macOS adapter
-- [x] Windows adapter
-- [x] System tray icon (all platforms)
-- [x] Global hotkey registration
-- [x] `friday4 desktop` — desktop control CLI
-- [x] Desktop notification channel (V3 ambient → desktop overlay)
-- [x] `friday4 daemon` — persistent ambient service wiring desktop watcher + notifier + proactive observer
+- [x] Hyprland / GNOME / KDE / macOS / Windows adapters
+- [x] System tray + global hotkeys
+- [x] `friday4 desktop status/windows/switch/focus/launch/screenshot/platforms`
+- [x] Desktop notification channel (V4 daemon → tray/notify)
+- [x] `friday4 daemon` — one ambient service: observer + notifier + sampler + security
 
-**Key Integration Points:**
-- WM abstraction replaces V3's Hyprland-only executor
-- System tray shows daemon status + feed count
-- Global hotkey triggers voice session
-
-### Phase 3 — Security & Quality (Weeks 9-11)
+### Phase 3 — Security & Quality ✅ (Wave 3)
 **Goal:** Friday actively protects and improves your code
 
 **Deliverables:**
-- [ ] Dependency vulnerability scanner (OSV/Grype/Snyk)
-- [ ] Secret detection (truffleHog/Gitleaks)
-- [ ] Code quality gates (linters, formatters, type checkers)
-- [ ] Continuous security dashboard
-- [ ] Automated PR annotations
-- [ ] `friday security scan` / `friday quality check`
+- [x] Dependency vulnerability scanner (built-in curated advisory DB + optional pip-audit)
+- [x] Secret detection (built-in regex/entropy + optional trufflehog)
+- [x] Code quality gates (built-in AST checks + optional ruff/mypy)
+- [x] `friday4 security scan` / `friday4 security status`
+- [x] `friday4 doctor` reports security tool availability + last scan state
+- [x] venv-aware tool discovery (`security/tooling.py`) — tools in the venv bin are found even off PATH
+- [ ] Automated PR annotations (future)
 
 **Key Integration Points:**
-- Results feed into V3 ambient events
-- Findings create V3 initiatives ("Fix X vulnerabilities")
-- Security executors register in V3 worker registry
+- Daemon's `SecurityScanner` runs periodic scans, persists state, dedups notifications
+- Findings stay V4-native (state file + web dashboard) — never written to V3
 
-### Phase 4 — Collaboration (Weeks 12-14)
+### Phase 4 — Collaboration ✅ (Wave 5)
 **Goal:** Multiple Friday instances, team workspaces
 
 **Deliverables:**
-- [ ] CRDT-based observation merge
-- [ ] Peer discovery via mDNS
-- [ ] WebSocket real-time sync
-- [ ] Shared workspace permissions
-- [ ] Team observation feeds
-- [ ] `friday collab` — collaboration CLI
+- [x] CRDT-based observation merge
+- [x] Peer discovery (UDP beacons — stdlib, replaces mDNS)
+- [x] Real-time sync (TCP JSON-lines — stdlib, replaces WebSocket)
+- [x] Shared workspace permissions
+- [x] Team observation feeds
+- [x] `friday4 collab` — collaboration CLI (start/status/peers/obs/add/share/perms)
 
 **Key Integration Points:**
-- Sync layer sits between V3 DB and remote peers
+- Sync layer sits between V4 CRDT store and remote peers (pure stdlib)
 - Observations replicated across instances
 - Permissions filter what each instance can see/do
 
-### Phase 5 — Mobile & Web (Weeks 15-17)
+### Phase 5 — Mobile & Web (Wave 7)
 **Goal:** Friday in your pocket, Friday in your browser
 
 **Deliverables:**
-- [ ] React Native companion app
-- [ ] Push notification transport
-- [ ] Quick status glance UI
-- [ ] Voice input on mobile
-- [ ] Web dashboard (V3 ambient feed + V4 security/health)
-- [ ] `friday web` — start web server
+- [x] Web dashboard (daemon status + security grade/findings + intelligence + proactive + V3 bridge + voice) — `friday4 web`
+- [x] Scan-path picker on the dashboard (target any project directory)
+- [ ] React Native companion app (future)
+- [ ] Push notification transport (future — real-time push designed in Wave 11's `ambient/`)
 
 **Key Integration Points:**
-- Mobile app authenticates via local network
-- Push notifications from V4 daemon → device
-- Web dashboard reads V3 ambient feed + V4 intelligence data
+- Dashboard reads V4 state files + V3 DB via the read-only bridge
+- "Run security scan" action drives the daemon's own `SecurityScanner`
 
-### Phase 6 — Advanced Intelligence (Weeks 18-20)
+**Key Integration Points:**
+- Dashboard reads V4 state files + V3 DB via the read-only bridge
+- "Run security scan" action drives the daemon's own `SecurityScanner`
+
+### Phase 6 — Advanced Intelligence ✅ (Wave 4)
 **Goal:** Friday anticipates your needs
 
 **Deliverables:**
-- [x] Predictive drift detection (time-series analysis)
-- [x] Anomaly detection in execution patterns
-- [x] Code health diagnostics (complexity, coverage, churn)
-- [x] Need anticipation engine (context + history → predictions)
-- [x] Automated workflow suggestions
-- [x] Self-improving via user correction learning
-- [x] V3 data wiring: anticipation reads V3 observations/action_log via `V3DataSource` (graceful fallback)
-- [x] `friday4 doctor` — one-command subsystem diagnostics
-- [x] `friday4 status` — unified layer overview
+- [x] Predictive drift detection + anomaly detection + code health diagnostics
+- [x] Anticipation engine (context + patterns + sessions + priority)
+- [x] Automated workflow suggestions (per-repo patterns)
+- [x] V3 data wiring via `V3DataSource` (graceful fallback when V3 absent)
+- [x] `friday4 doctor` — ops tooling (unified `friday4 status` lands in Wave 9)
+- [x] `friday4 proactive status/suggest/learn/brief/observe`
+- [x] `friday4 intelligence status/drift/anomaly/health/predict`
 
-### Phase 7 — IDE Integration (Weeks 21-22)
-**Goal:** Friday lives inside your editor
+### Phase 7 — IDE Integration ✅ shipped (Wave 6)
+**Goal:** Friday lives inside your editor. **Design:** `WAVE_6_IDE.md`
 
 **Deliverables:**
-- [ ] VS Code extension
-- [ ] LSP client for code analysis
-- [ ] Inline code review
-- [ ] Quick actions from editor
-- [ ] Status bar integration
+- [x] `desktop/ide/detection.py` — adaptive editor detection (VS Code / JetBrains / Neovim / Sublime / Emacs)
+- [x] `desktop/ide/lsp_client.py` — pure-stdlib LSP client (JSON-RPC stdio: diagnostics + symbols, no pygls)
+- [x] `desktop/ide/ast_analyzer.py` — always-on fallback (syntax / undefined names / unused imports / shadowed builtins)
+- [x] `desktop/ide/controller.py` — editor control (open / reveal / run, argv per editor kind)
+- [x] NL path: `Intent.IDE` — "what's wrong with X" on every surface; `QuestionType.CODE` reasoning provider
+- [x] `friday4 ide detect/diagnose/symbols/open/reveal/run` (run through the gated execution pipeline)
+- [x] Composition: `FRIDAY_V4_IDE_PREFLIGHT` → diagnostics ride with Claude Code + command preflight notes
+- [ ] TypeScript VS Code extension (sidebar/status bar) — future refinement; the editor is reachable via CLI + LSP without it
 
-### Phase 8 — Polish & Scale (Weeks 23-24)
+### Phase 8 — Agency Core ✅ shipped (Wave 9)
+**Goal:** Friday actually does things. **Design:** `WAVE_9_AGENCY_CORE.md`
+
+**Deliverables:**
+- [x] `db.py` — V4 sqlite foundation (missions, actions, memories, skills, sessions) + migrations
+- [x] `understanding/` — NLU: intent → entities → canonical action (voice/CLI/web shared)
+- [x] `reasoning/` — evidence-cited answer engine + provider registry (identity/status/activity/mission/memory/conversation)
+- [x] `nl_router.py` — NL → act (shared CLI/voice handler; gate → sandbox → audit)
+- [x] `missions/` — persistent goals: planner → engine → steps → scheduler → progress
+- [x] `execution/` — gated, sandboxed, audited executors (shell/git/file/python/testing) + undo
+- [x] `friday4 talk "…"` (NL brain), `ask`, `execute`, `status` (incl. `db status`)
+
+### Phase 9 — Memory & Identity ✅ shipped (Wave 10)
+**Goal:** Friday knows you. **Design:** `WAVE_10_MEMORY_IDENTITY.md`
+
+**Deliverables:**
+- [x] `memory/` — facts + working memory (provenance, confidence, decay)
+- [x] `persona/` — explicit-consent name & preference learning
+- [x] `relationship/` — interaction depth → tone & verbosity
+- [x] `skills/` — shadow-first self-improvement (Replay + Shadow executors)
+- [x] `friday4 memory/persona/relationship/skills`
+- [x] Daemon wiring: memory decay sweeper, skill learner, relationship refresher
+
+### Phase 10 — Research & Reflection ✅ shipped (Wave 11)
+**Goal:** Friday reasons across your world. **Design:** `WAVE_11_RESEARCH_REFLECTION.md`
+
+**Deliverables:**
+- [x] `research/` — architecture, cross-project correlation, impact, code search
+- [x] `synthesis/` — deterministic, evidence-cited reports (incl. `reports.py` daily/weekly)
+- [x] `briefing/` — morning/evening briefings from real V4 state
+- [x] `ambient/` — in-process event bus + durable queue; real-time push
+- [x] `friday4 analyze/correlate/briefing/narrative/report [--daily|--weekly]`
+- [x] **Push wiring** — security findings, proactive suggestions, and collab
+      observations publish onto the daemon's shared AmbientBus
+- [x] **Web SSE** — `GET /api/events` stream + dashboard EventSource
+      (durable-queue replay via `since` cursor; poll kept as fallback)
+
+### Phase 11 — Polish & Scale ✅ shipped (Wave 12)
 **Goal:** Production-ready V4
 
 **Deliverables:**
-- [ ] Performance benchmarks (V3 vs V4)
-- [ ] Full test suite (V3 + V4)
-- [ ] Documentation site
-- [ ] Installation script
-- [ ] Migration guide (V3 → V4)
-- [ ] Dogfooding period
+- [x] Performance benchmarks (`tools/benchmarks.py`, V3 vs V4 where importable)
+- [x] Full V4 test suite (~800, hermetic)
+- [x] Documentation site (`tools/build_docs_site.py` → `site/`)
+- [x] Installation script (`install.sh`)
+- [x] Migration guide (`docs/MIGRATION_GUIDE.md`)
+- [x] `network/` stub folded in — `ssh` executor behind gate → sandbox → audit
+- [ ] Dogfooding period (ongoing)
 
 ---
 
@@ -477,11 +520,11 @@ desktop.on_workspace_change(callback)
 **Platform Adapters:**
 | Platform | Backend | Status |
 |----------|---------|--------|
-| Hyprland | `hyprctl` / IPC | ✅ Port from V3 |
-| GNOME | `gdbus` / Extensions | 🔄 Planned |
-| KDE | `qdbus` / KWin script | 🔄 Planned |
-| macOS | Accessibility API / Scripting Bridge | 🔄 Planned |
-| Windows | Win32 API / PowerToys | 📅 Later |
+| Hyprland | `hyprctl` / IPC | ✅ V4-native adapter |
+| GNOME | `gdbus` / Extensions | ✅ V4-native adapter |
+| KDE | `qdbus` / KWin script | ✅ V4-native adapter |
+| macOS | Accessibility API / Scripting Bridge | ✅ V4-native adapter |
+| Windows | Win32 API / PowerToys | ✅ V4-native adapter |
 
 ### 6.3 Collaboration Layer
 
@@ -519,38 +562,47 @@ coord.on_observation(lambda obs: print(f"From {obs.instance}: {obs.value}"))
 ### 6.4 Security Scanner
 
 ```python
-# Conceptual API
-from friday_v4.security import Scanner
+# Actual API (Wave 3)
+from friday_v4.security import VulnerabilityScanner
 
-scanner = Scanner()
-report = scanner.scan("/path/to/project")
+scanner = VulnerabilityScanner()
+report = scanner.scan("/path/to/project")          # → SecurityReport
+report.grade()                                       # 'A'..'F'
+report.score()                                       # 0-100
+report.counts_by_severity()                          # {'critical': 1, ...}
+report.above_threshold("high")                       # actionable findings
+report.to_json()                                     # machine-readable
 
-# Results
-for vuln in report.vulnerabilities:
-    print(f"{vuln.severity}: {vuln.package} — {vuln.cve_id}")
+# Sub-scanners (each returns (findings, tools_used))
+from friday_v4.security import DependencyAuditor, SecretDetector, QualityGate
 
-for secret in report.secrets:
-    print(f"Secret: {secret.type} in {secret.file}:{secret.line}")
+dep_findings, tools = DependencyAuditor().scan("/path")
+sec_findings, tools = SecretDetector().scan("/path")
+q_findings, tools = QualityGate().scan("/path")
 
-for issue in report.quality_issues:
-    print(f"{issue.checker}: {issue.message}")
+# CLI
+#   friday4 security scan [path] [--threshold high] [--json] [--no-*]
+#   friday4 security status
 ```
 
 ### 6.5 Proactive Intelligence
 
 ```python
-# Conceptual API
-from friday_v4.proactive import AnticipationEngine
+# Actual API (Wave 4)
+from friday_v4.proactive.anticipation import AnticipationEngine
+from friday_v4.proactive.v3source import V3DataSource
 
-engine = AnticipationEngine(conn)
+engine = AnticipationEngine(data_source=V3DataSource())  # read-only V3 bridge
+
+# Learn from activity (desktop watcher feeds this in the daemon)
+engine.observe_activity("edit_file", {"repo": "repoA", "app": "code"})
 
 # What should Friday do next?
-suggestions = engine.suggest_next_actions()
-# → ["Review 3 failed test files", "Update outdated deps", "Check drift on skill X"]
+suggestions = engine.get_suggestions(force=True)
+# → ["You usually run tests after editing — check the test report..."]
 
-# Predict user intent from context
-intent = engine.predict_intent(active_window="vscode", open_files=["main.py"])
-# → "coding_session:maintenance"
+# Context summary (includes V3 digest when available)
+summary = engine.get_context_summary()
 ```
 
 ---
@@ -560,29 +612,23 @@ intent = engine.predict_intent(active_window="vscode", open_files=["main.py"])
 ```
 friday_v4
 │
-├── depends on friday (V3)          # V3 frozen core
-│   │
-│   ├── friday.ask                  # Q&A pipeline
-│   ├── friday.db                   # Database
-│   ├── friday.observation          # Observation engine
-│   ├── friday.ambient              # Ambient feed
-│   ├── friday.persona              # Identity engine
-│   ├── friday.runtime              # Runtime engine
-│   └── friday.autonomy             # Autonomy system
+├── optional read-only data (only when present):
+│   └── ~/.friday/friday.db          # V3 observations/actions/ambient, via V3DataSource (mode=ro)
 │
-├── depends on external:
-│   ├── whisper / deepgram          # STT
-│   ├── piper / xtts                # TTS
-│   ├── psutil                      # Desktop monitoring
-│   ├── websockets                  # Real-time sync
-│   └── (security scanners)         # OSV / Grype / truffleHog
+├── optional tools (venv-aware discovery, enhance but never gate):
+│   ├── faster-whisper               # STT
+│   ├── kokoro / piper / edge-tts    # TTS
+│   ├── ruff / mypy                  # quality gates
+│   ├── pip-audit / trufflehog       # dependency / secret scans
+│   └── openwakeword                 # hotword
 │
-└── depends on Python ≥3.12         # Same as V3
+└── requires Python ≥3.12            # stdlib-only core
 ```
 
-**Key Rule:** friday_v4 may import from friday (V3), but friday must NEVER
-import from friday_v4. This preserves V3's independence and V4 can be
-removed without affecting V3.
+**Key Rule:** friday_v4 never imports the `friday` package. The single V3
+touchpoint is read-only sqlite access in `proactive/v3source.py`. V3 can be
+deleted from disk and V4 keeps working — this is what "V4 is the product"
+means.
 
 ---
 
@@ -591,11 +637,11 @@ removed without affecting V3.
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Voice latency too high for real-time | Medium | High | Local models as primary, API fallback; push-to-talk mode |
-| Multi-instance DB corruption | Low | Critical | CRDT merge, append-only replication, conflict docs |
-| Breaking V3 frozen core | Medium | High | CI gate blocks V3 regressions; import-only contract |
-| Cross-platform WM fragmentation | High | Medium | Abstract API first; implement adapters progressively |
-| Security scanners too noisy | High | Medium | Tunable thresholds, per-project ignore lists |
-| Mobile app adoption | Medium | Low | Web-first mobile experience, native app second |
+| V4 creeping back toward a V3 wrapper | Medium | High | Import rule: only `v3source.py` may touch V3; code review enforces |
+| Optional tools missing | High | Medium | Pure-stdlib built-ins for every scanner; venv-aware `find_tool` |
+| Cross-platform WM fragmentation | High | Medium | Abstract API first; adapters are independent |
+| Security scanners too noisy | High | Medium | Tunable thresholds, severity gating |
+| Test suite stalls below 680 | Medium | Low | Coverage-gap reviews each polish pass |
 | Performance regression from V4 layers | Low | Medium | Benchmarks in CI; profiling for critical paths |
 
 ---
@@ -605,13 +651,13 @@ removed without affecting V3.
 ### V4 is successful when:
 
 1. **Voice works end-to-end:** "Hey Friday, what's the status of my projects?" → Friday responds aloud
-2. **Desktop cross-platform:** Friday can switch workspaces, launch apps, and report desktop state on at least 3 platforms
-3. **Security scanning active:** Every daemon cycle scans changed dependencies and reports findings
-4. **Multi-instance sync:** Two Friday instances can observe the same workspace without conflicts
-5. **Mobile notifications:** Friday can push important alerts to your phone
-6. **All V3 tests pass:** 1,656 V3 tests green
-7. **V4 has its own test suite:** 500+ V4 tests
-8. **Dogfooding:** The V4 team uses Friday V4 for daily engineering work
+2. **Desktop cross-platform:** switch workspaces, launch apps, report desktop state on 3+ platforms
+3. **Security scanning active:** `friday4 security scan` finds real issues; daemon persists + dedups findings
+4. **Web dashboard useful:** `friday4 web` shows daemon/security/intelligence at a glance, scan works from the UI
+5. **V4 is standalone:** runs with zero V3 code present; V3 DB adds ambient context when available
+6. **No V3 wrappers:** no `from friday import` anywhere except the read-only `v3source.py` bridge
+7. **V4 has its own test suite:** ~740 V4 tests (~820 after Wave 11), hermetic (no real `~/.friday` writes)
+8. **Dogfooding:** Friday V4 is used for daily engineering work
 
 ### Non-Goals for V4
 
@@ -622,41 +668,49 @@ removed without affecting V3.
 
 ---
 
-## Appendix A: V3 → V4 Migration Path
+## Appendix A: V3 → V4 Relationship
 
-For existing V3 users:
+V3 and V4 are separate products that share a data directory:
 
-1. Install V4 alongside V3 (`pip install friday-v4`)
-2. V4 reads the same `~/.friday/` database
-3. V3 CLI still works (all 40+ commands)
-4. V4 adds: `friday talk`, `friday desktop`, `friday security`, `friday collab`
-5. V4 daemon replaces V3 daemon (adds voice, notifications, sync)
-6. Rollback: stop V4 daemon, restart V3 daemon — DB is compatible
+1. V4 installs/run independently (`friday_v4/`, its own venv)
+2. V4 reads `~/.friday/friday.db` read-only when present (ambient context)
+3. V3 CLI remains usable for those who want it — V4 never shells into it
+4. V4 adds: `friday4 talk`, `friday4 desktop`, `friday4 security`, `friday4 web`, `friday4 collab`
+5. V4 daemon runs standalone; V3 daemon may coexist (both read the DB)
+6. No rollback needed — V4 never writes V3 data
+7. V3's *capability map* (mission, executors, memory, skill formation, analysis)
+   is the **design reference** for Waves 9–11 — rebuilt V4-native, never imported
 
-## Appendix B: V4 CLI Commands (Planned)
+## Appendix B: V4 CLI Commands
 
-| Command | Description | Phase |
-|---------|-------------|-------|
-| `friday talk` | Start interactive voice session | P1 |
-| `friday talk --push-to-talk` | Push-to-talk voice mode | P1 |
-| `friday desktop` | Desktop environment control | P2 |
-| `friday desktop status` | Show desktop context | P2 |
-| `friday desktop switch <ws>` | Switch workspace | P2 |
-| `friday security scan [path]` | Full security scan | P3 |
-| `friday security deps` | Dependency audit | P3 |
-| `friday security watch` | Continuous security monitoring | P3 |
-| `friday quality check` | Code quality gates | P3 |
-| `friday collab join <workspace>` | Join team workspace | P4 |
-| `friday collab status` | Collaboration status | P4 |
-| `friday collab peers` | List connected peers | P4 |
-| `friday web` | Start web dashboard | P5 |
-| `friday mobile pair` | Pair with mobile app | P5 |
-| `friday health` | Code health diagnostics | P6 |
-| `friday predict` | Predictive insights | P6 |
-| `friday anticipate` | Suggested next actions | P6 |
+| Command | Description | Status |
+|---------|-------------|--------|
+| `friday4 talk` | Interactive voice session (hotword + push-to-talk) | ✅ |
+| `friday4 voice setup/status/test` | Voice provider setup & diagnostics | ✅ |
+| `friday4 desktop status/windows/switch/focus/launch/screenshot/platforms` | Desktop control | ✅ |
+| `friday4 daemon start/stop/status` | Ambient service (observer + notifier + sampler + security) | ✅ |
+| `friday4 security scan [path] [--threshold] [--json]` | Full security scan | ✅ |
+| `friday4 security status` | Tool availability overview | ✅ |
+| `friday4 proactive status/suggest/learn/brief/observe/watch` | Proactive intelligence | ✅ |
+| `friday4 intelligence status/drift/anomaly/health/predict` | Intelligence layer | ✅ |
+| `friday4 doctor` | One-command subsystem diagnostics | ✅ |
+| `friday4 status` | Unified layer overview + `db status` | ✅ (Wave 9) |
+| `friday4 web [--host] [--port]` | Local web dashboard | ✅ |
+| `friday4 collab start/status/peers/obs/add/share/perms` | Collaboration layer | ✅ (Wave 5) |
+| `friday4 talk "…"` | NL brain — say it, Friday does it (gate → sandbox → audit) | ✅ (Wave 9) |
+| `friday4 ask "…"` | Evidence-cited answers (no answer without evidence) | ✅ (Wave 9) |
+| `friday4 execute` | Direct executor access (shell/git/file/python/testing) | ✅ (Wave 9) |
+| `friday4 voice talk` | Interactive voice session (hotword + push-to-talk) | ✅ |
+| `friday4 memory store/recall/forget/list/status` | Memory & Identity | ✅ (Wave 10) |
+| `friday4 persona profile/remember` | Persona (explicit-consent) | ✅ (Wave 10) |
+| `friday4 relationship status/refresh` | Relationship depth | ✅ (Wave 10) |
+| `friday4 skills list/learn/promote/shadow/status` | Shadow-first skills | ✅ (Wave 10) |
+| `friday4 analyze/correlate/briefing/narrative/report` | Research & Reflection | 🆕 Wave 11 |
+| `friday mobile pair` (future) | Mobile companion | ⏳ Wave 7 |
+| `friday4 ide detect/diagnose/symbols/open/reveal/run` + "what's wrong with X" | IDE Integration (LSP + AST + editor control) | ✅ Wave 6 |
 
 ---
 
-*This plan is a living document. As we build each phase, we update and refine
-the subsequent phases based on what we learn. The frozen V3 core gives us a
-stable foundation to iterate on.*
+*This plan is a living document. As we build each wave, we update and refine
+the subsequent waves based on what we learn. V4 is the product — its own
+daemon, CLI, config, state, and tests — with V3 as optional read-only heritage.*

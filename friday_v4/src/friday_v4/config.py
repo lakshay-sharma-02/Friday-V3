@@ -16,7 +16,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("friday_v4.config")
 
@@ -64,29 +64,120 @@ class SecurityConfig:
 
 
 @dataclass
+class MobilePushConfig:
+    """Mobile push transport (Wave 15) — where the daemon delivers events.
+
+    The operator can point the daemon's ``MobilePushWorker`` at their
+    own destination without code:
+
+    - ``hook`` — a shell command that receives each notification's
+      JSON on stdin (e.g. ``curl -s -X POST -d @- https://ntfy.sh/…``
+      or ``cat >> ~/friday-push.log``). Overrides the default logger.
+    - ``file_path`` — a JSONL outbox path the daemon appends delivered
+      notifications to (offline inspection / a custom syncer).
+
+    ``hook`` wins over ``file_path`` when both are set. ``interval`` /
+    ``priority`` mirror the daemon's ``mobile_push_interval`` /
+    ``mobile_push_priority`` (0 = push everything).
+    """
+
+    enabled: bool = True
+    interval: float = 60.0
+    priority: int = 0
+    hook: Optional[str] = None      # shell command; notification JSON on stdin
+    file_path: Optional[str] = None  # JSONL outbox path (alternative to hook)
+
+
+@dataclass
 class V4Config:
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     desktop: DesktopConfig = field(default_factory=DesktopConfig)
     collab: CollabConfig = field(default_factory=CollabConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    mobile_push: MobilePushConfig = field(default_factory=MobilePushConfig)
+
+
+_BOOL_TRUE = {"1", "true", "yes", "on", "y"}
+
+
+def _type_name(field_type: Any) -> str:
+    """Name of a dataclass field type.
+
+    ``from __future__ import annotations`` turns annotations into
+    strings, so accept either ``bool`` or ``"bool"``.
+    """
+    return field_type if isinstance(field_type, str) else field_type.__name__
+
+
+def _coerce_env_value(raw: str, field_type: Any) -> Any:
+    """Coerce a raw env var string to a config field's type.
+
+    Booleans accept 1/true/yes/on/y, ints/floats are numeric, anything
+    else (including ``Optional[str]``) stays a string.
+    """
+    tname = _type_name(field_type)
+    if tname == "bool":
+        return raw.strip().lower() in _BOOL_TRUE
+    if tname == "int":
+        return int(raw.strip())
+    if tname == "float":
+        return float(raw.strip())
+    return raw
+
+
+def _apply_env_overrides(config: V4Config) -> None:
+    """Apply ``FRIDAY_V4_<SECTION>_<FIELD>`` overrides (highest priority).
+
+    Examples: ``FRIDAY_V4_VOICE_TTS_PROVIDER=kokoro``,
+    ``FRIDAY_V4_SECURITY_ENABLED=0``. Invalid numeric values are
+    ignored with a warning; the field keeps its file/default value.
+    """
+    import dataclasses
+
+    for section_name, section in (
+        ("VOICE", config.voice),
+        ("DESKTOP", config.desktop),
+        ("COLLAB", config.collab),
+        ("SECURITY", config.security),
+        ("MOBILE_PUSH", config.mobile_push),
+    ):
+        for fld in dataclasses.fields(section):
+            key = f"FRIDAY_V4_{section_name}_{fld.name.upper()}"
+            raw = os.environ.get(key)
+            if raw is None:
+                continue
+            try:
+                value = _coerce_env_value(raw, fld.type)
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring invalid {key}={raw!r}")
+                continue
+            setattr(section, fld.name, value)
 
 
 def load_config(path: Optional[Path] = None) -> V4Config:
-    """Load V4 config from file, merging with defaults.
-    
-    Missing fields use defaults. Invalid JSON returns defaults with a warning.
+    """Load V4 config from file + env, merging with defaults.
+
+    Hierarchy (lowest to highest priority):
+      1. Hardcoded defaults
+      2. Config file at ``path`` (default ``~/.friday/v4_config.json``)
+      3. Environment variables ``FRIDAY_V4_<SECTION>_<FIELD>``
+
+    Missing fields use defaults. Invalid JSON returns defaults with a
+    warning.
     """
     config = V4Config()
     config_path = path or CONFIG_PATH
 
     if not config_path.exists():
         logger.debug(f"No config at {config_path}, using defaults")
+        _apply_env_overrides(config)
         return config
 
     try:
         raw = json.loads(config_path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning(f"Failed to parse {config_path}: {exc}")
+        _apply_env_overrides(config)
         return config
 
     # Merge voice section
@@ -117,6 +208,14 @@ def load_config(path: Optional[Path] = None) -> V4Config:
         if field_name in sec_raw:
             setattr(config.security, field_name, sec_raw[field_name])
 
+    # Merge mobile_push section
+    mp_raw = raw.get("mobile_push", {})
+    for field_name in ("enabled", "interval", "priority", "hook",
+                       "file_path"):
+        if field_name in mp_raw:
+            setattr(config.mobile_push, field_name, mp_raw[field_name])
+
+    _apply_env_overrides(config)
     logger.debug(f"Loaded config from {config_path}")
     return config
 
@@ -160,6 +259,13 @@ def write_default_config(path: Optional[Path] = None) -> Path:
             "scan_interval_minutes": 60,
             "vulnerability_severity_threshold": "medium",
             "secret_detection": True,
+        },
+        "mobile_push": {
+            "enabled": True,
+            "interval": 60.0,
+            "priority": 0,
+            "hook": None,
+            "file_path": None,
         },
     }
     config_path.write_text(json.dumps(default, indent=2))

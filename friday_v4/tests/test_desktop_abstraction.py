@@ -9,13 +9,8 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 # ==========================================================================
 # SmartWindowResolver
@@ -367,7 +362,7 @@ class TestOtherAdapters:
     def test_windows_focus_by_class(self):
         """focus(by='class') must pass the class to the PowerShell script
         (not an exact-title lookup) so natural-language focusing works."""
-        from friday_v4.desktop.windows_adapter import WindowsAdapter, _FOCUS_PS
+        from friday_v4.desktop.windows_adapter import WindowsAdapter
         adapter = WindowsAdapter()
         with patch.object(WindowsAdapter, "_ps_run") as mock_run:
             mock_run.return_value = "OK"
@@ -387,8 +382,8 @@ class TestOtherAdapters:
     def test_setup_instructions_present_for_all_adapters(self):
         """Every platform adapter must expose setup_instructions() so the
         CLI can surface graceful setup help when the desktop is unavailable."""
-        from friday_v4.desktop.hyprland_adapter import HyprlandAdapter
         from friday_v4.desktop.gnome_adapter import GNOMEAdapter
+        from friday_v4.desktop.hyprland_adapter import HyprlandAdapter
         from friday_v4.desktop.kde_adapter import KDEAdapter
         from friday_v4.desktop.macos_adapter import MacOSAdapter
         from friday_v4.desktop.windows_adapter import WindowsAdapter
@@ -630,7 +625,8 @@ class TestProactiveSuggestionChannel:
 
     def test_poll_once_notifies_should_notify_items(self):
         """Items flagged should_notify are raised as desktop notifications;
-        speak-worthy items get critical urgency."""
+        every banner uses normal urgency with a bounded timeout so it fades
+        (critical urgency is persistent on GNOME and never auto-dismisses)."""
         engine = MagicMock()
         engine.get_suggestions.return_value = [
             self._item("Open Firefox? You usually browse now", should_speak=True),
@@ -647,9 +643,10 @@ class TestProactiveSuggestionChannel:
         assert len(notified) == 2
         titles = {t for t, _m, _kw in notified}
         assert "Friday · Pattern" in titles
-        # speak-worthy -> critical; plain notify -> normal
-        urgencies = [kw.get("urgency") for _t, _m, kw in notified]
-        assert "critical" in urgencies and "normal" in urgencies
+        # speak-worthy -> longer timeout; all banners normal urgency + fade
+        for _t, _m, kw in notified:
+            assert kw.get("urgency") == "normal"
+            assert kw.get("timeout_ms") in (10000, 12000)
         # suppressed item never notified
         assert all("Suppressed" not in m for _t, m, _kw in notified)
 

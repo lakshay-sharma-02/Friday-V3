@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 13 Thinking Core — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 13 Thinking Core</h1>
+<h1>Wave 13 — The Thinking Core (LLM reasoning) ✅ SHIPPED</h1>
+<blockquote><strong>Why it serves the sentence:</strong> *understands everything* — the single</blockquote>
+<blockquote>highest-leverage change in the whole plan. Built 2026-08 on top of</blockquote>
+<blockquote>Waves 9–12 (deterministic reasoning, memory, research, ambient push).</blockquote>
+<hr>
+<h2>1. The design (Law 6: enhances, never gates)</h2>
+<p>Wave 13 adds <strong>one LLM provider</strong> to <code>reasoning/providers.py</code> that</p>
+<p>synthesizes the deterministic answer engine&#x27;s output. The architecture</p>
+<p>stays honest by construction:</p>
+<ul><li><strong>Deterministic providers are the floor.</strong> The Wave 9 registry</li></ul>
+<p>(<code>identity/status/activity/mission/memory/conversation</code>) gathers</p>
+<p>evidence and answers exactly as before. No LLM → byte-identical</p>
+<p>behavior. The floor never changes.</p>
+<ul><li><strong>LLM synthesis is the ceiling.</strong> After the engine picks the best</li></ul>
+<p>deterministic answer, <code>llm_provider</code> asks the LLM to rewrite it as a</p>
+<p>natural, conversational synthesis — <strong>across the same evidence</strong>.</p>
+<p>Citations are attached verbatim to the enhanced answer; nothing is</p>
+<p>added, nothing is dropped.</p>
+<ul><li><strong>Never fabricates.</strong> The enhanced answer carries the original</li></ul>
+<p><code>Evidence</code> list unchanged, so the judgment pass (<code>validate()</code>) still</p>
+<p>guarantees *evidence or silence*. An evidence-less answer (&quot;I don&#x27;t</p>
+<p>know yet&quot;) is <strong>never sent to the LLM</strong> — the honest unknown stays</p>
+<p>real.</p>
+<ul><li><strong>Optional by default.</strong> Opt-in is explicit: the <code>FRIDAY_V4_LLM</code> env</li></ul>
+<p>var (truthy) or an injected client (surfaces/tests pass their own).</p>
+<p>LLM down, network failure, empty/garbage output → <code>None</code> → the</p>
+<p>deterministic floor stands. Never a crash, never a hallucination.</p>
+<h3>The client</h3>
+<p>The provider reuses the <strong>existing <code>nlu.LLMClient</code></strong> — the pure-stdlib</p>
+<p>(<code>urllib</code>) OpenAI-compatible client for the local <strong>9router proxy</strong></p>
+<p>(<code>localhost:20128/v1</code>, configurable model) with the SSE-trailer quirk</p>
+<p>already handled at the client boundary. Config via <code>FRIDAY_V4_LLM_URL</code> /</p>
+<p><code>FRIDAY_V4_LLM_MODEL</code> / <code>FRIDAY_V4_LLM_KEY</code>. One client, one command</p>
+<p>language, one entry point — voice, <code>friday4 talk</code>, <code>friday4 ask</code>, and</p>
+<p>web chat all inherit it automatically.</p>
+<h3>Conversation capability</h3>
+<p><code>friday4 ask</code> is now conversation-capable:</p>
+<ul><li>Recent exchanges are pulled (<code>db.recent_exchanges</code>, oldest first) and</li></ul>
+<p>threaded into the LLM synthesis prompt as &quot;Recent conversation:&quot; —</p>
+<p>follow-ups like *&quot;and the tests?&quot;* resolve with context.</p>
+<ul><li>The Q&amp;A is <strong>logged</strong> to the conversation log (surface <code>ask</code>), so the</li></ul>
+<p>Wave 9 <code>conversation_provider</code> (&quot;what did we talk about?&quot;) sees asks,</p>
+<p>and the next ask sees this one as history.</p>
+<ul><li>The same history threading is wired into <code>nl_router._ask_response</code>,</li></ul>
+<p>so <strong>voice and <code>friday4 talk</code> follow-ups get identical context</strong> — one</p>
+<p>entry point, per the Wiring Law.</p>
+<hr>
+<h2>2. Wiring table (the Wiring Law)</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th><th></th><th>H</th><th>o</th><th>w</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>friday4 ask</code></td><td>✅</td><td><code>cli_ask.cmd_ask</code> — passes history + logs the Q&amp;A exchange</td><td></td></tr><tr><td></td><td><code>friday4 talk</code> (NL router)</td><td>✅</td><td><code>nl_router._ask_response</code> — passes <code>self._recent_history()</code></td><td></td></tr><tr><td></td><td>Voice (<code>VoiceRouter</code>)</td><td>✅</td><td>routes ASK → <code>nl_router</code> → same path (one entry point)</td><td></td></tr><tr><td></td><td>Web chat (<code>/api/talk</code>)</td><td>✅</td><td>uses <code>nl_router</code>/reasoning — inherits automatically</td><td></td></tr><tr><td></td><td>Reasoning providers</td><td>✅</td><td><code>llm_provider</code> in <code>providers.py</code>; engine applies post-pass</td><td></td></tr><tr><td></td><td>Daemon schedules</td><td>—</td><td>none needed (LLM is request-driven, not time-driven)</td><td></td></tr><tr><td></td><td>Briefings</td><td>—</td><td>remain deterministic (same evidence → same report) by design</td><td></td></tr><tr><td></td><td>CLI surface</td><td>✅</td><td><code>friday4 ask</code> gained conversation capability (no new flags)</td><td></td></tr></tbody></table>
+<hr>
+<h2>3. MCU test</h2>
+<blockquote>&quot;What&#x27;s the deal between vivaha and MindWell?&quot; → synthesized, cited,</blockquote>
+<blockquote>ranged — through <code>friday4 talk</code>, through voice.</blockquote>
+<p>With <code>FRIDAY_V4_LLM=1</code> (or a configured proxy), ASK/RESEARCH answers</p>
+<p>come back as natural LLM prose **with the evidence citations still</p>
+<p>listed** by the surface. Without the LLM, the same utterance gets the</p>
+<p>honest deterministic research answer. Both paths are tested hermetic.</p>
+<hr>
+<h2>4. What actually shipped</h2>
+<ul><li><code>reasoning/providers.py</code> — `llm_provider(question, conn, best=…,</li></ul>
+<p>history=…, llm=…)<code> + </code>_llm_opted_in<code> / </code>_clean_llm_text` /</p>
+<p><code>_llm_system_prompt</code>; exported from <code>reasoning/__init__.py</code>.</p>
+<ul><li><code>reasoning/engine.py</code> — <code>answer(…, history=None, llm=None)</code>; the LLM</li></ul>
+<p>post-pass runs over the best deterministic answer; any failure keeps</p>
+<p>the floor.</p>
+<ul><li><code>cli_ask.py</code> — <code>_recent_history()</code> + <code>_log_exchange()</code>; <code>cmd_ask</code></li></ul>
+<p>threads history and logs the Q&amp;A.</p>
+<ul><li><code>nl_router.py</code> — <code>TextCommandHandler._recent_history()</code>; ASK intents</li></ul>
+<p>pass conversation context (voice/talk/web inherit).</p>
+<ul><li><code>tests/test_wave13_thinking_core.py</code> — 17 hermetic tests: opt-in</li></ul>
+<p>gating, floor preservation on every failure mode, citation retention,</p>
+<p>&quot;I don&#x27;t know&quot; never sent to the LLM, history threading, CLI exchange</p>
+<p>logging. FakeLLM, no network, tmp_path DBs.</p>
+<h2>5. What we learned</h2>
+<ul><li><strong>The post-pass beat the registry slot.</strong> Adding the LLM as a</li></ul>
+<p>competing provider in <code>PROVIDERS</code> would run it for *every* question</p>
+<p>type and risk it winning on confidence over evidence it didn&#x27;t gather.</p>
+<p>Applying it over the chosen deterministic best keeps the floor</p>
+<p>untouched and the citations identical — a cleaner reading of Law 6.</p>
+<ul><li><strong>The honest unknown is a feature, not a bug.</strong> &quot;I don&#x27;t know yet&quot;</li></ul>
+<p>answers are evidence-less by definition; sending them to the LLM would</p>
+<p>invite fabrication. The engine returns before the post-pass, and a</p>
+<p>test locks that in (<code>test_no_evidence_never_asks_llm</code>).</p>
+<ul><li><strong>Fence-stripping matters.</strong> Local proxies occasionally wrap</li></ul>
+<p>completions in ``<code> fences; </code>_clean_llm_text` handles it at the</p>
+<p>boundary so the surfaces never see markdown noise.</p>
+<hr>
+<p>*Next: Wave 13a (ONE NLU Point) close-out and Wave 14 (Watch Me).*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

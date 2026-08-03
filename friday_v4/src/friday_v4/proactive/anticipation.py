@@ -24,12 +24,12 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - import-time only
-    from ..desktop.wm_abstraction import WindowManager
+    pass
 
-from .context_engine import DeepContextEngine, WorkContext
+from .context_engine import DeepContextEngine
 from .pattern_learner import PatternLearner
+from .priority import PrioritizedItem, PriorityInference
 from .session_memory import SessionStore
-from .priority import PriorityInference, PrioritizedItem
 
 logger = logging.getLogger("friday_v4.proactive.anticipation")
 
@@ -45,15 +45,23 @@ class AnticipationEngine:
       5. Return: speak now, notify, queue, or suppress
     """
 
-    def __init__(self, data_source=None):
+    def __init__(self, data_source=None, db_path=None):
         """``data_source``: optional V3DataSource-like object for enriching
         briefings with V3's workspace data. Built lazily when None (and
-        only used if V3's DB is available)."""
+        only used if V3's DB is available).
+
+        ``db_path``: optional V4 state DB path. When set, the desktop
+        observer persists app-switch events into ``desktop_events`` so
+        ``WatchRecorder`` ("watch me") can capture app opens as skill
+        steps — the daemon passes its state DB so the always-on presence
+        records everything itself (no CLI needed).
+        """
         self.session_store = SessionStore()
         self.context_engine = DeepContextEngine(session_store=self.session_store)
         self.pattern_learner = PatternLearner()
         self.priority = PriorityInference()
         self._data_source = data_source
+        self._db_path = db_path
         self._v3_digest: Optional[str] = None
         self._v3_digest_time: float = 0.0
         # Event-driven observer state (DesktopWatcher callbacks + heartbeat).
@@ -205,6 +213,29 @@ class AnticipationEngine:
         """
         self.pattern_learner.observe_app_transition(from_app, to_app, repo=repo)
 
+    def _record_desktop_event(self, app_class: str, repo: Optional[str] = None,
+                              title: str = "") -> None:
+        """Persist an app-switch/desktop event for the watch bridge.
+
+        The always-on presence records what the operator opened so an
+        active "watch me" capture can learn app opens (Brave → YouTube →
+        VSCode) as skill steps. Never raises and never blocks: a missing
+        or unwritable DB is skipped silently (the daemon law).
+        """
+        if not self._db_path:
+            return
+        try:
+            from .. import db
+            conn = db.connect(path=self._db_path)
+            try:
+                db.record_desktop_event(
+                    conn, event_type="app_switch", app=app_class,
+                    title=title, repo=repo or "")
+            finally:
+                conn.close()
+        except Exception as exc:  # defensive — never crash
+            logger.debug(f"desktop event record failed: {exc}")
+
     # ── Desktop observer ───────────────────────────────────────────────
 
     def start_observer(self, interval_seconds: float = 1.0,
@@ -327,6 +358,10 @@ class AnticipationEngine:
                 # Real desktop event: the user switched apps.
                 self.observe_app_switch(self._last_app, app_class,
                                         repo=self._last_repo)
+                # Persist the switch so "watch me" can capture app opens
+                # as skill material (the desktop-observer bridge). Never
+                # blocks or raises — the DB may be absent/unwritable.
+                self._record_desktop_event(app_class, repo=self._last_repo)
             action = self._action_for_app(app_class)
             if action != self._last_action:
                 # Only feed a *new* action so we don't learn meaningless

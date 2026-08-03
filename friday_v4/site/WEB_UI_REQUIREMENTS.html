@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web Ui Requirements — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Web Ui Requirements</h1>
+<h1>Friday V4 — Web UI Requirements (for Gemini)</h1>
+<blockquote>Copy-paste this document (or the &quot;Build prompt&quot; section at the end) into</blockquote>
+<blockquote>Gemini to build the Friday V4 web dashboard. It describes exactly what</blockquote>
+<blockquote>exists on the backend today so the UI can be built against the real API —</blockquote>
+<blockquote>don&#x27;t invent new endpoints unless a new one is explicitly listed.</blockquote>
+<hr>
+<h2>1. Product context</h2>
+<p>Friday V4 is a local-first AI &quot;operating partner&quot; that runs on the user&#x27;s</p>
+<p>machine. It ships as a Python package (<code>friday4</code> CLI) with:</p>
+<ul><li><strong>Daemon</strong> — background service (observers, proactive intelligence,</li></ul>
+<p>periodic security scans, desktop notifications).</p>
+<ul><li><strong>Voice</strong> — wake-word + STT/TTS conversation (&quot;Hey Friday, what&#x27;s new?&quot;).</li><li><strong>Desktop</strong> — window manager control (focus, workspaces, screenshots,</li></ul>
+<p>tray icon, notifications) across Hyprland/GNOME/KDE/macOS/Windows.</p>
+<ul><li><strong>Security</strong> — a Wave-3 vulnerability scanner + quality gate that grades a</li></ul>
+<p>project folder (A–F) and notifies on findings.</p>
+<ul><li><strong>Proactive intelligence</strong> — pattern learner + drift/anomaly detection.</li><li><strong>V3 bridge</strong> — a read-only connection to the older &quot;Friday V3&quot; data</li></ul>
+<p>sources (ambient event feed, observations). V3 is a data source only;</p>
+<p>V4 is the product.</p>
+<p>The web dashboard is the visual surface of all of this: a browser page that</p>
+<p>shows daemon health, security status, intelligence, proactive patterns, the</p>
+<p>V3 bridge, voice config, and the ambient feed — with a &quot;run security scan&quot;</p>
+<p>action. It already exists in a functional-but-basic form; this spec upgrades</p>
+<p>it to a polished, product-grade UI.</p>
+<h2>2. Hard constraints (non-negotiable)</h2>
+<p>1. <strong>Local-first.</strong> The page is served from <code>http://127.0.0.1:8899</code> on the</p>
+<p>user&#x27;s own machine. No cloud, no telemetry, no login.</p>
+<p>2. <strong>Pure-stdlib Python backend.</strong> The server is <code>http.server</code> based — no</p>
+<p>FastAPI/Flask/Django. The frontend can use any framework **but must work</p>
+<p>fully offline**: no CDN scripts/fonts; everything (CSS, JS, icons, fonts)</p>
+<p>is served by the same local server or inlined.</p>
+<p>3. <strong>Graceful degradation.</strong> Every subsystem (daemon, security, intelligence,</p>
+<p>proactive, V3, voice) may be unavailable. The UI must render an</p>
+<p>informative empty/offline state per card — never a broken page or a 500.</p>
+<p>4. <strong>Read-only V3.</strong> The UI must never write to V3. V4 stays the product.</p>
+<p>5. <strong>Security.</strong> The server binds localhost by default. The UI sends no data</p>
+<p>anywhere except the local API.</p>
+<p>6. <strong>Consistent aesthetic.</strong> Dark, technical, &quot;command center&quot; look (see</p>
+<p>Design system). This is a developer tool — it should feel like an Iron</p>
+<p>Man/JARVIS control panel, not a SaaS marketing page.</p>
+<h2>3. Backend API contract (what you build against)</h2>
+<p>All endpoints are <code>GET</code> unless noted. Responses are JSON. Every payload is</p>
+<p>already guarded server-side — missing subsystems come back as empty/neutral</p>
+<p>fields, <strong>not</strong> HTTP errors (except the explicit error cases noted).</p>
+<h3><code>GET /api/overview</code> — everything for the main screen</h3>
+<pre><code class="language-jsonc">{
+  &quot;daemon&quot;: {
+    &quot;running&quot;: true,             // pid liveness
+    &quot;state&quot;: &quot;running&quot;,          // status-file state
+    &quot;uptime_seconds&quot;: 3600.0,
+    &quot;notification_count&quot;: 42,
+    &quot;components&quot;: {              // per-component up/down
+      &quot;notifier&quot;: true,
+      &quot;proactive&quot;: true,
+      &quot;intelligence&quot;: true,
+      &quot;security&quot;: true
+    }
+  },
+  &quot;security&quot;: {
+    &quot;scans&quot;: 7,
+    &quot;last_error&quot;: null,          // string when last scan failed
+    &quot;report&quot;: {                  // null when no scan yet
+      &quot;grade&quot;: &quot;A&quot;,              // &quot;A&quot;|&quot;B&quot;|&quot;C&quot;|&quot;D&quot;|&quot;F&quot;
+      &quot;score&quot;: 100,              // 0–100
+      &quot;counts_by_severity&quot;: { &quot;critical&quot;: 0, &quot;high&quot;: 0, &quot;medium&quot;: 0, &quot;low&quot;: 0, &quot;info&quot;: 0 },
+      &quot;scanned_at&quot;: &quot;2026-08-01T12:00:00&quot;
+    }
+  },
+  &quot;intelligence&quot;: {
+    &quot;available&quot;: true,
+    &quot;drift&quot;: { &quot;metrics_tracked&quot;: 5, &quot;total_samples&quot;: 1200 },
+    &quot;anomaly&quot;: {
+      &quot;anomalies_logged&quot;: 8,
+      &quot;recent_anomalies&quot;: [
+        { &quot;category&quot;: &quot;dirty_repos&quot;, &quot;z_score&quot;: 3.2, &quot;timestamp&quot;: &quot;2026-08-01T11:00:00&quot; }
+      ]
+    }
+  },
+  &quot;proactive&quot;: {
+    &quot;available&quot;: true,
+    &quot;sessions&quot;: 12,
+    &quot;patterns&quot;: { &quot;action_pairs_learned&quot;: 34, &quot;state_transitions&quot;: 156 }
+  },
+  &quot;v3&quot;: {
+    &quot;available&quot;: true,
+    &quot;counts&quot;: { &quot;by_source&quot;: { &quot;terminal&quot;: 8, &quot;github&quot;: 2 } },  // 24h observation counts
+    &quot;daemon_state&quot;: &quot;running&quot;,
+    &quot;ambient_recent&quot;: [                                        // newest first, ≤12
+      { &quot;title&quot;: &quot;3/8 repos changed&quot;, &quot;event_type&quot;: &quot;repo_changed&quot;,
+        &quot;timestamp&quot;: &quot;2026-08-01T11:30:00&quot;, &quot;priority&quot;: 2, &quot;project&quot;: &quot;codebuff&quot;, &quot;detail&quot;: &quot;&quot; }
+    ]
+  },
+  &quot;voice&quot;: {
+    &quot;available&quot;: true,
+    &quot;tts_provider&quot;: &quot;edge-tts&quot;,
+    &quot;hotword&quot;: &quot;disabled&quot;
+  }
+}</code></pre>
+<h3><code>GET /api/security</code> — last scan only</h3>
+<p>Same <code>security</code> object as in overview (for deep-linking / a dedicated view).</p>
+<h3><code>GET /api/ambient</code> — recent V3 ambient events</h3>
+<pre><code class="language-jsonc">[ { &quot;title&quot;: &quot;...&quot;, &quot;event_type&quot;: &quot;...&quot;, &quot;timestamp&quot;: &quot;...&quot;,
+    &quot;priority&quot;: 1, &quot;project&quot;: &quot;...&quot;, &quot;detail&quot;: &quot;...&quot; } ]</code></pre>
+<h3><code>GET /api/projects</code> — scan-path suggestions</h3>
+<pre><code class="language-jsonc">[ &quot;/home/you/code/project-a&quot;, &quot;/home/you/code/project-b&quot; ]  // ≤40 entries</code></pre>
+<h3><code>POST /api/scan</code> — trigger a security scan</h3>
+<ul><li>Body: <code>{ &quot;path&quot;: &quot;/abs/or/~/path&quot; }</code> (omit or <code>&quot;.&quot;</code> to scan server cwd).</li><li>Success: <code>200 {&quot;started&quot;: true}</code> — scan runs async; refresh overview to</li></ul>
+<p>see the new grade.</p>
+<ul><li>Errors: <code>400 {&quot;started&quot;: false, &quot;error&quot;: &quot;not a directory: …&quot;}</code> for a bad</li></ul>
+<p>path; <code>409 {&quot;started&quot;: false, &quot;error&quot;: &quot;scan already running&quot;}</code> when busy.</p>
+<ul><li>The scan button must disable + show &quot;scanning…&quot; until the next poll</li></ul>
+<p>returns (give it a few seconds).</p>
+<h3><code>GET /</code> — the page itself</h3>
+<p>The single-page app is served here. Everything else (assets) must also be</p>
+<p>served locally — do <strong>not</strong> reference CDNs.</p>
+<h2>4. Screens / views</h2>
+<p>The dashboard is one SPA. Recommended structure (adapt freely, but keep all</p>
+<p>these sections reachable):</p>
+<h3>4.1 Global chrome</h3>
+<ul><li>Top bar: <code>◆ FRIDAY</code> wordmark + <code>V4 · DASHBOARD</code> tag, a **daemon status</li></ul>
+<p>pill** (green pulsing dot &quot;daemon running&quot; / red &quot;daemon stopped&quot;), and a</p>
+<p>&quot;last updated HH:MM:SS&quot; timestamp that refreshes on every poll.</p>
+<ul><li>Sidebar or top-nav with sections: **Overview · Security · Intelligence ·</li></ul>
+<p>Proactive · V3 / Ambient · Voice · About**. Active section highlighted.</p>
+<ul><li>Footer: <code>friday4 web · local-first · data from your machine only</code>.</li></ul>
+<h3>4.2 Overview (default landing)</h3>
+<ul><li>Daemon card: running/stopped, uptime (humanized: <code>1h 5m</code>, <code>45s</code>), number of</li></ul>
+<p>notifications raised, per-component up/down chips (notifier, proactive,</p>
+<p>intelligence, security).</p>
+<ul><li>Security card: big grade letter (A–F, color-coded) + score /100, scan</li></ul>
+<p>count, last scan time, per-severity count chips (critical/high/medium/low/</p>
+<p>info, colored, only non-zero shown, &quot;clean — no findings&quot; when empty).</p>
+<ul><li>Intelligence card: metrics tracked, drift samples, anomalies logged, and a</li></ul>
+<p>small list of recent anomalies (category, z-score, timestamp).</p>
+<ul><li>Proactive card: sessions, action pairs learned, state transitions.</li><li>V3 bridge card: available yes/no, daemon state, 24h observation counts by</li></ul>
+<p>source.</p>
+<ul><li>Voice card: TTS provider, hotword state.</li><li>Ambient feed card: the 10 most recent events (title, time).</li></ul>
+<h3>4.3 Security view</h3>
+<ul><li>Big grade panel (letter + score + counts) as the hero.</li><li><strong>Run scan</strong> panel: text input with datalist suggestions from</li></ul>
+<p><code>/api/projects</code>, a &quot;run security scan&quot; button, inline error/success</p>
+<p>message, busy state while scanning.</p>
+<ul><li>Findings detail: render the report&#x27;s severity counts; if <code>last_error</code></li></ul>
+<p>present, show it prominently.</p>
+<ul><li>(Backend note: a full per-finding list is not in the API today — render</li></ul>
+<p>what the report provides. Do not fabricate a findings table from nothing.)</p>
+<h3>4.4 Intelligence view</h3>
+<ul><li>Drift stats (metrics tracked, samples) and anomaly history (recent</li></ul>
+<p>anomalies list with z-score + time). Empty state when none logged.</p>
+<h3>4.5 Proactive view</h3>
+<ul><li>Session count, pattern stats. Empty state when no sessions yet.</li></ul>
+<h3>4.6 V3 / Ambient view</h3>
+<ul><li>Bridge availability, daemon state, observation counts by source, and the</li></ul>
+<p>full ambient feed (timestamps, priorities, projects). Empty state when V3</p>
+<p>is absent (&quot;V3 not installed — this view is a read-only bridge&quot;).</p>
+<h3>4.7 Voice view</h3>
+<ul><li>Provider + hotword config readout. If unavailable, show a setup hint</li></ul>
+<p>(&quot;install a TTS provider to enable voice&quot;).</p>
+<h3>4.8 About view</h3>
+<ul><li>Version, the four waves shipped (Voice, Desktop, Security, Smart), the</li></ul>
+<p>roadmap pointer, and the &quot;local-first&quot; statement.</p>
+<h2>5. Interaction requirements</h2>
+<p>1. <strong>Live refresh.</strong> Poll <code>/api/overview</code> every ~10s (the current page does).</p>
+<p>Show the &quot;updated HH:MM:SS&quot; timestamp. When the daemon flips running↔</p>
+<p>stopped, the pill + daemon card must update without a full reload.</p>
+<p>2. <strong>Run scan.</strong> As specified in 4.3: debounce/disable double-submit, handle</p>
+<p>400 (bad path → show error under the input) and 409 (scan already</p>
+<p>running → informational), then re-poll and show the new grade.</p>
+<p>3. <strong>Navigation.</strong> Client-side (no full page loads). Deep-linkable sections</p>
+<p>via <code>#/security</code> style hashes is a nice-to-have.</p>
+<p>4. <strong>Empty &amp; offline states.</strong> Every card must handle: no data yet (&quot;no</p>
+<p>scans run yet — run one&quot;), subsystem missing (&quot;intelligence store not</p>
+<p>available&quot;), connection lost (server down → show a connection-error</p>
+<p>screen with &quot;is <code>friday4 web</code> still running?&quot;).</p>
+<p>5. <strong>Micro-interactions.</strong> Hover states on buttons/chips/cards, subtle</p>
+<p>transitions, pulsing live-dot for daemon. Keep them fast and quiet — no</p>
+<p>long animations.</p>
+<h2>6. Design system</h2>
+<ul><li><strong>Palette</strong> (from the current page — keep it, it&#x27;s good):</li></ul>
+<p><code>--bg: #0a0e17</code>, <code>--panel: #111a2c</code>, <code>--panel2: #0d1524</code>,</p>
+<p><code>--line: #1e2b44</code>, <code>--text: #dfe6f3</code>, <code>--dim: #7c8aa5</code>,</p>
+<p><code>--cyan: #38d4f5</code>, <code>--green: #3ddc97</code>, <code>--red: #ff5c6c</code>,</p>
+<p><code>--amber: #ffb454</code>, <code>--yellow: #ffd166</code>.</p>
+<ul><li><strong>Type:</strong> monospace-first (<code>SF Mono / JetBrains Mono / ui-monospace</code>) —</li></ul>
+<p>it&#x27;s a developer tool. Headings uppercase with wide letter-spacing.</p>
+<ul><li><strong>Layout:</strong> responsive card grid (<code>repeat(auto-fit, minmax(320px, 1fr))</code>),</li></ul>
+<p>generous padding, rounded 12px cards with subtle gradient</p>
+<p>(<code>linear-gradient(180deg, var(--panel), var(--panel2))</code>) and 1px borders.</p>
+<ul><li><strong>Background:</strong> deep-navy radial gradient, dark at the bottom.</li><li><strong>Status language:</strong> LED dots (ok=green glow, warn=amber, bad=red), chips,</li></ul>
+<p>severity badges. Grade A/B green, C yellow, D amber, F red.</p>
+<ul><li><strong>Logo:</strong> <code>◆ FRIDAY</code> diamond glyph in cyan.</li></ul>
+<h2>7. Accessibility &amp; quality</h2>
+<ul><li>Semantic HTML, <code>aria-label</code>s on icon-only controls, keyboard-navigable</li></ul>
+<p>buttons/inputs.</p>
+<ul><li>Contrast: text on panel backgrounds must pass (the palette is already</li></ul>
+<p>high-contrast).</p>
+<ul><li>No console errors. All fetches wrapped in try/catch with a visible</li></ul>
+<p>fallback (never a white screen).</p>
+<ul><li>The page must render and work with <strong>JavaScript disabled? No</strong> — it&#x27;s a</li></ul>
+<p>JS SPA; but it must fail *visibly* and gracefully, not silently.</p>
+<ul><li>Responsive: usable from ~360px wide (phone in a browser) to ultrawide.</li></ul>
+<h2>8. Out of scope (do not build)</h2>
+<ul><li>Login/auth, cloud sync, multi-user.</li><li>Mobile app, push notifications.</li><li>Editing V3 data or any backend state beyond triggering scans.</li><li>Rewriting the backend server or adding frameworks to it.</li></ul>
+<h2>9. Definition of done</h2>
+<ul><li>All 8 views render correct data from the real API.</li><li>Every subsystem can be unavailable without a broken page.</li><li>Scan flow works end-to-end (trigger → busy → updated grade).</li><li>Fully offline: no CDN requests in the network tab.</li><li>Responsive + accessible + no console errors.</li><li>Visual design matches the palette and feels like a polished command</li></ul>
+<p>center, not a prototype.</p>
+<hr>
+<h2>Build prompt (paste this into Gemini)</h2>
+<blockquote>Build a single-page web dashboard for &quot;Friday V4&quot;, a local-first Python AI</blockquote>
+<blockquote>assistant. It is served from http://127.0.0.1:8899 by a pure-stdlib Python</blockquote>
+<blockquote>http.server — you are ONLY building the frontend (one HTML page + inline</blockquote>
+<blockquote>CSS/JS, no build step, no CDN, fully offline).</blockquote>
+<blockquote></blockquote>
+<blockquote>The page is a dark, technical &quot;command center&quot; (palette: bg #0a0e17,</blockquote>
+<blockquote>panels #111a2c/#0d1524, border #1e2b44, text #dfe6f3, dim #7c8aa5,</blockquote>
+<blockquote>accents cyan #38d4f5 / green #3ddc97 / red #ff5c6c / amber #ffb454 /</blockquote>
+<blockquote>yellow #ffd166; monospace font; rounded 12px cards; cyan &quot;◆ FRIDAY&quot;</blockquote>
+<blockquote>wordmark with &quot;V4 · DASHBOARD&quot; tag).</blockquote>
+<blockquote></blockquote>
+<blockquote>Backend API (build against these exact shapes — every field is guarded,</blockquote>
+<blockquote>missing subsystems return empty values, never HTTP 500):</blockquote>
+<blockquote>- GET /api/overview → {daemon:{running,state,uptime_seconds,notification_count,components:{name:bool}}, security:{scans,last_error,report:{grade,score,counts_by_severity:{critical,high,medium,low,info},scanned_at}}, intelligence:{available,drift:{metrics_tracked,total_samples},anomaly:{anomalies_logged,recent_anomalies:[{category,z_score,timestamp}]}}, proactive:{available,sessions,patterns:{action_pairs_learned,state_transitions}}, v3:{available,counts:{by_source},daemon_state,ambient_recent:[{title,event_type,timestamp,priority,project,detail}]}, voice:{available,tts_provider,hotword}}</blockquote>
+<blockquote>- GET /api/security → same security object</blockquote>
+<blockquote>- GET /api/ambient → [ambient events]</blockquote>
+<blockquote>- GET /api/projects → [project dir strings]</blockquote>
+<blockquote>- POST /api/scan {path} → 200 {started:true} | 400 bad path | 409 already running</blockquote>
+<blockquote>- GET / → the page</blockquote>
+<blockquote></blockquote>
+<blockquote>Sections (sidebar or top-nav, client-side navigation, no full reloads):</blockquote>
+<blockquote>Overview · Security · Intelligence · Proactive · V3/Ambient · Voice ·</blockquote>
+<blockquote>About. Overview shows daemon card (running pill, uptime, notification</blockquote>
+<blockquote>count, per-component up/down chips), security card (big color-coded grade</blockquote>
+<blockquote>A–F + score/100 + severity count chips + last scan time), intelligence</blockquote>
+<blockquote>card (drift + anomaly stats + recent anomalies), proactive card (sessions,</blockquote>
+<blockquote>patterns), V3 card (availability, daemon state, observation counts), voice</blockquote>
+<blockquote>card (provider, hotword), and an ambient feed (10 events).</blockquote>
+<blockquote></blockquote>
+<blockquote>The Security view is the hero feature: a big grade panel plus a &quot;run</blockquote>
+<blockquote>security scan&quot; panel with a path input fed by /api/projects datalist</blockquote>
+<blockquote>suggestions, a scan button with busy/disabled state, inline 400/409 error</blockquote>
+<blockquote>handling, and a post-scan refresh showing the new grade.</blockquote>
+<blockquote></blockquote>
+<blockquote>Requirements: poll /api/overview every 10s and show &quot;updated HH:MM:SS&quot;;</blockquote>
+<blockquote>every card needs a graceful empty/offline state (no data yet / subsystem</blockquote>
+<blockquote>missing / server unreachable — never a white screen); all fetches</blockquote>
+<blockquote>try/catch&#x27;d with visible fallbacks; no console errors; responsive from</blockquote>
+<blockquote>360px to ultrawide; semantic HTML + keyboard-accessible controls; hover</blockquote>
+<blockquote>states and subtle transitions; daemon running/stopped pill updates live.</blockquote>
+<blockquote>No CDN anything. Make it feel like an Iron Man control panel, not a SaaS</blockquote>
+<blockquote>page.</blockquote>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

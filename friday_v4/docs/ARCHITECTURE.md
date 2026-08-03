@@ -1,19 +1,27 @@
 # Friday V4 — Architecture Reference
 
-**Status:** Planning
-**Date:** 2026-07-30
+**Status:** Active development (ADR record — PLAN.md is the living authority)
+**Date:** 2026-07-30 (updated 2026-08-01 for the V3-boundary decision)
 **Supersedes:** V3 architecture document for V4-specific decisions
+
+> **⚠️ Update note (2026-08-01):** The V3-boundary decision in PLAN.md
+> supersedes the older "selective V3 imports" language in this doc. V4 now
+> imports **no V3 code** — the single touchpoint is `proactive/v3source.py`,
+> a read-only sqlite bridge. The ADRs below reflect that. Waves 9–11 (see
+> `WAVE_9_AGENCY_CORE.md`, `WAVE_10_MEMORY_IDENTITY.md`,
+> `WAVE_11_RESEARCH_REFLECTION.md`) add the reasoning/memory/execution core.
 
 ---
 
 ## ⭐ Status: V4 Is the Main Project
 
 **V4 is the project being actively built.** V3 is largely built but
-inconsistent — it is NOT the foundation V4 is subordinated to. V4 imports
-only the V3 modules that are properly built and useful (e.g.
-`friday.persona.engine`, `friday.ambient`, `friday.db`) as dependencies.
-If a V3 module is missing or broken, V4 builds its own version instead of
-patching V3 wholesale.
+inconsistent — it is NOT the foundation V4 is subordinated to. Per the
+V3-boundary decision (PLAN.md §3), V4 imports **no V3 code**: the single
+touchpoint is `proactive/v3source.py`, a read-only sqlite bridge to
+`~/.friday/friday.db`. Everything V4 needs (voice, desktop, security,
+proactive intelligence, and — from Waves 9–11 — reasoning, memory, and
+execution) is built V4-native.
 
 ## Architectural Invariants
 
@@ -27,10 +35,50 @@ them):
    interaction modes don't mutate the world behind the operator's back.
 4. **Single Responsibility:** Every V4 layer owns exactly one
    responsibility.
-5. **Downward Dependencies Only:** V4 may depend on the V3 modules it
-   imports; those modules must never depend on V4.
+5. **Downward Dependencies Only:** V4 layers depend downward only. V3 is
+   never a dependency — the read-only `v3source.py` bridge is the only
+   touchpoint and nothing depends on V4.
 6. **Determinism First:** Voice/mobile/desktop are interaction surfaces;
    the reasoning core remains deterministic.
+7. **Wire Before Done:** A feature is not complete until it is wired into
+   every consumer that should reach it — voice/CLI/web entry points,
+   daemon schedules, reasoning providers, and briefings. "Follow-up
+   suggestion" is not an acceptable definition of done.
+
+---
+
+## The Wiring Law
+
+**Every capability ships with its wiring.** A layer is done when its module
++ tests pass **and** every existing consumer that should reach it does:
+
+- **Entry points** — voice (`VoiceRouter`), CLI (`friday4 talk/ask/…`), and
+  web (`/api/talk`) all route through the shared `nl_router`/reasoning
+  brain; a new intent type reaches all of them.
+- **Daemon schedules** — anything time-driven (decay sweeps, scans,
+  samplers) gets a daemon component in the same change.
+- **Reasoning providers** — new state (memories, relationships, skills)
+  gains a provider so ASK answers cite it.
+- **Consumers** — briefings, proactive suggestions, and status feeds
+  surface the new state where the design says they should.
+- **CLI surface** — a new layer gets its `friday4 <layer> …` command
+  (as promised by its wave doc), not just a library API.
+
+**Checklist before a layer is called done:**
+- [ ] Every entry point that should reach it does (voice / CLI / web)?
+- [ ] Does the daemon run the scheduled maintenance it needs (decay,
+      refresh)?
+- [ ] Does the reasoning layer have a provider citing its state?
+- [ ] Does a CLI command expose it (`friday4 <layer> …`)?
+- [ ] Is the existing consumer (briefing/status/proactive) updated?
+- [ ] Are the wiring tests hermetic and green?
+
+**Origin:** `memory/` (Wave 10) shipped while `reasoning/providers.py`
+still read the raw `memories` table instead of the typed layer, the daemon
+ran no decay sweep, no `friday4 memory` CLI existed, and `VoiceRouter`
+dropped ASK intents before they reached reasoning. Those gaps were caught
+as follow-up suggestions instead of at build time — this law makes that a
+process violation.
 
 ---
 
@@ -39,46 +87,47 @@ them):
 ### ADR-1: V4 Lives in a Separate Package (Main Project)
 
 **Decision:** `friday_v4/` is the main project — a separate Python package
-that selectively imports only properly-built modules from `friday` (V3).
-It is NOT a fork or subpackage of V3, and V4 is NOT built on a "frozen
-core" it must preserve.
+that imports **no V3 code**. V3 is optional legacy *data* read through the
+`proactive/v3source.py` bridge (`mode=ro` sqlite). V4 is NOT a fork or
+subpackage of V3 and is NOT built on a "frozen core" it must preserve.
 
 **Rationale:** V3 is largely built but inconsistent. V4 is developed on its
-own terms with its own roadmap. Only V3 modules that are genuinely solid
-(persona, ambient, db) are reused; everything else is rebuilt properly in
-V4.
+own terms with its own roadmap. Every V3 capability V4 wants (persona,
+ambient feed, db, missions, executors, memory) is rebuilt V4-native —
+clean, stdlib-first, hermetic-tested.
 
-**Consequence:** V4 uses V3's public API only for the modules it reuses.
-If a V3 module is missing or broken, V4 implements it itself — it does not
-wait on V3 or patch V3 wholesale.
+**Consequence:** V4 has zero runtime dependency on V3. If a V3 module is
+missing or broken, V4 is unaffected; V3's *capability map* is design
+reference only. Waves 9–11 rebuild the brain (see WAVE docs).
 
 ### ADR-2: V4 Owns Its Daemon; V3 Pieces Reused Where Solid
 
-**Decision:** V4 owns its own daemon and services. It may reuse the V3
-daemon's observation → learning pipeline where that code is genuinely
-solid, but V4 is not bound to preserve or wrap V3's daemon — if V3's
-piece is inconsistent, V4 implements its own.
+**Decision:** V4 owns its own daemon and services (`friday_v4/daemon.py` —
+observer + notifier + sampler + security scanner, one process). V3's
+daemon is never launched or wrapped; V4's daemon is fully standalone.
 
-**Rationale:** V3 is largely built but inconsistent. Reusing only the
-solid pieces (persona, ambient, db) keeps V4's momentum without inheriting
-V3's inconsistencies.
+**Rationale:** V3 is largely built but inconsistent. Building the daemon
+V4-native keeps momentum without inheriting V3's inconsistencies, and it
+makes "V4 works with zero V3 code present" literally true.
 
-**Consequence:** V4's daemon is the product's own; V3 integration points
-are evaluated per-module on merit, not preserved out of duty.
+**Consequence:** V4's daemon is the product's own. Ambient notifications
+read V3's feed via the read-only bridge when present; everything else is
+V4 state.
 
 ### ADR-3: Voice Is an Interaction Mode, Not a New Pipeline
 
-**Decision:** Voice interfaces use V3's existing `IdentityEngine.process()`
-as the routing layer. STT converts speech to text, feeds it to the persona
-engine, and TTS converts the response back to speech.
+**Decision:** Voice is an interaction mode, not a new pipeline. The V4
+`VoiceRouter` (`voice/router.py`) routes utterances desktop → proactive →
+fallback today; Wave 9 upgrades it to route through the shared
+`understanding/` NLU + `reasoning/` answer engine, and Wave 10 adds
+persona/memory/relationship so voice responses are persona-aware.
 
-**Rationale:** V3 already has a complete conversation pipeline with persona,
-routing (ask/execute/chitchat), memory, and operator profiling. Duplicating
-this for voice would violate Law 18 (single responsibility).
+**Rationale:** Duplicating conversation logic for voice would violate
+single responsibility. One shared NLU surface (voice, CLI, web) keeps
+behavior identical everywhere.
 
-**Consequence:** All V3 personality features (name learning, preference
-extraction, relationship depth, memory) work automatically with voice.
-No new routing logic needed.
+**Consequence:** Voice inherits V4's identity, memory, and reasoning —
+rebuilt V4-native (Waves 9–10), never by importing V3's persona engine.
 
 ### ADR-4: Multi-Instance Uses CRDT for Observation Sync
 
@@ -119,9 +168,9 @@ User speaks → Microphone → VAD (voice activity detection)
                                    ↓ Yes
                      STT (speech-to-text) → "Hey Friday, what's new?"
                                    ↓
-                     V3 IdentityEngine.process("what's new?")
+                     VoiceRouter → Wave 9 understanding/ NLU (intent)
                                    ↓
-                     V3 ask pipeline → Answer text
+                     Wave 9 reasoning/ (evidence-cited answer)
                                    ↓
                      TTS (text-to-speech) → "3 repos changed today..."
                                    ↓
@@ -132,9 +181,9 @@ User speaks → Microphone → VAD (voice activity detection)
 ```
 Desktop Adapter → Window change detected
                        ↓
-           V4 Desktop Observer → V3 Ambient Event
+           V4 Desktop Observer → V4 event (Wave 11 ambient/ bus)
                        ↓
-           V3 Working Memory → Dashboard
+           V4 memory/db → Dashboard + proactive engine
                        ↓
            (Optional) Voice notification: "You just switched to VS Code"
 ```
@@ -145,28 +194,28 @@ V4 Daemon Cycle Completion
        ↓
 Trigger security scan on changed repos
        ↓
-Scanner → vulnerabilities? → Push to ambient feed
+Scanner → vulnerabilities? → V4 event → desktop notification (HIGH)
        ↓                       ↓
-Secrets detector → secrets? → Push to ambient feed (HIGH priority)
+Secrets detector → secrets? → V4 event (critical urgency)
        ↓
-Quality gates → issues? → Push to ambient feed
+Quality gates → issues? → V4 event (normal urgency)
        ↓
-All clean → Ambient event: "Security scan passed"
+All clean → V4 event: "Security scan passed"
 ```
 
 ### Multi-Instance Sync Flow
 ```
-Instance A observes rep o
+Instance A observes repo
        ↓
-Instance A writes observation to local DB
+Instance A writes observation to local CRDT store
        ↓
-Instance A broadcasts observation via WebSocket
+Instance A broadcasts observation via TCP JSON-lines (stdlib)
        ↓
 Instance B receives observation
        ↓
 Instance B merges via CRDT (LWW per source:subject:aspect)
        ↓
-Instance B writes merged observation to local DB
+Instance B persists merged observation
        ↓
 Instance B can now answer: "Instance A also saw changes in repo X"
 ```
@@ -178,53 +227,43 @@ Instance B can now answer: "Instance A also saw changes in repo X"
 ```
 friday_v4/
 │
-├── voice/           → friday.persona.engine
-│                    → friday.db
-│                    → (external) whisper / deepgram
-│                    → (external) piper / elevenlabs
+├── voice/           → understanding/ (Wave 9) · reasoning/ (Wave 9)
+│                    → (external, optional) whisper / piper / edge-tts
 │
-├── desktop/         → friday.db
-│   ├── wm/         → (platform-specific APIs)
-│   └── ide/        → (editor extension APIs)
+├── desktop/         → (platform-specific APIs) · db.py (Wave 9)
+│   └── ide/         → (editor extension APIs, Wave 6)
 │
-├── mobile/          → friday.db
-│                    → (external) websockets
+├── mobile/          → (future Wave 7) · ambient/ bus (Wave 11)
 │
-├── collab/          → friday.db
-│                    → (external) websockets
-│                    → (external) zeroconf / mdns
+├── collab/          → pure stdlib (TCP/UDP) — no external deps
 │
-├── security/        → friday.db
-│                    → friday.ambient
-│                    → (external) OSV / Grype / truffleHog
+├── security/        → db.py (Wave 9) · ambient/ bus (Wave 11)
+│                    → (external, optional) pip-audit / ruff / trufflehog
 │
-├── intelligence/    → friday.db
-│                    → friday.knowledge
-│                    → friday.observation
+├── intelligence/    → proactive/ · db.py (Wave 9)
 │
-├── network/         → friday.db
-│                    → (external) paramiko / ssh
-│                    → (external) aiohttp
+├── network/         → SSH executor folded into execution/ (Wave 12);
+│                      cloud/webhook/db-client remain future
 │
-└── proactive/       → friday.db
-                     → friday.memory
-                     → friday.ambient
-                     → friday.observation
+├── proactive/       → db.py (Wave 9) · memory/ (Wave 10)
+│   └── v3source.py  → ~/.friday/friday.db (read-only, THE only V3 touchpoint)
+│
+└── reasoning/ · understanding/ · missions/ · execution/
+                     → (Waves 9–11 brain core) · db.py (Wave 9)
 ```
 
 ---
 
 ## Testing Strategy
 
-### V3 Modules (reused selectively)
-- Only the V3 modules V4 actually imports (persona, ambient, db) matter
+### V3 Boundary (read-only bridge)
+- `v3source.py` is the ONLY V3 touchpoint; tests cover graceful fallback
+  (missing DB / missing schema → empty results, never a crash)
 - V3's broader suite (1,656 tests) is V3's own concern, not V4's gate
-- A failure in a reused V3 module is fixed at the import boundary in V4,
-  or the module is replaced with a V4 implementation
 
-### V4 Unit Tests (target: 500+)
-- Mock all V3 dependencies (friday.* modules)
-- Mock all external services (STT, TTS, scanners)
+### V4 Unit Tests (390 today → ~680 after Waves 9–11)
+- Hermetic: no real `~/.friday` writes (tmp_path connections)
+- Mock all external services (STT, TTS, scanners, tools)
 - Test each V4 module in isolation
 
 ### V4 Integration Tests
@@ -285,7 +324,7 @@ V4 configuration lives in `~/.friday/v4_config.json` (separate from V3's
   },
   "collab": {
     "enabled": false,
-    "discovery": "mdns",
+    "discovery": "udp_beacons",   // pure stdlib (replaced mdns)
     "workspace_name": null,
     "sync_interval_seconds": 30
   },

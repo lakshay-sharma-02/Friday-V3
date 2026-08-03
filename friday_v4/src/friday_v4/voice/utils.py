@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import struct
-from pathlib import Path
 from typing import Tuple
 
 import numpy as np

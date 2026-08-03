@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 10 Memory Identity — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 10 Memory Identity</h1>
+<h1>Friday V4 — Wave 10: Memory &amp; Identity (Friday Knows You)</h1>
+<blockquote><strong>Parent:</strong> PLAN.md · <strong>Sibling docs:</strong> WAVE_9_AGENCY_CORE.md,</blockquote>
+<blockquote>WAVE_11_RESEARCH_REFLECTION.md</blockquote>
+<blockquote><strong>Context:</strong> Solo developer, hygiene-first. Wave 9 gives Friday a brain;</blockquote>
+<blockquote>Wave 10 gives it a *relationship*.</blockquote>
+<blockquote><strong>Estimate:</strong> 5–7 weeks solo.</blockquote>
+<blockquote><strong>Status:</strong> ✅ SHIPPED (all 16 wiring gaps in <a href="#8-wiring-status-per-the-wiring-law---see-architecturedoc">§8 Wiring Status</a> closed)</blockquote>
+<hr>
+<h2>1. Why This Wave Exists</h2>
+<p>VISION.md makes the most powerful promise in the whole project:</p>
+<blockquote>🎤 &quot;Friday, who am I?&quot;</blockquote>
+<blockquote>🎧 &quot;You&#x27;re Lakshay. You prefer Rust for performance-critical code,</blockquote>
+<blockquote>Python for tooling. You&#x27;re not a morning person, so I kept the</blockquote>
+<blockquote>briefing short.&quot;</blockquote>
+<p>Today, that promise is <strong>absent from V4&#x27;s code</strong>. The V3 boundary law was</p>
+<p>right to cut V3&#x27;s imports — but it also cut V3&#x27;s *personality stack*</p>
+<p>(<code>persona/engine.py</code>, <code>relationship.py</code>, <code>memory.py</code>, <code>conversation_learner.py</code>,</p>
+<p><code>skill_formation.py</code>), all of which V4 never rebuilt.</p>
+<p>Wave 10 rebuilds identity, memory, relationship, and self-improvement —</p>
+<p><strong>V4-native, stdlib-first, hermetic-tested</strong>. This is the wave that makes</p>
+<p>Friday feel like a partner instead of a tool.</p>
+<hr>
+<h2>2. The Memory Stack</h2>
+<pre><code class="language-">                ┌─────────────────────────────────────┐
+                │             SURFACES                │
+                │  Voice · CLI · Web · proactive      │
+                └──────────────────┬──────────────────┘
+                                   │
+                ┌──────────────────▼──────────────────┐
+                │        persona/ (identity)          │
+                │  name · preferences · tone          │
+                └──────┬──────────────────┬───────────┘
+                       │                  │
+        ┌──────────────▼──────┐   ┌──────▼───────────────┐
+        │     memory/         │   │  relationship/        │
+        │  facts + working    │   │  depth → tone/verbosity│
+        └──────────────┬──────┘   └──────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────────────────┐
+        │          db.py  (V4 state, sqlite)              │
+        │  memories · facts · relationships · sessions    │
+        └─────────────────────────────────────────────────┘</code></pre>
+<hr>
+<h2>3. Deliverables</h2>
+<h3>3.1 Memory Engine (<code>friday_v4/memory/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>facts.py</code></td><td>long-term memory: about you, your projects, your preferences (with decay)</td><td></td></tr><tr><td></td><td><code>working.py</code></td><td>session working memory / current context (V3 <code>WorkingMemory</code> concept)</td><td></td></tr><tr><td></td><td><code>store.py</code></td><td>typed DB access for memories + facts + decay sweeps</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>memory.py</code> (<code>MemoryEngine</code>: store/recall/forget/</p>
+<p>decay_memories/extract_from_conversation; <code>WorkingMemory</code>: set_context/</p>
+<p>evict/get_contexts_by_category).</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Every memory fact carries: <strong>source</strong> (who said it / what event), <strong>confidence</strong>,</li></ul>
+<p><strong>created/updated timestamps</strong>, <strong>decay policy</strong>.</p>
+<ul><li>Facts are *propositions with provenance*, never raw strings:</li></ul>
+<p><code>(&quot;operator&quot;, &quot;prefers_python_for_tooling&quot;, confidence=0.9, source=&quot;voice:2026-08-01&quot;)</code>.</p>
+<ul><li><code>decay_memories</code> runs on a schedule — unused facts fade, confirmed facts strengthen.</li><li>Nothing is written to <code>~/.friday</code> in tests (hermetic via <code>tmp_path</code>).</li></ul>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;I prefer Rust for performance-critical code.&quot;
+🎧 [Friday]: &quot;Noted — storing that. I&#x27;ll keep briefings shorter in the
+             morning going forward.&quot;</code></pre>
+<h3>3.2 Persona &amp; Identity (<code>friday_v4/persona/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>engine.py</code></td><td><code>IdentityEngine</code>: name learning, preference extraction, identity profile</td><td></td></tr><tr><td></td><td><code>learn.py</code></td><td>extract preferences from conversation (&quot;call me Lakshay&quot;, &quot;I prefer X&quot;)</td><td></td></tr><tr><td></td><td><code>prompts.py</code></td><td>persona prompt assembly (tone, history, relationship depth)</td><td></td></tr></tbody></table>
+<blockquote><strong>Status (2026-08): built + wired, operator-amended (no keywords).</strong></blockquote>
+<blockquote><code>persona/</code> ships (<code>engine.py</code>, <code>learn.py</code>, <code>prompts.py</code>) as a **verbatim</blockquote>
+<blockquote>view over the conversation log** — per operator direction there are *no</blockquote>
+<blockquote>keyword tables and no regex extraction* (the draft <code>Intent.PERSONA</code></blockquote>
+<blockquote>classifier and <code>extract_name</code>/<code>extract_preference</code> extractors were</blockquote>
+<blockquote>removed in review). <code>nl_router.handle()</code> records every utterance</blockquote>
+<blockquote>word-for-word into the <code>exchanges</code> table (<code>_log_exchange</code>);</blockquote>
+<blockquote><code>reasoning/providers.py</code> <code>identity_provider</code> answers &quot;who am I&quot; by</blockquote>
+<blockquote>quoting those statements back (<code>v4.exchanges</code> evidence) while &quot;who are</blockquote>
+<blockquote>you&quot; stays Friday&#x27;s self-knowledge (<code>v4.self</code>); `friday4 persona</blockquote>
+<blockquote>profile/remember` lands the §4 CLI (see §8 rows 7–9).</blockquote>
+<p><strong>Design reference:</strong> V3 <code>persona/engine.py</code> + <code>persona/prompts.py</code> +</p>
+<p><code>conversation_learner.py</code> (<code>_has_explicit_preference</code>, <code>_persist_extraction</code>).</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Name/preference learning is <strong>explicit-consent-first</strong>: only extracts when</li></ul>
+<p>the operator states a preference (&quot;call me…&quot;, &quot;I prefer…&quot;, &quot;I like…&quot;).</p>
+<ul><li>Identity profile is a *view over facts*, never a separate hidden store.</li><li>Tone adapts via relationship depth (see 3.3) — not hardcoded.</li></ul>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;Call me Lakshay, by the way.&quot;
+🎧 [Friday]: &quot;Got it — Lakshay. Anything else you want me to remember?&quot;</code></pre>
+<h3>3.3 Relationship (<code>friday_v4/relationship/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>depth.py</code></td><td>compute relationship depth from interaction history (V3 <code>operator/depth.py</code> concept)</td><td></td></tr><tr><td></td><td><code>tones.py</code></td><td>tone + verbosity selection by depth (morning brevity, afternoon detail)</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>operator/depth.py</code> (<code>compute_relationship_depth</code>),</p>
+<p><code>relationship.py</code>, <code>sentiment.py</code> (rolling sentiment).</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Depth is computed from *real interaction data*: frequency, sentiment trend,</li></ul>
+<p>preference confirmations, mission completions.</p>
+<ul><li>Tone changes are gradual and explainable — never a sudden personality shift.</li></ul>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [Friday]: &quot;You&#x27;re not a morning person — I kept the briefing to 3 lines.
+             Want the full walkthrough after coffee?&quot;</code></pre>
+<h3>3.4 Skills &amp; Self-Improvement (<code>friday_v4/skills/</code>)</h3>
+<p>V3&#x27;s crown jewel was <code>skill_formation.py</code> (1,731 LOC): watch a workflow, form</p>
+<p>a skill, verify, promote. V4 rebuilds it cleanly.</p>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>replay.py</code></td><td><code>ReplayExecutor</code>: learn from a demonstrated sequence (V3 concept)</td><td></td></tr><tr><td></td><td><code>shadow.py</code></td><td><code>ShadowExecutor</code>: run in shadow mode, promote only when verified</td><td></td></tr><tr><td></td><td><code>registry.py</code></td><td>skill confidence, verification state, versioning</td><td></td></tr><tr><td></td><td><code>dispatch.py</code></td><td>auto-dispatch a skill when context matches</td><td></td></tr></tbody></table>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Skills are stored as <strong>parameterized step sequences</strong> with evidence</li></ul>
+<p>(the observation/action trail that produced them).</p>
+<ul><li><strong>Shadow-first:</strong> new skills run in shadow mode and record what they *would*</li></ul>
+<p>do; promotion requires N successful shadow matches + operator approval.</p>
+<ul><li>Registry tracks confidence, last-verified, failure count — a skill that</li></ul>
+<p>starts failing is demoted, not silently kept.</p>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎧 [Friday]: &quot;I noticed you run pytest after editing tests every time.
+             I&#x27;ve formed a skill for it — currently in shadow mode.
+             Want me to auto-run it next time you finish a test file?&quot;</code></pre>
+<hr>
+<h2>4. File Count &amp; CLI</h2>
+<ul><li><strong>~18 source files</strong> + <strong>~10 test files</strong> across 4 new packages</li></ul>
+<p>(<code>memory/</code>, <code>persona/</code>, <code>relationship/</code>, <code>skills/</code>).</p>
+<ul><li>CLI wiring: <code>friday4 memory store/recall/forget</code>, <code>friday4 persona profile</code>,</li></ul>
+<p><code>friday4 relationship status</code>, <code>friday4 skills list/learn/promote/shadow</code>.</p>
+<hr>
+<h2>5. Test Strategy</h2>
+<ul><li><strong>memory/:</strong> store/recall round-trip, decay schedule, provenance integrity,</li></ul>
+<p>hermetic (no real <code>~/.friday</code>).</p>
+<ul><li><strong>persona/:</strong> explicit-consent extraction (only learns when operator states</li></ul>
+<p>preference), no false extraction from casual phrasing.</p>
+<ul><li><strong>relationship/:</strong> depth monotonicity (more interaction → deeper, never</li></ul>
+<p>suddenly shallower), tone mapping bounds.</p>
+<ul><li><strong>skills/:</strong> shadow-mode never executes real actions; promotion requires</li></ul>
+<p>verification; failure demotion.</p>
+<p>Target: <strong>+90 tests</strong> (V4 suite → ~600).</p>
+<hr>
+<h2>6. Risks</h2>
+<table><thead><tr><th>|</th><th></th><th>R</th><th>i</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>L</th><th>i</th><th>k</th><th>e</th><th>l</th><th>i</th><th>h</th><th>o</th><th>o</th><th>d</th><th></th><th>|</th><th></th><th>I</th><th>m</th><th>p</th><th>a</th><th>c</th><th>t</th><th></th><th>|</th><th></th><th>M</th><th>i</th><th>t</th><th>i</th><th>g</th><th>a</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Memory bloat / stale facts</td><td>Medium</td><td>Medium</td><td>Decay + confidence + provenance</td><td></td></tr><tr><td></td><td>Over-eager preference extraction</td><td>Medium</td><td>Medium</td><td>Explicit-consent-first rules</td><td></td></tr><tr><td></td><td>Skill auto-dispatch acts unsafely</td><td>Low</td><td>High</td><td>Shadow-first + operator approval</td><td></td></tr><tr><td></td><td>Relationship feels fake</td><td>Medium</td><td>Low</td><td>Depth driven by real data, gradual tone shifts</td><td></td></tr></tbody></table>
+<hr>
+<h2>7. Success Criteria</h2>
+<p>1. &quot;Call me Lakshay&quot; → remembered across restarts, used in tone. ✅</p>
+<p>2. &quot;I prefer Rust for perf-critical code&quot; → stored fact with provenance, surfaced when relevant. ✅</p>
+<p>3. Relationship depth rises with real interaction; briefing tone adapts. ✅ (<code>relationship/</code> + <code>RelationshipRefresher</code> + tone wiring — depth is monotonic, never suddenly shallower)</p>
+<p>4. A skill formed in shadow mode is promoted only after verification + approval. ✅ (<code>skills/</code> shadow-first lifecycle + <code>SkillLearner</code> daemon sweep + <code>friday4 skills promote</code> as the explicit approval step)</p>
+<p>5. Zero V3 imports (except <code>v3source.py</code>), hermetic tests, ~600 total. ✅</p>
+<hr>
+<h2>8. Wiring Status (per the Wiring Law — see ARCHITECTURE.md)</h2>
+<blockquote><strong>Wiring Law:</strong> a layer is not done until it is wired into every consumer</blockquote>
+<blockquote>that should reach it (entry points, daemon schedules, reasoning</blockquote>
+<blockquote>providers, CLI, briefings) — in the same change, never as a follow-up.</blockquote>
+<blockquote>The <code>memory/</code> build shipped without its wiring; the table below is the</blockquote>
+<blockquote>backlog that must land before the memory layer counts as done.</blockquote>
+<table><thead><tr><th>|</th><th></th><th>#</th><th></th><th>|</th><th></th><th>G</th><th>a</th><th>p</th><th></th><th>|</th><th></th><th>W</th><th>h</th><th>e</th><th>r</th><th>e</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>1</td><td><code>memory_provider</code> reads the raw <code>memories</code> table instead of the typed <code>FactMemory</code>/<code>MemoryStore</code> layer (decay + provenance-aware recall unused)</td><td><code>reasoning/providers.py</code></td><td>✅ closed — typed <code>FactMemory</code> + target-scoped recall</td><td></td></tr><tr><td></td><td>2</td><td>No daemon decay sweep — <code>MemoryStore.decay()</code> never runs on a schedule</td><td><code>daemon.py</code></td><td>✅ closed — <code>MemorySweeper</code> component (<code>memory_sweep</code>/<code>memory_interval</code> config)</td><td></td></tr><tr><td></td><td>3</td><td>No <code>friday4 memory store/recall/forget</code> CLI (§4 promised it)</td><td><code>cli_memory.py</code> (missing)</td><td>✅ closed — <code>store/recall/forget/list/status</code></td><td></td></tr><tr><td></td><td>4</td><td><code>VoiceRouter._try_nlu_route</code> drops ASK intents (action=<code>&quot;chat&quot;</code>) → spoken questions never reach reasoning</td><td><code>voice/router.py</code></td><td>✅ closed — ASK intents return the reasoning answer</td><td></td></tr><tr><td></td><td>5</td><td><code>WorkingMemory.current_context()</code> built, but no consumer renders it</td><td>briefing/status surfaces</td><td>✅ closed — <code>friday4 proactive brief</code> + <code>friday4 memory status</code></td><td></td></tr><tr><td></td><td>6</td><td>Web dashboard has no memory-facts card</td><td><code>web/server.py</code></td><td>✅ closed — <code>memory_state()</code> + <code>/api/memory</code> + Memory card</td><td></td></tr><tr><td></td><td>7</td><td>&quot;call me X&quot; / &quot;I prefer Y&quot; had no identity learning path</td><td><code>nl_router.py</code> + conversation log</td><td>✅ closed (operator-directed) — <strong>no keywords</strong>: every utterance flows into the <code>exchanges</code> log via <code>_log_exchange</code>; the brain learns from what you *actually said*</td><td></td></tr><tr><td></td><td>8</td><td>Reasoning identity answers were static self-knowledge only (<code>v4.self</code>)</td><td><code>reasoning/providers.py</code></td><td>✅ closed — <code>identity_provider</code> answers &quot;who am I&quot; by quoting your own words back (<code>v4.exchanges</code> via <code>IdentityEngine</code>)</td><td></td></tr><tr><td></td><td>9</td><td>No <code>friday4 persona</code> CLI (§4 promised <code>profile</code>)</td><td><code>cli_persona.py</code> (missing)</td><td>✅ closed — <code>profile</code> / <code>remember</code> (verbatim view, fixed standalone <code>main</code>)</td><td></td></tr><tr><td></td><td>10</td><td>Relationship depth was never computed from real data (§3.3)</td><td><code>relationship/</code> (missing)</td><td>✅ closed — <code>depth.py</code> (<code>RelationshipEngine</code>: signals → monotonic depth → persisted) + <code>tones.py</code> (tone/verbosity/briefing by depth, morning brevity)</td><td></td></tr><tr><td></td><td>11</td><td>No <code>friday4 relationship</code> CLI (§4 promised <code>status</code>)</td><td><code>cli_relationship.py</code> (missing)</td><td>✅ closed — <code>status</code> / <code>refresh</code> (depth, level, tone, verbosity, signals)</td><td></td></tr><tr><td></td><td>12</td><td>Skills/ self-improvement never rebuilt (§3.4)</td><td><code>skills/</code> (missing)</td><td>✅ closed — <code>registry.py</code> (shadow→verified→promoted, failure demotion) + <code>replay.py</code> (learn from audit log) + <code>shadow.py</code> (shadow-first, never executes) + <code>dispatch.py</code> (suggest on context match)</td><td></td></tr><tr><td></td><td>13</td><td>No <code>friday4 skills</code> CLI (§4 promised <code>list/learn/promote/shadow</code>)</td><td><code>cli_skills.py</code> (missing)</td><td>✅ closed — <code>list</code> / <code>learn</code> / <code>shadow</code> / <code>promote</code> / <code>status</code></td><td></td></tr><tr><td></td><td>14</td><td>No daemon schedule runs skills/shadow or refreshes depth</td><td><code>daemon.py</code></td><td>✅ closed — <code>SkillLearner</code> + <code>RelationshipRefresher</code> components (<code>skill_learn</code>/<code>skill_interval</code>/<code>relationship_refresh</code>/<code>relationship_interval</code> config)</td><td></td></tr><tr><td></td><td>15</td><td>Web dashboard shows no relationship/skills state</td><td><code>web/dashboard.py</code> + <code>web/server.py</code></td><td>✅ closed — <code>relationship_state()</code> + <code>skills_state()</code> accessors, Relationship + Skills cards, <code>/api/relationship</code> + <code>/api/skills</code></td><td></td></tr><tr><td></td><td>16</td><td>Persona tone was hardcoded <code>&quot;default&quot;</code> (§3.3: tone adapts via depth)</td><td><code>persona/engine.py</code> + <code>persona/prompts.py</code></td><td>✅ closed — <code>IdentityEngine.profile()</code> tone comes from <code>RelationshipEngine</code> (never hardcoded); context block renders the tone line</td><td></td></tr></tbody></table>
+<hr>
+<p>*This is the wave where Friday stops being a tool you type at and becomes a</p>
+<p>partner you speak with — the emotional core of the MCU vision.*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

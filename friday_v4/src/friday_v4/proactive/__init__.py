@@ -16,8 +16,8 @@ Capabilities:
 from .anticipation import AnticipationEngine, PrioritizedItem
 from .context_engine import DeepContextEngine, WorkContext
 from .pattern_learner import PatternLearner
-from .session_memory import SessionStore
 from .priority import PriorityInference
+from .session_memory import SessionStore
 from .v3source import V3DataSource
 
 __all__ = [

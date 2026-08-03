@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 16 17 Adaptive — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 16 17 Adaptive</h1>
+<h1>Waves 16 &amp; 17 — Capability Registry + Adaptive Identity ✅ SHIPPED (2026-08)</h1>
+<blockquote><strong>The directive:</strong> *no task it can&#x27;t pick up* and *adapts its</blockquote>
+<blockquote>personality to you* — the two clauses that were still open after</blockquote>
+<blockquote>Wave 14. Shipped together because they share one NLU point and one</blockquote>
+<blockquote>wiring surface.</blockquote>
+<blockquote></blockquote>
+<blockquote>Governance: <a href="MCU_FRIDAY_STANDARD.md">THE MCU FRIDAY STANDARD</a> — Law 7</blockquote>
+<blockquote>(self-extension: every capability registered), Law 8 (adaptive</blockquote>
+<blockquote>identity, data-driven never hardcoded), Law 1 (NL path in the same</blockquote>
+<blockquote>change).</blockquote>
+<hr>
+<h2>Wave 16 — Capability Registry (Law 7)</h2>
+<h3>The design</h3>
+<p>Friday knows what it can do. A registry holds every capability —</p>
+<p>executors, reasoning providers, NL intents, surfaces, **and learned</p>
+<p>skills** — with the natural-language intents that reach each one.</p>
+<p>&quot;what can you do&quot; is answered from the registry, never a hardcoded</p>
+<p>string; learning a skill registers a new capability (Law 2 + Law 7</p>
+<p>meet — Friday grows abilities without code).</p>
+<pre><code class="language-">capability/
+  registry.py  — Capability model + CapabilityRegistry
+                 (list/by_intent/by_layer/search/describe/summary)
+  builtins.py  — executors (shell/git/file/python/testing/ssh) +
+                 providers (question types) + intents (the ONE NLU
+                 point) + surfaces (talk/voice/web/desktop/…)</code></pre>
+<h3>Wiring (the Wiring Law)</h3>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th><th></th><th>H</th><th>o</th><th>w</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>reasoning/providers.py</code></td><td>✅</td><td><code>capability_provider</code> for <code>QuestionType.CAPABILITY</code> — &quot;what can you do&quot; cites <code>v4.capabilities</code></td><td></td></tr><tr><td></td><td><code>nl_router.py</code> HELP</td><td>✅</td><td>&quot;what can you do&quot; / &quot;help&quot; answered from the registry (no hardcoded list)</td><td></td></tr><tr><td></td><td><code>friday4 capability list/describe/count</code></td><td>✅</td><td><code>cli_capability.py</code> debug hatch</td><td></td></tr><tr><td></td><td>Web dashboard</td><td>✅</td><td><code>/api/capability</code> + Capabilities card (total, layers, learned skills)</td><td></td></tr><tr><td></td><td>Self-extension</td><td>✅</td><td><code>list()</code> merges promoted/verified skills as <code>skill:&lt;name&gt;</code> capabilities</td><td></td></tr></tbody></table>
+<h3>MCU test</h3>
+<p>&quot;Friday, what can you do?&quot; → a real, evidence-cited list of Friday&#x27;s</p>
+<p>actual registered abilities — including skills it has learned. ✅</p>
+<hr>
+<h2>Wave 17 — Adaptive Identity (MCU test #4)</h2>
+<h3>The design</h3>
+<p><strong>&quot;Be more casual, Tony.&quot;</strong> An explicit tone-direction persists across</p>
+<p>restarts, applies on every surface, and is explainable — Friday can</p>
+<p>always say *why* she talks the way she does. Direction wins over the</p>
+<p>depth-derived default; depth keeps computing underneath (the two never</p>
+<p>collide). Consent-first: only an explicit direction is stored, verbatim</p>
+<p>with its request words.</p>
+<pre><code class="language-">&quot;be more casual&quot; ──► Intent.STYLE ──► relationship.set_direction(tone=casual)
+                          │                └─► relationships.preferences.tone_direction
+                          ▼                     (tone, verbosity, request, set_at)
+&quot;why do you talk that way?&quot; ──► ASK ──► style_provider ──► &quot;I talk casual because
+                        you asked me to on &lt;date&gt;: &#x27;be more casual&#x27;&quot;
+&quot;be yourself again&quot; ──► STYLE(reset) ──► clear_direction()</code></pre>
+<h3>Wiring (the Wiring Law)</h3>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th><th></th><th>H</th><th>o</th><th>w</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>db.py</code></td><td>✅</td><td><code>set/get/clear_tone_direction</code> (preferences JSON; depth column untouched)</td><td></td></tr><tr><td></td><td><code>relationship/tones.py</code></td><td>✅</td><td><code>ToneDirection</code> + <code>effective_tone</code>/<code>effective_verbosity</code> (direction wins)</td><td></td></tr><tr><td></td><td><code>relationship/depth.py</code></td><td>✅</td><td><code>set_direction</code>/<code>clear_direction</code>/<code>direction</code>/<code>explain_tone</code>; <code>status()</code> reports effective; <code>refresh()</code> preserves</td><td></td></tr><tr><td></td><td><code>persona/engine.py</code></td><td>✅</td><td><code>profile()</code> tone follows the effective direction</td><td></td></tr><tr><td></td><td><code>nlu</code></td><td>✅</td><td><code>Intent.STYLE</code> (LLM-first, rules fallback: casual/formal/reset/…)</td><td></td></tr><tr><td></td><td><code>nl_router.py</code></td><td>✅</td><td><code>_style_response</code> — set/reset/clarify; ASK routes &quot;why do you talk that way&quot; to reasoning</td><td></td></tr><tr><td></td><td><code>reasoning/providers.py</code></td><td>✅</td><td><code>style_provider</code> for <code>QuestionType.STYLE</code> (cites stored request + depth)</td><td></td></tr><tr><td></td><td><code>briefing/</code></td><td>✅</td><td>morning/evening briefing tone adapts to the explicit direction</td><td></td></tr><tr><td></td><td><code>friday4 relationship tone [tone] [--verbosity N] [--reset]</code></td><td>✅</td><td>CLI debug hatch; status shows the direction</td><td></td></tr><tr><td></td><td>Web dashboard</td><td>✅</td><td>Relationship card shows the explicit direction line</td><td></td></tr></tbody></table>
+<h3>MCU test (five-moment #4)</h3>
+<p>&quot;Be more casual, Tony&quot; → different tone this session → persisted next</p>
+<p>session → explainable why (&quot;I&#x27;m casual because you asked me to be&quot;).</p>
+<p>✅</p>
+<hr>
+<h2>What actually shipped (close-out)</h2>
+<ul><li><strong>46 hermetic tests</strong> — <code>tests/test_wave16_capability.py</code> (20) +</li></ul>
+<p><code>tests/test_wave17_tone_direction.py</code> (26): db persistence, effective</p>
+<p>tone merge, refresh preservation, Intent.STYLE fallback +</p>
+<p>LLM-still-wins, router set/reset/explain, reasoning providers citing</p>
+<p>evidence, briefing tone, CLI commands, web dashboard probes.</p>
+<ul><li><strong>Bug fixed along the way:</strong> <code>QuestionType</code> ordering — &quot;what are your</li></ul>
+<p>capabilities&quot; contains identity&#x27;s &quot;what are you&quot; phrase as a</p>
+<p>substring, so CAPABILITY/STYLE rules moved ahead of IDENTITY.</p>
+<ul><li><strong>Bug fixed along the way:</strong> <code>RelationshipEngine.refresh()</code> was</li></ul>
+<p>passing the depth-derived tone into <code>status()</code>, which would clobber</p>
+<p>an explicit direction on every daemon sweep — the tone arg is no</p>
+<p>longer passed (status computes effective).</p>
+<h2>What we learned</h2>
+<ul><li><strong>Direction over depth is a merge, not a replacement.</strong> Storing the</li></ul>
+<p>override separately (preferences JSON) keeps the depth column honest</p>
+<p>and lets Friday explain *both*: &quot;you asked me to be casual&quot; AND &quot;we&#x27;d</p>
+<p>otherwise be at depth 0.85&quot;. One store, two views.</p>
+<ul><li><strong>The registry&#x27;s first value is honesty.</strong> &quot;What can you do&quot; was a</li></ul>
+<p>hardcoded string before; now it&#x27;s the truth, and it grows when</p>
+<p>Friday learns. The hard part isn&#x27;t the data model — it&#x27;s keeping the</p>
+<p>answer from being noise. Layer-grouped summaries keep it readable.</p>
+<ul><li><strong>Ordering bugs are invisible to happy-path tests.</strong> The</li></ul>
+<p>&quot;your-capabilities&quot; substring collision only surfaced when testing</p>
+<p>the exact user phrasing end-to-end — worth always testing the</p>
+<p>concrete MCU sentences, not paraphrases.</p>
+<hr>
+<p>*Next: Wave 18 — Polish, Scale &amp; Dogfood (the sentence, proven under</p>
+<p>real use). The five MCU acceptance tests, all passing through speech</p>
+<p>only.*</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

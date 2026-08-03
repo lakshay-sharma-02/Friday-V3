@@ -24,10 +24,14 @@ All platforms share the ``DesktopAbstraction`` interface; use
 
 from __future__ import annotations
 
+from .hotkeys import GlobalHotkeys
+from .notifier import DesktopNotificationChannel
+from .tray import SystemTray
+from .watcher import DesktopWatcher
 from .wm_abstraction import (
+    SUPPORTED_PLATFORMS,
     DesktopAbstraction,
     MonitorInfo,
-    SUPPORTED_PLATFORMS,
     SmartWindowResolver,
     WindowInfo,
     WindowManager,
@@ -35,10 +39,6 @@ from .wm_abstraction import (
     create_adapter,
     detect_desktop_environment,
 )
-from .tray import SystemTray
-from .hotkeys import GlobalHotkeys
-from .notifier import DesktopNotificationChannel
-from .watcher import DesktopWatcher
 
 __all__ = [
     "DesktopAbstraction",

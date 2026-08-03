@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 15 One Presence — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 15 One Presence</h1>
+<h1>Wave 15 — One Presence (cross-surface continuity) ✅ SHIPPED</h1>
+<blockquote><strong>The sentence clause:</strong> *single presence* — &quot;MCU FRIDAY is a single</blockquote>
+<blockquote>presence that speaks natural language …&quot; Same memory, same context,</blockquote>
+<blockquote>same conversation across terminal / web / voice / desktop / mobile.</blockquote>
+<blockquote>One Friday, not five tools.</blockquote>
+<blockquote></blockquote>
+<blockquote><strong>This wave (shipped 2026-08):</strong> the shared context session (slice 1),</blockquote>
+<blockquote>web-dashboard chat polish (slice 2), ambient push reaching every</blockquote>
+<blockquote>surface (slice 3), and mobile transport via the durable queue (slice 4).</blockquote>
+<blockquote>&quot;What did we talk about this morning?&quot; is answered from any surface</blockquote>
+<blockquote>with the actual conversation. Parent docs:</blockquote>
+<blockquote><a href="MCU_FRIDAY_STANDARD.md">THE MCU FRIDAY STANDARD</a> Law 10 (one</blockquote>
+<blockquote>presence, every surface) · [THE FRIDAY MASTER</blockquote>
+<blockquote>PLAN](MASTER_PLAN.md) Wave 15.</blockquote>
+<hr>
+<h2>1. The design</h2>
+<h3>One session follows you across surfaces</h3>
+<p>Before, every conversational surface called `<code>start_session(surface)</code>`</p>
+<p>per utterance — one session row per exchange, so &quot;the conversation&quot; was</p>
+<p>fragmented across hundreds of sessions and surfaces. The Wave 15</p>
+<p>principle is literal:</p>
+<blockquote><strong>The shared session is the presence.</strong> All conversational surfaces</blockquote>
+<blockquote>(talk, ask, voice, web chat) append to the <strong>same</strong> `<code>sessions</code>` row</blockquote>
+<blockquote>— `<code>surface=&#x27;shared&#x27;</code>`, one per UTC day, created on first use that</blockquote>
+<blockquote>day. A conversation started in the terminal *is* the conversation</blockquote>
+<blockquote>heard in voice and read on the phone.</blockquote>
+<p>`<code>db.get_or_create_shared_session(conn)</code>` returns today&#x27;s shared</p>
+<p>session (creating it on first use). The day-boundary comparison is</p>
+<p>lexical (`<code>substr(started_at, 1, 10)</code>` on the ISO date) — no dependence</p>
+<p>on SQLite&#x27;s `<code>date()</code>` parser for microsecond + timezone timestamps.</p>
+<p>Midnight rolls the presence into a fresh session; each day stays</p>
+<p>addressable (`<code>list_sessions</code>`, relationship counts).</p>
+<p>Wired into the three conversational loggers:</p>
+<table><thead><tr><th>|</th><th></th><th>L</th><th>o</th><th>g</th><th>g</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>B</th><th>e</th><th>f</th><th>o</th><th>r</th><th>e</th><th></th><th>|</th><th></th><th>A</th><th>f</th><th>t</th><th>e</th><th>r</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>nl_router._log_exchange</code> (talk + voice + web chat + mobile talk — every surface routes through <code>TextCommandHandler</code>)</td><td><code>start_session(&quot;talk&quot;)</code> per utterance</td><td><code>get_or_create_shared_session</code></td><td></td></tr><tr><td></td><td><code>cli_ask._log_exchange</code> (<code>friday4 ask</code>)</td><td><code>start_session(&quot;ask&quot;)</code> per Q&amp;A</td><td><code>get_or_create_shared_session</code></td><td></td></tr><tr><td></td><td><code>persona/learn.record_statement</code> (&quot;who am I&quot; material)</td><td><code>start_session(surface)</code> per statement</td><td><code>get_or_create_shared_session</code></td><td></td></tr></tbody></table>
+<p><strong>Why this is safe:</strong> the relationship depth formula weights</p>
+<p>*exchanges*, *missions*, and *facts* — the `<code>sessions</code>` counter is not</p>
+<p>part of the score (it is display-only), so one-session-per-day cannot</p>
+<p>regress depth.</p>
+<h3>Time-window recall (the MCU test)</h3>
+<p>`<code>conversation_provider</code><code> (</code><code>reasoning/providers.py</code>`) now answers</p>
+<p>time-windowed questions by filtering the log to the window instead of</p>
+<p>the last-N turns:</p>
+<table><thead><tr><th>|</th><th></th><th>Y</th><th>o</th><th>u</th><th></th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>W</th><th>i</th><th>n</th><th>d</th><th>o</th><th>w</th><th></th><th>(</th><th>U</th><th>T</th><th>C</th><th>)</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>&quot;what did we talk about <strong>this morning</strong>?&quot;</td><td>today 00:00 → 12:00</td><td></td></tr><tr><td></td><td>&quot;…this afternoon?&quot;</td><td>today 12:00 → 18:00</td><td></td></tr><tr><td></td><td>&quot;…this evening?&quot; / &quot;tonight&quot;</td><td>today 18:00 → tomorrow</td><td></td></tr><tr><td></td><td>&quot;…today?&quot; / &quot;earlier today&quot;</td><td>today 00:00 → now</td><td></td></tr><tr><td></td><td>&quot;…yesterday?&quot;</td><td>yesterday → today</td><td></td></tr><tr><td></td><td>&quot;…last night?&quot;</td><td>yesterday 18:00 → today</td><td></td></tr><tr><td></td><td>&quot;…this week?&quot;</td><td>Monday → now</td><td></td></tr><tr><td></td><td>&quot;…last week?&quot;</td><td>last Monday → this Monday</td><td></td></tr><tr><td></td><td>(no window)</td><td>recent-N (existing behavior)</td><td></td></tr></tbody></table>
+<p>`<code>db.recent_exchanges_since(conn, since, until, limit)</code>` is the window</p>
+<p>query (newest first, exclusive end). An empty window → `<code>None</code>` → the</p>
+<p>honest &quot;I don&#x27;t know yet&quot; (never fabricated). `<code>now</code>` is injectable in</p>
+<p>the helper for deterministic tests; timestamps are stored UTC, so</p>
+<p>windows are computed UTC.</p>
+<h3>Classification fix</h3>
+<p>&quot;what did we talk about <strong>yesterday</strong>?&quot; contains ACTIVITY&#x27;s bare</p>
+<p>&quot;yesterday&quot; trigger, so it used to classify ACTIVITY and get the wrong</p>
+<p>provider. The CONVERSATION rule now precedes ACTIVITY — time-windowed</p>
+<p>conversation questions land on the conversation provider. &quot;what did we</p>
+<p><strong>do</strong> yesterday&quot; has no conversation trigger and stays ACTIVITY</p>
+<p>(regression-tested).</p>
+<hr>
+<h2>2. Slices 2–4 — the browser, the bus, the phone</h2>
+<h3>Slice 2 — web-dashboard chat polish (resume the thread in the browser)</h3>
+<p>The Wave 9 chat card was stateless: it started empty every load, so the</p>
+<p>terminal conversation never showed up in the browser. Now:</p>
+<ul><li><strong><code>web/dashboard.conversation_state()</code></strong> — today&#x27;s shared-session</li></ul>
+<p>exchanges (oldest first) via a read-only probe.</p>
+<ul><li><strong><code>GET /api/conversation</code></strong> — the server route.</li><li><strong>Chat hydrate</strong> — the dashboard fetches `<code>/api/conversation</code>` on</li></ul>
+<p>load and renders the shared thread into the chat log (with a</p>
+<p>&quot;↳ resuming today&#x27;s shared conversation&quot; note), so a conversation</p>
+<p>started in the terminal continues *visibly* in the browser. The chat</p>
+<p>still sends through `<code>/api/talk</code><code> → the same </code><code>nl_router</code>` brain.</p>
+<h3>Slice 3 — ambient push reaches every surface</h3>
+<p>Wave 11 gave us the bus + durable queue + web SSE. This wave wires the</p>
+<p>*surfaces* onto it:</p>
+<ul><li><strong>Wildcard subscribe</strong> — `<code>AmbientBus.subscribe(&quot;*&quot;, fn)</code>` delivers</li></ul>
+<p>every event (topic-specific subscribers still work unchanged). A</p>
+<p>surface that wants all push traffic subscribes once instead of</p>
+<p>enumerating topics.</p>
+<ul><li><strong><code>speak_channel(speak_fn, min_priority=CRITICAL)</code></strong> — a voice</li></ul>
+<p>channel that speaks events at/above CRITICAL via the pipeline&#x27;s TTS.</p>
+<ul><li><strong><code>desktop_channel(notify_fn, min_priority=IMPORTANT)</code></strong> — a desktop</li></ul>
+<p>channel that raises a banner for IMPORTANT+ events.</p>
+<ul><li><strong>Daemon wiring</strong> — ``AmbientWorker.wire_channels(speak_fn,</li></ul>
+<p>notify_fn)`` subscribes the live voice pipeline and desktop notifier</p>
+<p>to the shared bus (when present; missing surfaces degrade silently).</p>
+<p>The web SSE stream and the mobile push transport already read the</p>
+<p>durable queue directly.</p>
+<h3>Slice 4 — mobile transport via the durable queue</h3>
+<p>The phone becomes another surface of the *same* Friday:</p>
+<ul><li><strong><code>mobile/push.py</code></strong> — `<code>PushNotificationService</code>`: a durable-queue</li></ul>
+<p>consumer that replays `<code>ambient_events_since(cursor)</code>` to a pluggable</p>
+<p>transporter (`<code>file_transporter</code>` writes a JSONL outbox for</p>
+<p>tests/offline inspection; a companion app plugs FCM/APNS/webhook in).</p>
+<p>The rowid cursor persists across restarts (a reconnecting phone</p>
+<p>misses nothing; <strong>sequential</strong> consumers re-deliver nothing — the</p>
+<p>CLI and the daemon share one cursor file, so concurrent manual+</p>
+<p>daemon drains are advisory-only, never a source of duplicates in</p>
+<p>normal use); a failing transporter never wedges the queue;</p>
+<p>`<code>min_priority</code>` filters what&#x27;s *pushed* while the cursor still</p>
+<p>advances.</p>
+<ul><li><strong><code>mobile/api.py</code></strong> — `<code>MobileAPI</code><code> + </code><code>create_api_server</code>`: a</li></ul>
+<p>pure-stdlib HTTP server for the companion —</p>
+<p>`<code>GET /api/status</code><code>, </code><code>GET /api/conversation</code>` (the shared thread),</p>
+<p>`<code>POST /api/talk</code><code> (the same </code><code>nl_router</code>` brain — one command</p>
+<p>language everywhere), and `<code>GET /api/events</code>` (SSE over the durable</p>
+<p>queue, replayable since a cursor).</p>
+<ul><li><strong><code>friday4 mobile serve|push</code></strong> — run the companion API</li></ul>
+<p>(`<code>friday4 mobile serve --port 8900</code>`) or drain the queue to the</p>
+<p>transporter (`<code>friday4 mobile push --once</code><code>). The unified </code>`friday4</p>
+<p>status`<code> gains a </code><code>mobile</code>` row.</p>
+<ul><li><strong><code>mobile/__init__.py</code></strong> — the Wave 7 stub is closed: real exports,</li></ul>
+<p>`<code>is_available()</code>` → True.</p>
+<hr>
+<h2>3. Wiring table (the Wiring Law)</h2>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>o</th><th>n</th><th>s</th><th>u</th><th>m</th><th>e</th><th>r</th><th></th><th>|</th><th></th><th>W</th><th>i</th><th>r</th><th>e</th><th>d</th><th>?</th><th></th><th>|</th><th></th><th>H</th><th>o</th><th>w</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>friday4 talk</code> (nl_router <code>_log_exchange</code>)</td><td>✅</td><td>shared session</td><td></td></tr><tr><td></td><td><code>friday4 ask</code> (cli_ask <code>_log_exchange</code>)</td><td>✅</td><td>shared session</td><td></td></tr><tr><td></td><td>Voice (<code>VoiceRouter</code> → <code>TextCommandHandler</code>)</td><td>✅ (inherited)</td><td>shared session via nl_router</td><td></td></tr><tr><td></td><td>Web chat (<code>web/dashboard</code> → <code>nl_router</code>)</td><td>✅ (inherited)</td><td>shared session via nl_router + <strong>chat hydrate</strong></td><td></td></tr><tr><td></td><td>Mobile talk (<code>mobile/api</code> → <code>nl_router</code>)</td><td>✅</td><td>shared session via nl_router</td><td></td></tr><tr><td></td><td>Persona learning (<code>record_statement</code>)</td><td>✅</td><td>shared session</td><td></td></tr><tr><td></td><td>Reasoning <code>conversation_provider</code></td><td>✅</td><td>time-window recall + <code>recent_exchanges_since</code></td><td></td></tr><tr><td></td><td>Question classifier</td><td>✅</td><td>CONVERSATION precedes ACTIVITY</td><td></td></tr><tr><td></td><td>Web SSE (<code>/api/events</code>)</td><td>✅ (Wave 11)</td><td>durable queue</td><td></td></tr><tr><td></td><td>Voice channel (speak CRITICAL)</td><td>✅</td><td><code>speak_channel</code> via <code>AmbientWorker.wire_channels</code></td><td></td></tr><tr><td></td><td>Desktop channel (banner IMPORTANT+)</td><td>✅</td><td><code>desktop_channel</code> via <code>AmbientWorker.wire_channels</code></td><td></td></tr><tr><td></td><td>Mobile push (durable queue)</td><td>✅</td><td><code>PushNotificationService</code> + <code>/api/events</code> SSE</td><td></td></tr><tr><td></td><td><strong>Mobile push on a schedule</strong></td><td>✅</td><td>daemon <code>MobilePushWorker</code> (drains the queue every <code>mobile_push_interval</code>, persisted cursor)</td><td></td></tr><tr><td></td><td><strong>Operator-configurable destination</strong></td><td>✅</td><td><code>--mobile-push-hook &quot;&lt;cmd&gt;&quot;</code> / <code>--mobile-push-file &lt;path&gt;</code> (CLI) <strong>or</strong> <code>mobile_push</code> section of <code>~/.friday/v4_config.json</code> (<code>hook</code>/<code>file_path</code>/<code>interval</code>/<code>priority</code>/<code>enabled</code>) <strong>or</strong> <code>FRIDAY_V4_MOBILE_PUSH_*</code> env — the daemon&#x27;s worker pipes each notification&#x27;s JSON to the hook&#x27;s stdin / appends it to the outbox</td><td></td></tr><tr><td></td><td><code>friday4 mobile</code> CLI + <code>status</code> probe</td><td>✅</td><td><code>cli_mobile</code> + <code>_probe_mobile</code></td><td></td></tr><tr><td></td><td><code>friday4 daemon start</code> mobile flags</td><td>✅</td><td><code>--no-mobile-push</code> · <code>--mobile-push-interval</code> · <code>--mobile-push-priority</code> · <code>--mobile-push-hook</code> · <code>--mobile-push-file</code></td><td></td></tr></tbody></table>
+<p><strong>Checklist:</strong> every entry point reaches the shared thread (talk / ask /</p>
+<p>voice / web / mobile) ✅ · time-driven daemon work (surface channel</p>
+<p>wiring) ✅ · reasoning cites the new state (windowed recall) ✅ ·</p>
+<p>CLI surface (<code>friday4 mobile serve|push</code>) ✅ · hermetic tests ✅.</p>
+<hr>
+<h2>4. MCU test (Law 10, five-moment continuity)</h2>
+<blockquote>&quot;what did we talk about this morning?&quot; — from <strong>voice</strong> — returns the</blockquote>
+<blockquote>conversation that happened in the <strong>terminal</strong> this morning.</blockquote>
+<p>Verified end-to-end in <code>tests/test_wave15_one_presence.py</code></p>
+<p>(<code>TestMcuOnePresence.test_terminal_conversation_recalled_from_voice</code>):</p>
+<p>a terminal utterance this morning → a voice-surface ask → the reasoning</p>
+<p>conversation provider cites the terminal exchange</p>
+<p>(`<code>v4.exchanges</code>` evidence).</p>
+<p><strong>One presence proven across every surface:</strong> <code>TestWebConversation</code></p>
+<p>shows the terminal thread hydrating the *browser*; <code>TestMobileAPI</code></p>
+<p>shows the terminal thread read from the *phone*; <code>TestSharedSession</code></p>
+<p>shows talk + voice + persona all appending to ONE row.</p>
+<hr>
+<h2>5. What actually shipped (close-out)</h2>
+<p><strong>Slice 1 — shared context session:</strong></p>
+<p>1. <strong><code>db.get_or_create_shared_session(conn, now=None)</code></strong> — the one</p>
+<p>presence: one `<code>surface=&#x27;shared&#x27;</code>` session per UTC day, created on</p>
+<p>first use; lexical day comparison; deterministic `<code>now</code>`.</p>
+<p>2. <strong><code>db.recent_exchanges_since(conn, since, until=None, limit)</code></strong> —</p>
+<p>the time-window conversation query (newest first, exclusive end).</p>
+<p>3. **<code>_conversation_window(text, now=None)</code> + windowed</p>
+<p><code>conversation_provider</code>** — &quot;this morning/afternoon/evening/tonight/</p>
+<p>today/yesterday/last night/this week/last week&quot;; empty window stays</p>
+<p>an honest unknown.</p>
+<p>4. <strong>Classifier reorder</strong> — CONVERSATION precedes ACTIVITY.</p>
+<p>5. <strong>Shared-session loggers</strong> — <code>nl_router</code>, <code>cli_ask</code>,</p>
+<p><code>persona/learn.record_statement</code>.</p>
+<p><strong>Slice 2 — web chat polish:</strong></p>
+<p>6. **<code>web/dashboard.conversation_state()</code> + <code>GET /api/conversation</code> +</p>
+<p>chat hydrate** — the browser resumes today&#x27;s shared thread.</p>
+<p><strong>Slice 3 — ambient push to every surface:</strong></p>
+<p>7. **<code>AmbientBus.subscribe(&quot;*&quot;)</code> wildcard** — surface-wide push.</p>
+<p>8. <strong><code>speak_channel</code> / <code>desktop_channel</code> builders</strong> — voice + desktop</p>
+<p>surface channels (priority-gated, guarded).</p>
+<p>9. <strong><code>AmbientWorker.wire_channels</code></strong> — the daemon subscribes the live</p>
+<p>voice pipeline and desktop notifier to the shared bus.</p>
+<p><strong>Slice 4 — mobile transport:</strong></p>
+<p>10. <strong><code>mobile/push.py</code></strong> — <code>PushNotificationService</code> (cursor-persisted</p>
+<p>durable-queue consumer), <code>file_transporter</code> JSONL outbox.</p>
+<p>11. <strong><code>mobile/api.py</code></strong> — <code>MobileAPI</code> + <code>create_api_server</code> (status /</p>
+<p>conversation / talk / SSE).</p>
+<p>12. <strong><code>mobile/__init__.py</code></strong> — stub closed, <code>is_available()</code> → True.</p>
+<p>13. <strong><code>cli_mobile.py</code></strong> — <code>friday4 mobile serve|push</code>; wired into the</p>
+<p>integrated CLI + <code>_SUBCOMMANDS</code> + <code>_probe_mobile</code> status row.</p>
+<p>14. <strong><code>daemon.MobilePushWorker</code></strong> — the phone gets pushed *without</p>
+<p>manual <code>friday4 mobile push</code>*: a scheduled component that drains</p>
+<p>the durable queue every `<code>mobile_push_interval</code>` (default 60s),</p>
+<p>wrapping `<code>PushNotificationService</code>` with the same injectable</p>
+<p>transporter/priority/state-file/db-path, `<code>last_report</code>` for</p>
+<p>status, and the never-crash contract. `<code>DaemonConfig</code>` gains</p>
+<p>`<code>mobile_push</code><code> / </code><code>mobile_push_interval</code>` /</p>
+<p>`<code>mobile_push_priority</code><code>; </code><code>friday4 daemon start</code>` gains</p>
+<p>`<code>--no-mobile-push</code><code> / </code><code>--mobile-push-interval</code>` /</p>
+<p>`<code>--mobile-push-priority</code><code>; the daemon status row </code><code>mobile</code>`</p>
+<p>reports it. <strong>Priority default:</strong> 0 (push everything, including</p>
+<p>the ROUTINE briefing — the phone is a full surface); set</p>
+<p>`<code>--mobile-push-priority 1</code>` to push only IMPORTANT+ events.</p>
+<p>`<code>friday4 mobile push</code>` prints an informational hint when the</p>
+<p>daemon is running (the daemon owns the schedule; the CLI stays a</p>
+<p>manual hatch).</p>
+<p>15. <strong>Operator-configurable push hook (close-out 2):</strong></p>
+<p>`<code>mobile/push.command_transporter(command)</code>` — a transporter that</p>
+<p>pipes each notification&#x27;s JSON to a <strong>shell command&#x27;s stdin</strong> (the</p>
+<p>operator&#x27;s own destination: `<code>curl -s -X POST -d @-</code>`</p>
+<p>https://ntfy.sh/…, `<code>cat &gt;&gt; ~/friday-push.log</code>`, …); never</p>
+<p>raises (missing binary / nonzero exit / timeout log and the poll</p>
+<p>continues). `<code>config.MobilePushConfig</code><code> — the </code><code>mobile_push</code>`</p>
+<p>section of `<code>~/.friday/v4_config.json</code><code> (</code><code>hook</code><code> / </code><code>file_path</code>`</p>
+<p>/ `<code>interval</code><code> / </code><code>priority</code><code> / </code><code>enabled</code><code>) + </code><code>FRIDAY_V4_MOBILE_PUSH_*</code>`</p>
+<p>env overrides. `<code>MobilePushWorker(hook=…, file_path=…)</code>` — an</p>
+<p>explicit injected transporter wins, then hook, then file_path,</p>
+<p>then the default logger. `<code>friday4 daemon start</code>` gains</p>
+<p>`<code>--mobile-push-hook</code><code> / </code><code>--mobile-push-file</code>` (CLI flags win;</p>
+<p>the config file fills the rest).</p>
+<p><strong>Tests:</strong> <code>tests/test_wave15_one_presence.py</code> (13 hermetic — slice 1)</p>
+<p>+ <code>tests/test_wave15_transport.py</code> (38 hermetic — slices 2–4: push</p>
+<p>cursor/replay/filter/restart, companion API + HTTP server, web</p>
+<p>hydrate, wildcard subscribe, surface channels, daemon wiring, the</p>
+<p>scheduled <code>MobilePushWorker</code> — deliver / graceful / lifecycle /</p>
+<p>status row / builds-when-enabled / disables-when-flagged /</p>
+<p>shutdown-stops — <strong>and the hook suite</strong> — stdin JSON delivery,</p>
+<p>missing-binary never-crashes, timeout-bounded, worker hook / file_path</p>
+<p>wiring, injected-transporter-wins). Full suite green.</p>
+<hr>
+<h2>6. What we learned</h2>
+<ul><li><strong>Lexical day comparison beats SQLite date()</strong> — timestamps carry</li></ul>
+<p>microseconds and a UTC offset; `<code>substr(created_at, 1, 10)</code>` is</p>
+<p>bulletproof and index-friendly.</p>
+<ul><li><strong>The engine&#x27;s never-crash guard hid a bug</strong> — a missing `<code>datetime</code>`</li></ul>
+<p>import in the provider surfaced as &quot;I don&#x27;t know yet&quot; (the engine</p>
+<p>swallowed the exception). The window-bounds unit test caught it; the</p>
+<p>lesson is that providers must be unit-tested directly, not only</p>
+<p>through `<code>answer()</code>`.</p>
+<ul><li><strong>One-session-per-day is a feature for depth</strong> — relationship depth</li></ul>
+<p>ignores session count, and a daily thread makes &quot;this morning&quot; a real</p>
+<p>query boundary rather than an arbitrary last-N slice.</p>
+<ul><li><strong>A durable queue is the natural mobile transport</strong> — the phone</li></ul>
+<p>doesn&#x27;t need a bespoke push service: the same rowid-cursor replay the</p>
+<p>web SSE uses gives a companion &quot;miss nothing, re-deliver nothing&quot;</p>
+<p>semantics for free, and a pluggable transporter keeps FCM/APNS an</p>
+<p>app-side detail.</p>
+<ul><li><strong>Status probes are part of the CLI contract</strong> — adding a subsystem</li></ul>
+<p>probe changes the &quot;All subsystems ready&quot; outcome; the status test</p>
+<p>must stub it like every other probe.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

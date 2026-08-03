@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 11 Research Reflection — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 11 Research Reflection</h1>
+<h1>Friday V4 — Wave 11: Research &amp; Reflection (Friday Reasons Across Your World)</h1>
+<blockquote><strong>Parent:</strong> PLAN.md · <strong>Sibling docs:</strong> WAVE_9_AGENCY_CORE.md,</blockquote>
+<blockquote>WAVE_10_MEMORY_IDENTITY.md</blockquote>
+<blockquote><strong>Context:</strong> Solo developer, hygiene-first. Waves 9–10 gave Friday a brain</blockquote>
+<blockquote>and a relationship; Wave 11 gives it *depth* — analysis, synthesis, briefings,</blockquote>
+<blockquote>and ambient push.</blockquote>
+<blockquote><strong>Estimate:</strong> 5–6 weeks solo.</blockquote>
+<blockquote><strong>Prereqs:</strong> ✅ SHIPPED — Wave 9 <code>reasoning/</code> (evidence engine, 6</blockquote>
+<blockquote>providers) and Wave 10 <code>memory/</code> both exist; this wave&#x27;s architecture</blockquote>
+<blockquote>diagram already references them as inputs.</blockquote>
+<hr>
+<h2>1. Why This Wave Exists</h2>
+<p>The MCU Friday doesn&#x27;t just answer — it **already did the research before you</p>
+<p>asked**:</p>
+<blockquote>🎤 &quot;Friday, analyze the integration cost between vivaha and MindWell.&quot;</blockquote>
+<blockquote>🎧 &quot;I already did that last week. Shared auth would save ~3 days. The</blockquote>
+<blockquote>main risk is MindWell&#x27;s custom session handling. Want the full breakdown?&quot;</blockquote>
+<p>V3 had these capabilities (<code>architecture.py</code> 1.3K LOC, <code>cross_project.py</code>,</p>
+<p><code>synthesis.py</code>, <code>briefing.py</code>, <code>narrative.py</code>) — but as yet another set of</p>
+<p>CLI-first monoliths with no voice/ambient wiring. Wave 11 rebuilds them as</p>
+<p>clean, V4-native analysis modules **surfaced through the surfaces built in</p>
+<p>Waves 1–8** (voice, web dashboard, desktop notifications).</p>
+<p>This wave also fixes the last architectural gap from the original analysis:</p>
+<p><strong>polling everywhere</strong>. Ambient push replaces poll loops with real-time</p>
+<p>delivery.</p>
+<hr>
+<h2>2. Architecture</h2>
+<pre><code class="language-">        ┌─────────────────────────────────────────────┐
+        │              AMBIENT PUSH                    │
+        │  voice · desktop notify · web dashboard      │
+        └──────────────┬──────────────────────────────┘
+                       │  push_event / subscribe
+        ┌──────────────▼──────────────────────────────┐
+        │          research/  (analysis core)          │
+        │  architecture · cross_project · impact       │
+        └──────────────┬──────────────────────────────┘
+                       │  findings
+        ┌──────────────▼──────────────────────────────┐
+        │          synthesis/  (answers &amp; briefings)   │
+        │  synthesis · briefing · narrative            │
+        └──────────────┬──────────────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────────────┐
+        │      reasoning/  (Wave 9) · memory/ (Wave 10)│
+        └──────────────┬──────────────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────────────┐
+        │               db.py  (V4 state)             │
+        └─────────────────────────────────────────────┘</code></pre>
+<hr>
+<h2>3. Deliverables</h2>
+<h3>3.1 Research &amp; Analysis (<code>friday_v4/research/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>architecture.py</code></td><td>per-repo tech/structure/quality analysis (V3 <code>architecture.py</code> concept)</td><td></td></tr><tr><td></td><td><code>cross_project.py</code></td><td>correlation + integration-cost estimates between projects (V3 <code>cross_project.py</code>)</td><td></td></tr><tr><td></td><td><code>impact.py</code></td><td>change impact analysis (V3 <code>impact.py</code>)</td><td></td></tr><tr><td></td><td><code>code_search.py</code></td><td>cross-repo code search (V3 <code>code_search.py</code>)</td><td></td></tr><tr><td></td><td><code>readme.py</code></td><td>repo purpose recovery from READMEs (V3 <code>readme.py</code>)</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>architecture.py</code>, <code>cross_project.py</code>, <code>impact.py</code>,</p>
+<p><code>code_search.py</code>, <code>readme.py</code>, <code>portfolio.py</code> (meaningful_overlap).</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Analysis is <strong>evidence-cited</strong> (feeds the Wave 9 evidence engine) — every</li></ul>
+<p>claim carries the repo/file/line it came from.</p>
+<ul><li>Integration-cost estimates are <strong>range + confidence</strong>, never false precision</li></ul>
+<p>(&quot;~3 days, confidence: medium&quot;).</p>
+<ul><li>Analysis runs are cached with invalidation (repo hash + time) — Friday</li></ul>
+<p>&quot;already did that&quot; only when it actually did.</p>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;Friday, analyze the integration cost between vivaha and MindWell.&quot;
+🎧 [Friday]: &quot;I analyzed both repos last week. Shared auth would save ~3
+             days of duplicated work. Main risk: MindWell&#x27;s custom session
+             handling diverges from vivaha&#x27;s. Full breakdown:
+             [2 files overlap · 1 divergence · estimate medium-confidence]&quot;</code></pre>
+<h3>3.2 Synthesis (<code>friday_v4/synthesis/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>synthesis.py</code></td><td>synthesize findings into structured answers/briefings (V3 <code>synthesis.py</code>)</td><td></td></tr><tr><td></td><td><code>reports.py</code></td><td>generate daily/weekly reports (V3 <code>reports.py</code>)</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>synthesis.py</code>, <code>cli_synthesize.py</code>,</p>
+<p><code>presentation/reports.py</code>.</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Synthesis is <strong>composition of evidence</strong>, never invention: every paragraph</li></ul>
+<p>maps to cited findings.</p>
+<ul><li>Reports are deterministic given the same evidence set (testable).</li></ul>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎤 [You]: &quot;Wrap it up for the day.&quot;
+🎧 [Friday]: &quot;Here&#x27;s your day: 4 files edited, 12 tests passing,
+             1 PR reviewed and merged, 2 vulnerabilities fixed.
+             I&#x27;ll run full security scans overnight.&quot;</code></pre>
+<h3>3.3 Briefings (<code>friday_v4/briefing/</code>)</h3>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>briefing.py</code></td><td>morning/evening briefings from real V4 state (V3 <code>briefing.py</code> concept)</td><td></td></tr><tr><td></td><td><code>narrative.py</code></td><td>day narrative / timeline (V3 <code>narrative.py</code> concept)</td><td></td></tr></tbody></table>
+<p><strong>Design reference:</strong> V3 <code>briefing.py</code>, <code>narrative.py</code>.</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Briefings are built from <strong>real V4 state</strong> (missions, security findings,</li></ul>
+<p>drift, memory) — never template fluff.</p>
+<ul><li>Length adapts to relationship depth + time of day (Wave 10 tone rules).</li><li>Briefings are *offered*, never forced — ambient-not-intrusive.</li></ul>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">🎧 [Friday]: &quot;Good morning. While you were away, codebuff had 8 commits.
+             Aether&#x27;s build is failing on main — type error in the scheduler.
+             MindWell has 2 high-severity vulnerabilities. Want the walkthrough?&quot;</code></pre>
+<h3>3.4 Ambient Push (<code>friday_v4/ambient/</code>)</h3>
+<p>The final architectural fix: <strong>real-time push instead of polling</strong>.</p>
+<table><thead><tr><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>P</th><th>u</th><th>r</th><th>p</th><th>o</th><th>s</th><th>e</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>bus.py</code></td><td>in-process event bus (subscribe/publish)</td><td></td></tr><tr><td></td><td><code>channels.py</code></td><td>fan-out to voice (speak), desktop (notify), web (SSE/WS)</td><td></td></tr><tr><td></td><td><code>queue.py</code></td><td>durable event queue with replay on reconnect</td><td></td></tr></tbody></table>
+<p><strong>⚠️ Naming note:</strong> V4 already talks about &quot;the ambient feed&quot; everywhere</p>
+<p>(the web dashboard, <code>desktop/notifier.py</code> polling V3&#x27;s <code>friday.ambient</code>).</p>
+<p>This V4 <code>ambient/</code> package is an <strong>in-process event bus</strong>, not the V3 feed.</p>
+<p>If the collision confuses, rename to <code>events/</code> or <code>bus/</code>.</p>
+<p><strong>Design reference:</strong> V3 <code>ambient.py</code> (event feed model), <code>event_bus.py</code>,</p>
+<p><code>notification.py</code> — rebuilt V4-native with a clean in-process bus.</p>
+<p><strong>Key Rules:</strong></p>
+<ul><li>Components publish typed events; channels subscribe — no direct coupling.</li><li>Events are queued durably (V4 DB) so a disconnected surface (mobile later,</li></ul>
+<p>web tab closed) replays on reconnect.</p>
+<ul><li>Priority-aware: critical events interrupt; routine events queue for the</li></ul>
+<p>next briefing.</p>
+<p><strong>MCU Friday Feel:</strong></p>
+<pre><code class="language-">📱 [Phone buzzes — Friday notification]: &quot;Your CI failed on feature/auth.
+   3 tests failed. Review on desktop?&quot;
+   → Friday follows you everywhere. (Mobile app still a future wave; the
+     push transport is ready now.)</code></pre>
+<hr>
+<h2>4. File Count &amp; CLI</h2>
+<ul><li><strong>~15 source files</strong> + <strong>~10 test files</strong> across 4 new packages</li></ul>
+<p>(<code>research/</code>, <code>synthesis/</code>, <code>briefing/</code>, <code>ambient/</code>).</p>
+<ul><li>CLI wiring: <code>friday4 analyze &lt;repo&gt;</code>, <code>friday4 correlate &lt;a&gt; &lt;b&gt;</code>,</li></ul>
+<p><code>friday4 briefing morning|evening</code>, <code>friday4 narrative</code>, <code>friday4 report</code>.</p>
+<hr>
+<h2>5. Test Strategy</h2>
+<ul><li><strong>research/:</strong> fixture repos with known structure → analysis assertions;</li></ul>
+<p>integration-cost estimates are range+confidence; cache invalidation.</p>
+<ul><li><strong>synthesis/:</strong> determinism (same evidence → same report); citation integrity.</li><li><strong>briefing/:</strong> briefings reflect real state; tone adapts to depth/time-of-day.</li><li><strong>ambient/:</strong> bus fan-out, durable queue replay, priority gating.</li></ul>
+<p>Target: <strong>+80 tests</strong> (V4 suite → ~680).</p>
+<hr>
+<h2>6. Risks</h2>
+<table><thead><tr><th>|</th><th></th><th>R</th><th>i</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>L</th><th>i</th><th>k</th><th>e</th><th>l</th><th>i</th><th>h</th><th>o</th><th>o</th><th>d</th><th></th><th>|</th><th></th><th>I</th><th>m</th><th>p</th><th>a</th><th>c</th><th>t</th><th></th><th>|</th><th></th><th>M</th><th>i</th><th>t</th><th>i</th><th>g</th><th>a</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Analysis noise (too many correlations)</td><td>High</td><td>Medium</td><td>Confidence thresholds, dedup, briefing-gating</td><td></td></tr><tr><td></td><td>Integration-cost overclaim</td><td>Medium</td><td>High</td><td>Range + confidence, evidence-cited</td><td></td></tr><tr><td></td><td>Push spam</td><td>High</td><td>Medium</td><td>Priority gating + durable queue + relationship-aware volume</td><td></td></tr><tr><td></td><td>Cache staleness</td><td>Medium</td><td>Low</td><td>Repo-hash + time invalidation</td><td></td></tr></tbody></table>
+<hr>
+<h2>7. Success Criteria</h2>
+<p>1. &quot;Friday, analyze the integration cost between X and Y&quot; → cited, ranged estimate. ✅</p>
+<p>2. Morning briefing reflects real state (missions, security, drift) and adapts tone. ✅</p>
+<p>3. Events push to voice/desktop/web in real time; disconnected surfaces replay. ✅ (SSE <code>/api/events</code> + durable queue)</p>
+<p>4. Reports are deterministic and evidence-cited. ✅ (incl. <code>report --daily/--weekly</code>)</p>
+<p>5. Zero V3 imports (except <code>v3source.py</code>), hermetic tests, ~680 total. ✅ (suite now ~800)</p>
+<hr>
+<h2>8. Wave Map (9 → 10 → 11)</h2>
+<table><thead><tr><th>|</th><th></th><th>W</th><th>a</th><th>v</th><th>e</th><th></th><th>|</th><th></th><th>B</th><th>u</th><th>i</th><th>l</th><th>d</th><th>s</th><th></th><th>|</th><th></th><th>M</th><th>C</th><th>U</th><th></th><th>F</th><th>e</th><th>e</th><th>l</th><th>i</th><th>n</th><th>g</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>9</td><td>DB, NLU, reasoning, missions, execution</td><td>🤖 *Friday actually does things*</td><td></td></tr><tr><td></td><td>10</td><td>memory, persona, relationship, skills</td><td>👤 *Friday knows you*</td><td></td></tr><tr><td></td><td>11</td><td>research, synthesis, briefings, ambient push</td><td>🔬 *Friday reasons across your world*</td><td></td></tr></tbody></table>
+<p>After Wave 11, the original 8-wave roadmap&#x27;s <strong>Wave 8 (Polish &amp; Scale)</strong> is</p>
+<p><strong>renumbered to Wave 12</strong> and moved after the new waves — now with a complete</p>
+<p>product to polish (benchmarks, docs site, installer, migration guide, 500+</p>
+<p>test goal superseded by ~680).</p>
+<p><strong>⚠️ Bookkeeping:</strong> ✅ DONE — ROADMAP.md now lists Waves 9–11 with Polish</p>
+<p>renumbered to Wave 12, and Waves 9–10 marked shipped. The <code>network/</code> stub</p>
+<p>(SSH/webhook/cloud, no wave assigned) gets its explicit decision here:</p>
+<p><strong>kept as a stub, folded into Wave 12 Polish</strong> (network executors depend</p>
+<p>on the Wave 9 <code>execution/</code> sandbox/gate/audit contract, which is stable</p>
+<p>now — SSH/file/cloud executors slot into <code>executors.py</code> without a new</p>
+<p>wave). Not archived: it&#x27;s a documented extension point for <code>execution/</code>.</p>
+<hr>
+<p>*This completes the MCU capability map: voice, desktop control, security,</p>
+<p>ambient awareness, learning, research, mission control, and personality — all</p>
+<p>V4-native, stdlib-first, and hermetic-tested. The shell from Waves 1–8 and the</p>
+<p>mind from Waves 9–11 are finally one product.*</p>
+<hr>
+<h2>9. What Actually Shipped (close-out, 2026-08)</h2>
+<p><strong>Status: ✅ SHIPPED.</strong> Wave 11&#x27;s four packages, CLI, and daemon wiring are</p>
+<p>built, tested, and pushed onto the shared ambient bus. The close-out added the</p>
+<p>design&#x27;s remaining surfaces and the push wiring (push replaces polling):</p>
+<table><thead><tr><th>|</th><th></th><th>D</th><th>e</th><th>l</th><th>i</th><th>v</th><th>e</th><th>r</th><th>a</th><th>b</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th><th></th><th>N</th><th>o</th><th>t</th><th>e</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>research/</code> (architecture, cross_project, impact, code_search, readme)</td><td>✅</td><td>evidence-cited, cached with invalidation</td><td></td></tr><tr><td></td><td><code>synthesis/synthesis.py</code> + <code>synthesis/reports.py</code></td><td>✅</td><td><code>reports.py</code> added in close-out: `friday4 research report --daily\</td><td>--weekly` from real V4 state</td><td></td></tr><tr><td></td><td><code>briefing/</code> (briefing, narrative)</td><td>✅</td><td>real state, tone-adapted by relationship depth</td><td></td></tr><tr><td></td><td><code>ambient/</code> (bus + durable queue in V4 DB, channels)</td><td>✅</td><td><code>queue.py</code> folded into <code>bus.py</code> (documented deviation)</td><td></td></tr><tr><td></td><td>CLI <code>analyze/correlate/briefing/narrative/report</code></td><td>✅</td><td><code>report --daily/--weekly</code> added</td><td></td></tr><tr><td></td><td><strong>Push wiring</strong> — security findings, suggestions, collab obs → shared bus</td><td>✅</td><td><code>SecurityScanner</code>, <code>ProactiveSuggestionChannel</code>, <code>Coordinator</code> all publish; daemon injects one shared bus</td><td></td></tr><tr><td></td><td><strong>Web SSE</strong> <code>GET /api/events</code> + dashboard EventSource</td><td>✅</td><td>durable-queue replay via <code>since</code> cursor; 10s poll kept as fallback</td><td></td></tr><tr><td></td><td>Tests</td><td>✅</td><td><code>test_wave11_closeout.py</code> + prior W11 tests; suite ~800</td><td></td></tr></tbody></table>
+<h3>Wiring status (the Wiring Law table)</h3>
+<ul><li>[x] <strong>Entry points</strong> — <code>friday4 research …</code> CLI + <code>report --daily/--weekly</code>; NL paths (ask/research) already route.</li><li>[x] <strong>Daemon schedules</strong> — <code>AmbientWorker</code> publishes briefings; security + suggestions publish findings/ideas onto the shared bus.</li><li>[x] <strong>Reasoning providers</strong> — Wave 9 providers unchanged (evidence floor); research feeds them richer evidence.</li><li>[x] <strong>Consumers</strong> — dashboard (<code>/api/ambient-events</code>, <code>/api/briefing</code>, new <code>/api/events</code> SSE) + briefing reads real state.</li><li>[x] <strong>Hermetic tests</strong> — green, <code>tmp_path</code>-hermetic.</li></ul>
+<h3>Deviations</h3>
+<ul><li><code>ambient/queue.py</code> (design §3.4) folded into <code>bus.py</code> — the durable queue</li></ul>
+<p>is a table in the V4 DB, owned by <code>AmbientBus</code>; a separate file added no</p>
+<p>value.</p>
+<ul><li>Web SSE uses the durable queue as the transport (polling the queue every</li></ul>
+<p>1s), not an in-process pub/sub — <code>friday4 web</code> runs in its own process, so</p>
+<p>the durable queue is the correct cross-process channel.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

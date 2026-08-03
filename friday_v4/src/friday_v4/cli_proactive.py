@@ -13,9 +13,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 import time
-from datetime import datetime
 
 logger = logging.getLogger("friday_v4.cli_proactive")
 
@@ -78,7 +76,8 @@ def cmd_proactive_status(args: argparse.Namespace) -> int:
         print(f"  App patterns: {patterns.get('app_transitions_learned', 0)}")
         print(f"  Sessions today: {stats.get('sessions_today', {}).get('session_count', 0)}")
         weekly = stats.get("sessions_this_week", {})
-        print(f"  This week:    {weekly.get('total_hours', 0)}h across {weekly.get('total_sessions', 0)} sessions")
+        print(f"  This week:    {weekly.get('total_hours', 0)}h across "
+              f"{weekly.get('total_sessions', 0)} sessions")
 
         # Active suggestions
         suggestions = engine.get_suggestions(force=True)
@@ -111,7 +110,8 @@ def cmd_proactive_suggest(args: argparse.Namespace) -> int:
         _print_logo()
 
         if not suggestions:
-            print(f"  {_DIM}No suggestions right now. FRIDAY is still learning your patterns.{_RESET}")
+            print(f"  {_DIM}No suggestions right now. FRIDAY is still "
+                  f"learning your patterns.{_RESET}")
             print()
             return 0
 
@@ -190,6 +190,34 @@ def cmd_proactive_learn(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_working_context() -> None:
+    """WorkingMemory.current_context() — the ephemeral 'right now' state.
+
+    Wiring Law: the memory layer's WorkingMemory is built, so the
+    briefing surface consumes it — "current task / waiting-on" context
+    is part of a real briefing, never a dead API. Degrades silently
+    (missing DB → no section).
+    """
+    try:
+        from . import db
+        from .memory import WorkingMemory
+        conn = db.connect()
+        try:
+            ctx = WorkingMemory(conn).current_context()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug(f"working context unavailable: {exc}")
+        return
+    if not ctx:
+        return
+    print(f"  {_BOLD}Working Memory{_RESET}")
+    print(f"  {_DIM}{'─' * 30}{_RESET}")
+    for line in ctx.splitlines()[1:]:
+        print(f"  {line}")
+    print()
+
+
 def cmd_proactive_brief(args: argparse.Namespace) -> int:
     """Get a briefing of what FRIDAY knows about your work context."""
     from .proactive import AnticipationEngine
@@ -208,13 +236,19 @@ def cmd_proactive_brief(args: argparse.Namespace) -> int:
         print(f"  {summary}")
         print()
 
+        # Ephemeral working memory (Wave 10) — what Friday is tracking
+        # right now (current task, waiting-on).
+        _print_working_context()
+
         # Session stats
         weekly = stats.get("sessions_this_week", {})
         today = stats.get("sessions_today", {})
         print(f"  {_BOLD}Activity{_RESET}")
         print(f"  {_DIM}{'─' * 30}{_RESET}")
-        print(f"  Today: {today.get('total_minutes', 0)} min ({today.get('session_count', 0)} sessions)")
-        print(f"  Week:  {weekly.get('total_hours', 0)} hours ({weekly.get('total_sessions', 0)} sessions)")
+        print(f"  Today: {today.get('total_minutes', 0)} min "
+              f"({today.get('session_count', 0)} sessions)")
+        print(f"  Week:  {weekly.get('total_hours', 0)} hours "
+              f"({weekly.get('total_sessions', 0)} sessions)")
         print()
 
         # Suggestions that passed priority filtering

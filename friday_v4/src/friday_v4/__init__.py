@@ -8,8 +8,11 @@ V4 builds on V3's frozen core with:
 - Security & quality scanning
 - Advanced intelligence (drift, anomaly, prediction)
 - Proactive anticipation
+- Gated, sandboxed, audited execution (Wave 9)
 
-V4 depends on V3 (friday package) but V3 never depends on V4.
+V4 is the product — its own daemon, CLI, config, state, and tests. V3 is
+optional legacy *data*, read through the read-only ``proactive/v3source.py``
+bridge when present; V4 never imports V3 code, and V3 never depends on V4.
 """
 
 __version__ = "0.1.0.dev0"
@@ -28,6 +31,15 @@ __all__ = [
     "intelligence",
     "network",
     "proactive",
+    "execution",
+    "understanding",
+    "missions",
+    "reasoning",
+    "memory",
+    "persona",
+    "relationship",
+    "skills",
+    "autonomy",
 ]
 
 # Lazy submodule loading — only import modules that exist
@@ -46,6 +58,15 @@ _SUBMODULES = {
     "intelligence",
     "network",
     "proactive",
+    "execution",
+    "understanding",
+    "missions",
+    "reasoning",
+    "memory",
+    "persona",
+    "relationship",
+    "skills",
+    "autonomy",
 }
 
 

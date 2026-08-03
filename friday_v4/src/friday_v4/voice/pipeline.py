@@ -13,12 +13,12 @@ import logging
 from typing import Callable, Optional
 
 from .core import (
-    PipelineConfig,
-    PipelineState,
-    VoiceEngine,
     OnError,
     OnStateChange,
     OnTranscription,
+    PipelineConfig,
+    PipelineState,
+    VoiceEngine,
 )
 
 logger = logging.getLogger("friday_v4.voice.pipeline")

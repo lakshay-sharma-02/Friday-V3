@@ -107,7 +107,7 @@ class GNOMEAdapter(DesktopAbstraction):
             parts = line.split(None, 4)
             if len(parts) < 4:
                 continue
-            win_id, desktop, host, app_class = parts[0], parts[1], parts[2], parts[3]
+            win_id, desktop, _host, app_class = parts[0], parts[1], parts[2], parts[3]
             title = parts[4] if len(parts) > 4 else ""
             try:
                 is_active = active_id is not None and int(win_id, 16) == active_id
@@ -177,7 +177,7 @@ class GNOMEAdapter(DesktopAbstraction):
                 capture_output=True, text=True, timeout=5,
             )
             # Response is (true, '...') or (false, '...')
-            m = re.search(r"^\((true|false),\s*'(.*)'\)\s*$", out.stdout or "", re.S)
+            m = re.search(r"^\((true|false),\s*'(.*)'\)\s*$", out.stdout or "", re.DOTALL)
             if m and m.group(1) == "true":
                 return m.group(2)
         except Exception as exc:
@@ -329,7 +329,8 @@ class GNOMEAdapter(DesktopAbstraction):
             js = (
                 "const a = global.get_window_actors().find(x => {"
                 "  const w = x.meta_window;"
-                f"  return w.get_wm_class() && w.get_wm_class().toLowerCase() === '{target.lower()}';"
+                f"  return w.get_wm_class() && w.get_wm_class().toLowerCase() "
+                f"=== '{target.lower()}';"
                 "});"
                 "if (a) { a.meta_window.activate(global.get_current_time()); 'ok' } else { 'miss' }"
             )

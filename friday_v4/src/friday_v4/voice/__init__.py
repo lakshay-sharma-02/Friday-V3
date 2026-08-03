@@ -8,13 +8,13 @@ Architecture:
 """
 
 from .audio import AudioStream, list_input_devices, list_output_devices
+from .chimes import get_chime, play_chime
 from .hotword import HotwordDetector
-from .pipeline import VoicePipeline, PipelineState, PipelineConfig
+from .pipeline import PipelineConfig, PipelineState, VoicePipeline
 from .router import VoiceRouter
 from .stt import SpeechToText, STTResult
 from .tts import TextToSpeech, TTSConfig, VoiceMode, auto_voice_mode
 from .vad import VoiceActivityDetector
-from .chimes import get_chime, play_chime
 
 __all__ = [
     "AudioStream",

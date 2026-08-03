@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migration Guide — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Migration Guide</h1>
+<h1>Friday V4 — Migration Guide (V3 → V4)</h1>
+<blockquote><strong>Wave 12 deliverable.</strong> V4 is the product; V3 is legacy heritage. This</blockquote>
+<blockquote>guide moves an existing V3 workspace to V4 with zero data loss and zero</blockquote>
+<blockquote>risk — V4 never writes V3&#x27;s DB, so nothing is destroyed.</blockquote>
+<hr>
+<h2>1. The mental model</h2>
+<table><thead><tr><th>|</th><th></th><th>|</th><th></th><th>V</th><th>3</th><th></th><th>(</th><th>`</th><th>f</th><th>r</th><th>i</th><th>d</th><th>a</th><th>y</th><th>`</th><th>)</th><th></th><th>|</th><th></th><th>V</th><th>4</th><th></th><th>(</th><th>`</th><th>f</th><th>r</th><th>i</th><th>d</th><th>a</th><th>y</th><th>4</th><th>`</th><th>)</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>CLI</td><td><code>friday …</code></td><td><code>friday4 …</code></td><td></td></tr><tr><td></td><td>State DB</td><td><code>~/.friday/friday.db</code></td><td><code>~/.friday/v4.db</code></td><td></td></tr><tr><td></td><td>Daemon</td><td><code>friday daemon</code></td><td><code>friday4 daemon</code></td><td></td></tr><tr><td></td><td>Relationship</td><td>the product (frozen)</td><td><strong>read-only heritage data</strong></td><td></td></tr></tbody></table>
+<p>V4 runs fully standalone. V3&#x27;s DB is optional legacy *data*: when present,</p>
+<p>V4&#x27;s <code>V3DataSource</code> (<code>proactive/v3source.py</code>) reads observations, actions,</p>
+<p>and ambient events <strong>read-only</strong> (<code>mode=ro</code>) and surfaces them in the web</p>
+<p>dashboard, anticipation, and briefings. Missing V3 → V4 works anyway.</p>
+<h2>2. Before you start</h2>
+<pre><code class="language-bash"># Back up V3 state (cheap insurance; V4 never touches it, but backup anyway)
+cp -r ~/.friday ~/.friday.bak-$(date +%F)</code></pre>
+<p>V3 and V4 can coexist: both read <code>~/.friday</code>, neither writes the other&#x27;s</p>
+<p>DB. There is no uninstall step for V3 required.</p>
+<h2>3. Install V4</h2>
+<pre><code class="language-bash">git clone &lt;your-v4-repo&gt; friday_v4 &amp;&amp; cd friday_v4
+./install.sh --full        # venv + pip install -e + doctor</code></pre>
+<p>Or by hand: <code>pip install -e .</code> (Python ≥ 3.12, pure-stdlib core).</p>
+<h2>4. Verify</h2>
+<pre><code class="language-bash">friday4 status      # all 10 subsystems, graceful ◐/✘ when absent
+friday4 doctor      # tool availability + last scan state
+friday4 web         # dashboard — the V3 bridge card shows live V3 data</code></pre>
+<h2>5. First-day migration checklist</h2>
+<table><thead><tr><th>|</th><th></th><th>V</th><th>3</th><th></th><th>h</th><th>a</th><th>b</th><th>i</th><th>t</th><th></th><th>|</th><th></th><th>V</th><th>4</th><th></th><th>r</th><th>e</th><th>p</th><th>l</th><th>a</th><th>c</th><th>e</th><th>m</th><th>e</th><th>n</th><th>t</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>friday talk</code></td><td><code>friday4 talk &quot;…&quot;</code> (NL brain: gate → sandbox → audit)</td><td></td></tr><tr><td></td><td><code>friday ask …</code></td><td><code>friday4 ask &quot;…&quot;</code> (evidence-cited, no fabrication)</td><td></td></tr><tr><td></td><td><code>friday daemon start</code></td><td><code>friday4 daemon start</code> (one process: observer, notifier, sampler, security, memory, skills, ambient push)</td><td></td></tr><tr><td></td><td><code>friday security scan</code></td><td><code>friday4 security scan [path] [--threshold high] [--json]</code></td><td></td></tr><tr><td></td><td>V3 ambient feed (written)</td><td><strong>read-only</strong> via the V3 bridge; V4 events push through <code>ambient/</code> (Wave 11)</td><td></td></tr><tr><td></td><td><code>friday memory …</code></td><td><code>friday4 memory store/recall/forget/list/status</code></td><td></td></tr><tr><td></td><td>V3 missions/executors</td><td><code>friday4 talk &quot;ship the auth refactor&quot;</code>, <code>friday4 execute &lt;type&gt; …</code></td><td></td></tr><tr><td></td><td>V3 CLI-only everything</td><td>Every capability has an NL path (Law 1) + CLI debug hatch</td><td></td></tr></tbody></table>
+<h2>6. What V4 does NOT do</h2>
+<ul><li>✗ Never imports <code>from friday import …</code> (single exception: read-only</li></ul>
+<p>sqlite access in <code>v3source.py</code>).</p>
+<ul><li>✗ Never shells into the V3 CLI.</li><li>✗ Never writes <code>~/.friday/friday.db</code>.</li><li>✗ Does not gate on V3&#x27;s tests or laws.</li></ul>
+<h2>7. Going back</h2>
+<p>You can&#x27;t &quot;lose&quot; V3 by migrating — V4 never writes V3 data. If you want to</p>
+<p>keep using V3 for a while, run both daemons side by side (they share only</p>
+<p>reads). When you&#x27;re ready, retire V3 with <code>rm -rf &lt;v3 install&gt;</code> — V4 keeps</p>
+<p>working, and its ambient feed simply shows fewer legacy events.</p>
+<h2>8. New V4 commands you&#x27;ll reach for</h2>
+<pre><code class="language-bash">friday4 talk &quot;git status&quot;                  # say it, Friday does it
+friday4 ask &quot;who am I&quot;                     # persona + memory, cited
+friday4 research analyze ~/Projects/x      # Wave 11 architecture analysis
+friday4 research correlate a b             # cross-project integration cost
+friday4 research briefing morning|evening  # real-state briefing
+friday4 research report --daily|--weekly   # deterministic cited reports
+friday4 execute ssh host &quot;df -h&quot;           # Wave 12 remote executor
+friday4 daemon start                       # ambient presence + push
+friday4 web                                # live dashboard</code></pre>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

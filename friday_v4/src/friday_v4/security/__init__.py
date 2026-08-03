@@ -1,39 +1,37 @@
-"""Security & Quality — Vulnerability scanning, secret detection, code quality.
+"""Security & Quality — vulnerability scanning, secret detection, quality gates.
 
-Adds proactive security monitoring to Friday's daemon cycle. Every change to
-a project triggers dependency auditing, secret scanning, and quality gate
-checks. Findings are pushed to V3's ambient feed as high-priority events.
+Wave 3 — implemented. Every scanner has a **built-in, pure-stdlib**
+implementation that always works (the machine has no pip-audit /
+trufflehog / ruff / bandit installed), plus **optional subprocess**
+integrations for those tools when they are present.
 
 Scanners:
-    - Dependency vulnerability: OSV.dev / Grype
-    - Secret detection: truffleHog / Gitleaks
-    - Quality gates: linters, formatters, type checkers
+    - DependencyAuditor   (``deps.py``)      curated advisory DB + optional pip-audit
+    - SecretDetector      (``secrets.py``)   regex/entropy scanning + optional trufflehog
+    - QualityGate         (``quality.py``)   AST checks + optional ruff/mypy
+    - VulnerabilityScanner (``scanner.py``)  orchestrates all three → SecurityReport
+    - SecurityReport      (``reporter.py``)  severity model, scoring, JSON
 
-**Status:** Wave 3 — not implemented yet. The imports below are guarded so
-importing this package never crashes the rest of Friday V4.
+Design laws (inherited from the rest of V4):
+    - Never crash: every external call is wrapped; missing tools degrade
+      silently to built-in checks.
+    - V4-native: findings are owned by V4 and surfaced via V4's own
+      channels (CLI, desktop notification). V3's DB is never written.
 """
 
 from __future__ import annotations
 
-try:
-    from .scanner import VulnerabilityScanner
-    from .secrets import SecretDetector
-    from .deps import DependencyAuditor
-    from .quality import QualityGate
-    from .reporter import SecurityReport, Finding
-    _SECURITY_AVAILABLE = True
-except ImportError:  # pragma: no cover - Wave 3 stub
-    VulnerabilityScanner = None  # type: ignore
-    SecretDetector = None  # type: ignore
-    DependencyAuditor = None  # type: ignore
-    QualityGate = None  # type: ignore
-    SecurityReport = None  # type: ignore
-    Finding = None  # type: ignore
-    _SECURITY_AVAILABLE = False
+from .deps import DependencyAuditor
+from .quality import QualityGate
+from .reporter import SEVERITY_ORDER, Finding, SecurityReport
+from .scanner import VulnerabilityScanner
+from .secrets import SecretDetector
+
+_SECURITY_AVAILABLE = True
 
 
 def is_available() -> bool:
-    """Whether the security & quality layer is implemented yet."""
+    """Whether the security & quality layer is implemented."""
     return _SECURITY_AVAILABLE
 
 
@@ -44,6 +42,7 @@ __all__ = [
     "QualityGate",
     "SecurityReport",
     "Finding",
+    "SEVERITY_ORDER",
     "is_available",
     "_SECURITY_AVAILABLE",
 ]
