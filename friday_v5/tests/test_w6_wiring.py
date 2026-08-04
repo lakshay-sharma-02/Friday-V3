@@ -24,3 +24,14 @@ def test_notifier_collision_disambiguates(tmp_path):
         p2 = n.notify("standup at 9am")
     assert p1 != p2
     assert len(list((tmp_path / "notices").glob("*.md"))) == 2
+
+
+def test_proactive_seen_mark_seen(tmp_path):
+    p = Proactive(vault_root=tmp_path, interval=0.05)
+    nid = 1700000000
+    (tmp_path / "notices").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "notices" / f"{nid}-hello.md").write_text("hi", encoding="utf-8")
+    assert p.seen() == set()
+    p.mark_seen(nid)
+    assert p.seen() == {nid}
+    assert p.check() == []  # already seen → no new

@@ -54,6 +54,14 @@ class Proactive:
         self._seen = {nid for nid in self._seen if str(nid) in seen}
         return out
 
+    def seen(self) -> set[int]:
+        """Ids of notices already surfaced (copy)."""
+        return set(self._seen)
+
+    def mark_seen(self, nid: int) -> None:
+        """Mark an id as seen without scanning (HUD pre-seeds)."""
+        self._seen.add(nid)
+
     def start(self) -> None:
         """Background poll thread (daemon, idempotent)."""
         if self._thread is not None and self._thread.is_alive():
@@ -63,6 +71,10 @@ class Proactive:
                                         name="friday-proactive",
                                         daemon=True)
         self._thread.start()
+
+    def start_watch(self) -> None:
+        """Alias — watch for new notices (same as start())."""
+        self.start()
 
     def stop(self) -> None:
         self._stop.set()
