@@ -122,11 +122,9 @@ class Vault:
         out: list[dict] = []
         for p in self.list_notices()[:n]:
             body = self.notice_text(p)
-            if not body:
-                continue
             out.append({
                 "id": int(p.stem.split("-")[0]),
-                "text": body,
+                "text": body or p.stem,
                 "path": str(p),
                 "at": p.stat().st_mtime,
             })

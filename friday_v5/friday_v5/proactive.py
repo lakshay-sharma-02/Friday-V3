@@ -13,19 +13,11 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from friday_v5.vault import Vault
+
 logger = logging.getLogger("friday_v5.proactive")
 
 OnNotice = Callable[[dict], None]
-
-
-def _notice_text(path: Path) -> str:
-    """Body of a notice file with its frontmatter lines dropped."""
-    try:
-        text = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return ""
-    return "\n".join(l for l in text
-                     if not l.startswith(("#", "- **"))).strip()
 
 
 class Proactive:
@@ -37,6 +29,7 @@ class Proactive:
             Path(__file__).resolve().parent.parent / "vault"
         self.notices_dir = self.root / "notices"
         self.notices_dir.mkdir(parents=True, exist_ok=True)
+        self._vault = Vault(self.root)
         self.interval = interval
         self.on_notice: Optional[OnNotice] = None
         self._seen: set[int] = set()
@@ -54,7 +47,7 @@ class Proactive:
             if nid in self._seen:
                 continue
             self._seen.add(nid)
-            out.append({"id": nid, "text": _notice_text(p) or p.stem,
+            out.append({"id": nid, "text": self._vault.notice_text(p) or p.stem,
                         "path": str(p)})
         # Drop stale ids so a fresh notice reusing an old timestamp
         # still gets picked up.
