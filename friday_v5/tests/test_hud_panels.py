@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from friday_v5.hud.schedule_panel import render_schedule
 from friday_v5.hud.activity_panel import render_activity
 from friday_v5.hud.notices_panel import render_notices
+from friday_v5.hud.permissions_panel import render_permissions
 
 
 def test_render_schedule_lines():
@@ -26,3 +27,8 @@ def test_render_activity_lines():
 def test_render_notices():
     out = render_notices([{"text": "standup at 9am"}])
     assert "standup at 9am" in out
+
+
+def test_render_permissions():
+    out = render_permissions([{"id": "abc", "summary": "run git status"}])
+    assert "abc" in out and "allow" in out
