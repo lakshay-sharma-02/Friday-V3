@@ -179,3 +179,13 @@ Each wave is independently verifiable (CLI, voice, HUD each run standalone).
 - DB, ambient bus, daemon workers (V4's DB-bound architecture).
 - Obsidian app integration (vault is plain files; Obsidian can open it, but
   V5 doesn't ship an Obsidian plugin).
+
+## Verified (2026-08-04)
+
+W2–W5 implemented: voice notifier (`voice/notifier.py`), vault notices +
+proactive poller (`proactive.py`), proactive skill, HUD parsers/widgets/app
+(`hud/`), `friday5 hud` entrypoint, `hud` pyproject extra, `packages=find`
+fix. Full suite green (35 tests); HUD degrades gracefully without Textual;
+`friday5 status` healthy (bridge unavailable = SDK not installed, never-crash
+law holds); notifier→vault→`latest_notices` round-trip verified; skills
+discoverable: execute, proactive, remember, research, schedule.
