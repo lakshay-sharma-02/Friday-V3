@@ -114,19 +114,32 @@ class Vault:
 
     def list_notices(self) -> list[Path]:
         """All notice files, newest first."""
-        return sorted(self.notices.glob("*.md"),
-                      key=lambda p: p.stat().st_mtime, reverse=True)
+        with_mtime: list[tuple[float, Path]] = []
+        for p in self.notices.glob("*.md"):
+            try:
+                with_mtime.append((p.stat().st_mtime, p))
+            except OSError:
+                continue  # deleted mid-scan — skip
+        return [p for _, p in sorted(with_mtime, reverse=True)]
 
     def latest_notices(self, n: int = 5) -> list[dict]:
         """The ``n`` newest notices as dicts: ``{id, text, path, at}``."""
         out: list[dict] = []
         for p in self.list_notices()[:n]:
+            try:
+                nid = int(p.stem.split("-")[0])
+            except (ValueError, IndexError):
+                continue  # non-conforming filename — skip
+            try:
+                at = p.stat().st_mtime
+            except OSError:
+                continue  # deleted mid-scan — skip
             body = self.notice_text(p)
             out.append({
-                "id": int(p.stem.split("-")[0]),
+                "id": nid,
                 "text": body or p.stem,
                 "path": str(p),
-                "at": p.stat().st_mtime,
+                "at": at,
             })
         return out
 
