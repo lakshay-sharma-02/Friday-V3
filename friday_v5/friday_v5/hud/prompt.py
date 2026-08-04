@@ -12,6 +12,14 @@ class PromptPanel(Vertical):
         super().__init__()
         self._engine = engine
         self._output = Static("")
+        self.on_output = None  # (text, final) → external (stream panel)
+
+    def push(self, text: str, final: bool) -> None:
+        """Forward a streamed engine chunk to the output + external."""
+        if self._output is not None:
+            self._output.update(f"friday: {text}")
+        if self.on_output is not None:
+            self.on_output((text, final))
 
     def compose(self):
         yield self._output

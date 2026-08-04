@@ -54,3 +54,15 @@ def test_render_stream_empty():
 def test_render_commands():
     out = render_commands()
     assert "ask" in out and "perm" in out and "end" in out and "quit" in out
+
+
+def test_prompt_panel_forwards_stream(tmp_path):
+    from friday_v5.hud.prompt import PromptPanel
+    engine = mock.Mock()
+    engine.vault = mock.Mock()
+    pp = PromptPanel(engine)
+    got = []
+    pp.on_output = got.append
+    pp.push("ok, added", final=True)
+    assert got == [("ok, added", True)]
+    assert pp._output is not None  # composed Static exists

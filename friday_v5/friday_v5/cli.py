@@ -236,10 +236,11 @@ def _cmd_hud(args) -> int:
     """Launch the Textual HUD."""
     try:
         from .hud import run_hud
+        from .voice.notifier import VoiceNotifier
     except Exception as exc:
         print(f"HUD unavailable: {exc}")
         return 1
-    return run_hud()
+    return run_hud(notifier=VoiceNotifier())
 
 
 def _cmd_end(args) -> int:
