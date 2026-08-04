@@ -232,6 +232,16 @@ def _cmd_voice_status(args) -> int:
     return 0
 
 
+def _cmd_hud(args) -> int:
+    """Launch the Textual HUD."""
+    try:
+        from .hud import run_hud
+    except Exception as exc:
+        print(f"HUD unavailable: {exc}")
+        return 1
+    return run_hud()
+
+
 def _cmd_end(args) -> int:
     engine = Engine(vault=Vault())
     res = engine.bridge.end()
@@ -303,6 +313,8 @@ def build_parser() -> argparse.ArgumentParser:
     tk.set_defaults(func=_cmd_talk)
     sub.add_parser("voice", help="hotword voice session").set_defaults(
         func=_cmd_voice)
+    sub.add_parser("hud", help="launch the Textual HUD").set_defaults(
+        func=_cmd_hud)
     sub.add_parser("voice-status", help="voice diagnostics").set_defaults(
         func=_cmd_voice_status)
 

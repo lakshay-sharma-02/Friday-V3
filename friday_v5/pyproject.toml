@@ -23,9 +23,10 @@ voice = [
     "openwakeword>=0.4",
 ]
 talk = ["keyboard"]
+hud = ["textual>=0.80", "psutil>=5.9"]
 
 [project.scripts]
 friday5 = "friday_v5.cli:main"
 
-[tool.setuptools]
-packages = ["friday_v5"]
+[tool.setuptools.packages.find]
+include = ["friday_v5*"]
