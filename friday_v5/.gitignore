@@ -1,0 +1,5 @@
+# Friday V5 — local state, not source
+vault/
+__pycache__/
+*.pyc
+.venv/
