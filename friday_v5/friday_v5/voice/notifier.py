@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from ..vault import DEFAULT_VAULT
+
 logger = logging.getLogger("friday_v5.voice.notifier")
 
 NOTICE_SLUG_RE = re.compile(r"[^a-z0-9-]+")
@@ -26,8 +28,7 @@ class VoiceNotifier:
     """Speak + persist one proactive notice."""
 
     def __init__(self, vault_root: Optional[Path | str] = None) -> None:
-        self.vault_root = Path(vault_root) if vault_root else \
-            Path(__file__).resolve().parent.parent.parent / "vault"
+        self.vault_root = Path(vault_root) if vault_root else DEFAULT_VAULT
         self.notices_dir = self.vault_root / "notices"
         self.notices_dir.mkdir(parents=True, exist_ok=True)
         self.speak: Callable[[str], bool] = lambda text: False
@@ -39,8 +40,13 @@ class VoiceNotifier:
         if not text:
             return None
         ts = int(time.time())
-        slug = NOTICE_SLUG_RE.sub("-", text.lower())[:40].strip("-")
-        path = self.notices_dir / f"{ts}-{slug or 'notice'}.md"
+        slug = NOTICE_SLUG_RE.sub("-", text.lower())[:40].strip("-") or "notice"
+        path = self.notices_dir / f"{ts}-{slug}.md"
+        # same-second duplicates get a -2/-3 suffix (never overwrite)
+        n = 2
+        while path.exists():
+            path = self.notices_dir / f"{ts}-{slug}-{n}.md"
+            n += 1
         stamp = datetime.datetime.fromtimestamp(ts).isoformat(timespec="seconds")
         body = f"# Notice\n\n- **at**: {stamp}\n- **id**: {ts}\n\n{text}\n"
         try:
