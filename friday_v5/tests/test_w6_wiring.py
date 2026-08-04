@@ -35,3 +35,22 @@ def test_proactive_seen_mark_seen(tmp_path):
     p.mark_seen(nid)
     assert p.seen() == {nid}
     assert p.check() == []  # already seen → no new
+
+
+from friday_v5.hud.stream_panel import render_stream
+from friday_v5.hud.commands_panel import render_commands
+
+
+def test_render_stream_lines():
+    out = render_stream([("you: standup at 9am", False),
+                         ("ok, added", True)])
+    assert "standup" in out and "ok, added" in out
+
+
+def test_render_stream_empty():
+    assert "(idle)" in render_stream([])
+
+
+def test_render_commands():
+    out = render_commands()
+    assert "ask" in out and "perm" in out and "end" in out and "quit" in out
