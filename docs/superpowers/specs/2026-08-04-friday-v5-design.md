@@ -189,3 +189,12 @@ fix. Full suite green (35 tests); HUD degrades gracefully without Textual;
 `friday5 status` healthy (bridge unavailable = SDK not installed, never-crash
 law holds); notifier→vault→`latest_notices` round-trip verified; skills
 discoverable: execute, proactive, remember, research, schedule.
+
+## W6 verified (2026-08-04)
+
+Wired the deferred seams: engine `on_output` → HUD StreamPanel (live
+stream) + `VoiceNotifier` (speak + `vault/notices/`); `Proactive` watcher
+constructed by the HUD; Command deck + Stream panel added; notifier
+default root fixed to `DEFAULT_VAULT`; same-second notice collision
+disambiguated. Full suite green (42 tests). `friday5 hud` launches the
+HUD with the notifier bridge live.
