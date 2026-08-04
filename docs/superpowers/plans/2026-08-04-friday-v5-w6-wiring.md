@@ -79,16 +79,19 @@ Expected: FAIL — `test_notifier_default_root_is_vault` (wrong root) + `test_no
 In `friday_v5/voice/notifier.py`, change the import block + `__init__`:
 
 ```python
-from .vault import Vault  # noqa: E402 - import after module setup
-
-# (keep other imports; add this near the top after `from pathlib import Path`)
+from ..vault import DEFAULT_VAULT  # module-level, not Vault.DEFAULT_VAULT
 ```
 
 In `__init__`, replace the default-root expression:
 
 ```python
-        self.vault_root = Path(vault_root) if vault_root else Vault.DEFAULT_VAULT
+        self.vault_root = Path(vault_root) if vault_root else DEFAULT_VAULT
 ```
+
+> NOTE (implemented 2026-08-04): `DEFAULT_VAULT` is a module-level constant in
+> `friday_v5/vault.py` (line 24), not a class attribute. The notifier imports
+> it directly (`from ..vault import DEFAULT_VAULT`). No circular import
+> (vault.py is stdlib-only; notifier isn't exported from `voice/__init__.py`).
 
 - [ ] **Step 4: Fix the collision**
 
