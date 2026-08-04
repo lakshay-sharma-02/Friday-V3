@@ -87,7 +87,8 @@ class Vault:
         for path in list(self.wiki.glob("*.md")) + \
                 sorted(self.raw.glob("*.log"), reverse=True):
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
+                lines = path.read_text(encoding="utf-8",
+                                       errors="replace").splitlines()
             except OSError:
                 continue
             for line in lines:

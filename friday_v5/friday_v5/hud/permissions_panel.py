@@ -20,7 +20,7 @@ def _ask_from_file(path) -> dict:
     is not reliable here); summary is the first ```-fenced block.
     """
     try:
-        body = path.read_text(encoding="utf-8")
+        body = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {"id": path.stem, "summary": ""}
     summary = body.split("```", 2)[1].strip() if "```" in body else ""

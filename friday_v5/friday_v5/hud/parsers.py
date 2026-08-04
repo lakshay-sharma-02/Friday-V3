@@ -11,7 +11,8 @@ _NOTICE_META = re.compile(r"^(?:# .*|- \*\*(at|id)\*\*:.*)$", re.MULTILINE)
 def parse_schedule(path: Path) -> list[str]:
     """Upcoming schedule lines from a wiki/schedule.md (skips done)."""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8",
+                               errors="replace").splitlines()
     except OSError:
         return []
     out = []
@@ -28,7 +29,7 @@ def parse_schedule(path: Path) -> list[str]:
 def parse_notice_text(path: Path) -> str:
     """Notice body without its meta block."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
     return _NOTICE_META.sub("", text).strip()
@@ -37,7 +38,8 @@ def parse_notice_text(path: Path) -> str:
 def tail_log(path: Path, n: int = 6) -> list[str]:
     """Last ``n`` non-empty lines of a raw log."""
     try:
-        lines = [l for l in path.read_text(encoding="utf-8").splitlines()
+        lines = [l for l in path.read_text(encoding="utf-8",
+                                           errors="replace").splitlines()
                  if l.strip()]
     except OSError:
         return []
