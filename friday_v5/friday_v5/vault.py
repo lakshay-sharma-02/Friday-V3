@@ -41,6 +41,10 @@ class Vault:
         self.outputs = self.root / "outputs"
         for d in (self.raw, self.wiki, self.outputs):
             d.mkdir(parents=True, exist_ok=True)
+        #: Proactive pings — Claude writes these when it notices
+        #: something worth surfacing; the HUD + notifier read them.
+        self.notices = self.root / "notices"
+        self.notices.mkdir(parents=True, exist_ok=True)
 
     # ── raw (append-only) ────────────────────────────────────────────
 
@@ -96,6 +100,37 @@ class Vault:
     def links_from(self, text: str) -> list[str]:
         """All ``[[links]]`` in text."""
         return _WIKI_LINK.findall(text)
+
+    # ── notices (proactive pings) ────────────────────────────────────
+
+    def notice_text(self, path: Path) -> str:
+        """Body of a notice file with its frontmatter lines dropped."""
+        try:
+            text = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ""
+        return "\n".join(l for l in text
+                         if not l.startswith(("#", "- **"))).strip()
+
+    def list_notices(self) -> list[Path]:
+        """All notice files, newest first."""
+        return sorted(self.notices.glob("*.md"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+
+    def latest_notices(self, n: int = 5) -> list[dict]:
+        """The ``n`` newest notices as dicts: ``{id, text, path, at}``."""
+        out: list[dict] = []
+        for p in self.list_notices()[:n]:
+            body = self.notice_text(p)
+            if not body:
+                continue
+            out.append({
+                "id": int(p.stem.split("-")[0]),
+                "text": body,
+                "path": str(p),
+                "at": p.stat().st_mtime,
+            })
+        return out
 
 
 #: Module default vault (path helpers usable without construction).
