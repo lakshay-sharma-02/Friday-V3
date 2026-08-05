@@ -1,0 +1,3 @@
+[console_scripts]
+friday-v6 = friday_v6.cli_talk:main
+friday6 = friday_v6.cli_talk:main

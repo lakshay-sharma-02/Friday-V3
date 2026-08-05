@@ -39,6 +39,7 @@ class SystemTray:
         on_voice: Optional[Callable[[], None]] = None,
         on_status: Optional[Callable[[], None]] = None,
         on_quit: Optional[Callable[[], None]] = None,
+        menu_items: Optional[list] = None,
     ):
         self.title = title
         self.feed_count = feed_count
@@ -46,6 +47,10 @@ class SystemTray:
         self._on_voice = on_voice
         self._on_status = on_status
         self._on_quit = on_quit
+        #: Optional custom menu: a list of ``(label, callback)`` pairs
+        #: that replaces the default voice/status menu (Wave 22 — the
+        #: mobile companion tray uses this). ``Quit`` is always appended.
+        self._menu_items = menu_items
         self._icon = None
         self._thread: Optional[threading.Thread] = None
         self.available = self._check_available()
@@ -61,8 +66,15 @@ class SystemTray:
 
     def _build_icon(self):
         """Create the pystray Icon (lazy — needs pystray/PIL present)."""
+        import logging as _logging
         import pystray
         from PIL import Image, ImageDraw
+        # pystray logs loud "ERROR: Failed to dock icon" traces when no
+        # tray host is present (headless / WM without a systray). That's
+        # a graceful-degradation case, not an error worth stderr noise —
+        # drop its logger to DEBUG (the never-crash, degrade-silently
+        # law: the server keeps running either way).
+        _logging.getLogger("pystray").setLevel(_logging.DEBUG)
 
         # Simple FRIDAY diamond glyph on a rounded square
         size = 64
@@ -87,26 +99,43 @@ class SystemTray:
             if self._on_quit:
                 self._on_quit()
 
-        menu = pystray.Menu(
-            pystray.MenuItem("🎙  Start voice", on_voice, default=True),
-            pystray.MenuItem("📊  Desktop status", on_status),
+        if self._menu_items:
+            items: list = [
+                pystray.MenuItem(label, self._menu_cb(cb))
+                for label, cb in self._menu_items
+            ]
+            items.append(pystray.Menu.SEPARATOR)
+            items.append(pystray.MenuItem("Quit", on_quit))
+            menu = pystray.Menu(*items)
+        else:        menu = pystray.Menu(
+            pystray.MenuItem("Start voice", on_voice, default=True),
+            pystray.MenuItem("Desktop status", on_status),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", on_quit),
         )
-        tooltip = f"{self.title} — {self.daemon_state}"
-        if self.feed_count:
-            tooltip += f" ({self.feed_count} feed events)"
+        tooltip = self._tooltip()
         return pystray.Icon("friday", image, tooltip, menu)
+
+    @staticmethod
+    def _ascii(text: str) -> str:
+        """pystray's X11 backend encodes the tooltip as latin-1 — em-dashes
+        and emoji crash `Icon()` with a UnicodeEncodeError. Map them to
+        ASCII so the tray always builds (the never-crash law)."""
+        return (text.replace("—", "-").replace("–", "-")
+                    .encode("ascii", "replace").decode("ascii"))
+
+    def _tooltip(self) -> str:
+        tip = f"{self.title} - {self.daemon_state}"
+        if self.feed_count:
+            tip += f" ({self.feed_count} feed events)"
+        return self._ascii(tip)
 
     def update_feed_count(self, count: int) -> None:
         """Update the tray tooltip with the latest ambient feed count."""
         self.feed_count = count
         if self._icon is not None:
             try:
-                self._icon.title = (
-                    f"{self.title} — {self.daemon_state}"
-                    + (f" ({count} feed events)" if count else "")
-                )
+                self._icon.title = self._tooltip()
             except Exception:
                 pass
 
@@ -157,6 +186,17 @@ class SystemTray:
         if self._thread is not None:
             self._thread.join(timeout=2)
             self._thread = None
+
+    @staticmethod
+    def _menu_cb(cb):
+        """Wrap a no-arg callback in the (icon, item) pystray shape."""
+        def _run(icon, item):
+            if cb:
+                try:
+                    cb()
+                except Exception:
+                    logger.debug("tray menu callback failed", exc_info=True)
+        return _run
 
     def __repr__(self) -> str:
         return (f"<SystemTray available={self.available} "

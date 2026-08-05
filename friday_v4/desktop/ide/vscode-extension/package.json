@@ -1,0 +1,113 @@
+{
+  "name": "friday-v4",
+  "displayName": "Friday V4",
+  "description": "Tony Stark's Friday inside your editor — talk, diagnose, and control the PC through the Friday V4 CLI.",
+  "version": "0.1.0",
+  "publisher": "friday-v4",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "friday",
+    "assistant",
+    "nlp",
+    "ide"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "friday.talk",
+        "title": "Friday: Ask Friday…",
+        "category": "Friday"
+      },
+      {
+        "command": "friday.diagnose",
+        "title": "Friday: Diagnose This File",
+        "category": "Friday"
+      },
+      {
+        "command": "friday.openCurrent",
+        "title": "Friday: Open This File in the Editor",
+        "category": "Friday"
+      },
+      {
+        "command": "friday.status",
+        "title": "Friday: Show Status",
+        "category": "Friday"
+      },
+      {
+        "command": "friday.aliases.refresh",
+        "title": "Friday: Refresh Learned Apps",
+        "icon": "$(refresh)",
+        "category": "Friday"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "friday",
+          "title": "Friday",
+          "icon": "$(sparkle)"
+        }
+      ]
+    },
+    "views": {
+      "friday": [
+        {
+          "id": "friday.aliases",
+          "name": "Learned Apps",
+          "icon": "$(apps)"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "friday.aliases.refresh",
+          "when": "view == friday.aliases",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "friday.talk",
+          "when": "view == friday.aliases",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Friday V4",
+      "properties": {
+        "friday.binaryPath": {
+          "type": "string",
+          "default": "friday4",
+          "description": "The Friday V4 CLI binary. If `friday4` isn't on your shell PATH, point this at the venv binary, e.g. /home/you/Projects/friday_v4/.venv312/bin/friday4."
+        },
+        "friday.workspacePath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional working directory for Friday commands (defaults to the workspace folder)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

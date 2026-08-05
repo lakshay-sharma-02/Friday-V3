@@ -51,7 +51,6 @@ class HUD(App):
             with Vertical(id="left"):
                 yield Vitals()
                 yield CommandsPanel()
-                yield PermissionsPanel(self.engine)
                 yield self.stream_panel
                 yield PromptPanel(self.engine)
             with Vertical(id="right"):

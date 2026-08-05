@@ -132,11 +132,15 @@
 <p>in-UI surface. A future refinement, not a gap in the wave&#x27;s promise:</p>
 <p>analysis, control, and NL review all work now.</p>
 <h2>Tests (hermetic — no real editor, no real server)</h2>
-<p><code>tests/test_ide_wave6.py</code> — <strong>39 tests</strong>:</p>
+<p><code>tests/test_ide_wave6.py</code> — <strong>42 tests</strong>:</p>
 <ul><li><strong>LSP client</strong> against a fake language server script (initialize →</li></ul>
-<p>diagnostic pull → symbols → shutdown; missing binary degrades).</p>
+<p>diagnostic pull → symbols → shutdown; missing binary degrades; a</p>
+<p>server that dies mid-session raises a clean LSPError, never an</p>
+<p>AttributeError — regression for the EOF-sentinel review fix).</p>
 <ul><li><strong>AST analyzer</strong> (syntax error, undefined name, unused import,</li></ul>
-<p>shadowed builtin, clean file, missing file).</p>
+<p>shadowed builtin, clean file, missing file; review regressions:</p>
+<p><code>except ... as err</code> is never a false undefined-name, and</p>
+<p><code>from x import *</code> is never flagged unused).</p>
 <ul><li><strong>Facade</strong> (<code>analyze_file</code> AST fallback / LSP path / missing file;</li></ul>
 <p>symbol outline; language-server lookup).</p>
 <ul><li><strong>Detection</strong> (env / process / config signals; none-detected).</li><li><strong>NL</strong> (IDE phrases classify; existing intents not hijacked; handler</li></ul>

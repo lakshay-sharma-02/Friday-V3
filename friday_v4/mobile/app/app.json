@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Friday Companion",
+    "slug": "friday",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.friday.companion"
+    },
+    "android": {
+      "package": "com.friday.companion",
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#1b6dff",
+          "defaultChannel": "ambient"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "b93a6f8d-224b-4e48-b031-8c6701ada6ff"
+      }
+    },
+    "owner": "lakshay0208s-team"
+  }
+}

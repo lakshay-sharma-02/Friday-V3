@@ -13,6 +13,8 @@ __pycache__/
 
 # Claude Code local settings (machine-specific)
 .claude/
+# ...but Friday V5's skills ARE source — track them
+!friday_v5/.claude/
 
 # local tool cache
 .zcode/

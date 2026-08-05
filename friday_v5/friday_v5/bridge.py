@@ -72,9 +72,9 @@ OnOutput = Callable[[str, bool], None]
 
 def _agent_model() -> str:
     """The model the bridge uses — same env convention as V4
-    (``FRIDAY_V4_CLAUDE_MODEL``, default ``fable``)."""
+    (``FRIDAY_V4_CLAUDE_MODEL``, default ``oc/deepseek-v4-flash-free``)."""
     return os.environ.get("FRIDAY_V5_CLAUDE_MODEL", os.environ.get(
-        "FRIDAY_V4_CLAUDE_MODEL", "fable"))
+        "FRIDAY_V4_CLAUDE_MODEL", "oc/deepseek-v4-flash-free"))
 
 
 class ClaudeBridge:
@@ -326,12 +326,15 @@ class ClaudeBridge:
             if not blocks:
                 blocks = getattr(getattr(msg, "message", None),
                                  "content", None)
-            text = "".join(
-                getattr(b, "text", "") for b in blocks or ()
-                if getattr(b, "type", "") == "text")
-            text = text.strip()
-            if text:
-                self._emit(text)
+            for b in blocks or ():
+                btype = getattr(b, "type", "")
+                if btype == "text":
+                    text = getattr(b, "text", "").strip()
+                    if text:
+                        self._emit(text)
+                elif btype == "tool_use":
+                    tool_name = getattr(b, "name", "tool")
+                    self._emit(f"⚙️  [dim]Running {tool_name}...[/dim]")
         elif name == "SystemMessage":
             pass  # session init noise
 

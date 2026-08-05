@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 21 Ide Control — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 21 Ide Control</h1>
+<h1>Wave 21 — IDE Control ✅ SHIPPED (2026-08)</h1>
+<blockquote><strong>The directive:</strong> *control the IDE, analyze which IDE is it and adapt</blockquote>
+<blockquote>accordingly — along with execution and the Claude Code arms. A</blockquote>
+<blockquote>masterpiece.*</blockquote>
+<blockquote></blockquote>
+<blockquote>Governance: <a href="MCU_FRIDAY_STANDARD.md">THE MCU FRIDAY STANDARD</a> — the</blockquote>
+<blockquote>wiring law (every capability speaks on every surface), Law 1 (NL path</blockquote>
+<blockquote>in the same change).</blockquote>
+<hr>
+<h2>Why this wave</h2>
+<p>Wave 6 shipped IDE <strong>analysis</strong> — &quot;what&#x27;s wrong with main.py&quot; answers</p>
+<p>with LSP/AST diagnostics — and the controller primitives</p>
+<p>(<code>open_file</code> / <code>reveal</code> / <code>run_command</code> in <code>desktop/ide/controller.py</code>),</p>
+<p>but the *control* half was only reachable through <code>friday4 ide open</code> /</p>
+<p><code>reveal</code>. The <strong>natural-language</strong> path stopped at diagnostics:</p>
+<ul><li>&quot;open main.py in the editor&quot; → <strong>desktop web-search</strong> (&quot;main.py&quot; was</li></ul>
+<p>not an app!), never the editor.</p>
+<ul><li>&quot;jump to line 42 of cli_talk.py&quot; → unknown/ask.</li><li>&quot;reveal auth.py&quot; → unknown.</li><li>&quot;open main.py and fix it&quot; → the &quot;fix&quot; was silently dropped if the</li></ul>
+<p>phrase reached the IDE path — work the Claude arms should own.</p>
+<p>The user&#x27;s ask was unambiguous: Friday should *drive* the editor from</p>
+<p>the same one NLU point as everything else, adapt to whichever IDE is</p>
+<p>actually there, and hand repair-work to the Claude Code arms.</p>
+<hr>
+<h2>What shipped</h2>
+<h3>1. Editor-control NLU (<code>nlu/intent.py</code>)</h3>
+<ul><li><strong>IDE control keywords</strong> join the diagnostic ones: &quot;jump to line&quot;,</li></ul>
+<p>&quot;go to line&quot;, &quot;take me to line&quot;, &quot;reveal&quot;, &quot;in the editor&quot;, &quot;in the</p>
+<p>ide&quot;, &quot;in vscode&quot;, …</p>
+<ul><li><strong>Source-file tie-break:</strong> a leading <code>open</code>/<code>show</code>/<code>go</code>/<code>jump</code>/…</li></ul>
+<p>verb + a *source-file target* (whitelisted extension: py, js, ts,</p>
+<p>rs, go, c, md, json, …) wins IDE over desktop — <strong>unless</strong> the</p>
+<p>utterance reads like work, in which case the task override (Wave 20)</p>
+<p>already routes it to the brain:</p>
+<ul><li><code>open main.py in the editor</code> → IDE (open)</li><li><code>jump to line 42 of cli_talk.py</code> → IDE (reveal)</li><li><code>open main.py and fix it</code> → <strong>EXECUTE → Claude Code</strong> (fix/debug/</li></ul>
+<p>repair/rewrite added to the task verbs — a silent &quot;open&quot; that drops</p>
+<p>the task is now impossible)</p>
+<ul><li><code>open brave</code> / <code>open youtube.com</code> → <strong>desktop</strong> (no hijack — .com</li></ul>
+<p>isn&#x27;t a source extension)</p>
+<ul><li><code>_ide_target</code> / <code>_ide_line</code> / <code>_ide_control_verb</code> — extract the file,</li></ul>
+<p>the line (&quot;line 42 of X&quot;, &quot;X:42&quot;), and whether the ask is open,</p>
+<p>reveal, or diagnosis (&quot;show me the errors in main.py&quot; stays analysis).</p>
+<h3>2. The router controls the editor (<code>nl_router.py</code>)</h3>
+<p><code>_ide_response</code> now dispatches:</p>
+<table><thead><tr><th>|</th><th></th><th>U</th><th>t</th><th>t</th><th>e</th><th>r</th><th>a</th><th>n</th><th>c</th><th>e</th><th></th><th>|</th><th></th><th>A</th><th>c</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th><th></th><th>R</th><th>e</th><th>s</th><th>u</th><th>l</th><th>t</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>&quot;open src/main.py in the editor&quot;</td><td><code>controller.open_file(ide, path)</code></td><td>opens in the detected IDE</td><td></td></tr><tr><td></td><td>&quot;jump to line 42 of cli_talk.py&quot;</td><td><code>controller.reveal(ide, path, 42)</code></td><td>reveals the line</td><td></td></tr><tr><td></td><td>&quot;reveal auth.py:7&quot;</td><td><code>controller.reveal(ide, path, 7)</code></td><td>line from <code>file:line</code></td><td></td></tr><tr><td></td><td>&quot;reveal auth.py&quot; (no line)</td><td><code>controller.open_file(ide, path)</code></td><td>opens the file</td><td></td></tr><tr><td></td><td>&quot;what&#x27;s wrong with main.py&quot;</td><td>LSP/AST analysis (Wave 6)</td><td>unchanged</td><td></td></tr><tr><td></td><td>&quot;open main.py and fix it&quot;</td><td>EXECUTE → Claude Code gate</td><td>the arms take it</td><td></td></tr></tbody></table>
+<p>Every control is <strong>adapted to the detected IDE</strong> (<code>detect()</code> →</p>
+<p>VS Code <code>code -r/-g</code>, JetBrains <code>--line</code>, Neovim <code>+N</code>, Sublime</p>
+<p><code>file:line</code>, Emacs <code>+N</code>; OS opener as fallback) and <strong>never crashes</strong></p>
+<p>(missing file/editor → honest reply). Because voice, CLI, web, and</p>
+<p>phone all route through <code>TextCommandHandler</code>, the control works on</p>
+<p><strong>every surface</strong> with zero per-surface wiring.</p>
+<h3>3. Composition with the Claude arms (no dropped work)</h3>
+<p>&quot;open X and fix it&quot; style utterances classify EXECUTE and flow through</p>
+<p>the gated Claude Code executor — the file gets fixed, not just opened.</p>
+<p>The repair verbs (fix / debug / repair / rewrite / optimize / tune)</p>
+<p>were added to the Wave 20 task-verb list so the IDE tie-break can never</p>
+<p>swallow a task behind a bare &quot;open&quot;.</p>
+<hr>
+<h2>Verified live (2026-08, VS Code detected on this machine)</h2>
+<pre><code class="language-">detected IDE: VS Code (vscode)
+open:   (True, &#x27;opened nl_router.py in VS Code&#x27;)
+reveal: (True, &#x27;revealed nl_router.py:42 in VS Code&#x27;)</code></pre>
+<hr>
+<h2>Tests</h2>
+<p><code>tests/test_ide_control.py</code> (24 hermetic — tmp DB, fake detection, fake</p>
+<p>controller, tmp files):</p>
+<ul><li>Classifier: control + diagnostic phrases → IDE; &quot;open brave&quot; /</li></ul>
+<p>&quot;open youtube.com&quot; / &quot;open the editor&quot; stay desktop; &quot;open main.py</p>
+<p>and fix it&quot; → EXECUTE.</p>
+<ul><li>Parsing: open target, &quot;line 42 of X&quot;, &quot;X:42&quot;, diagnostics-not-control.</li><li>Router: open adapts to the detected IDE, jump-to-line reveals with</li></ul>
+<p>the line, no-line reveal opens, missing file is honest, no-file asks</p>
+<p>which file, diagnostics untouched, &quot;open the editor&quot; → desktop focus.</p>
+<p><strong>Count:</strong> 1282 → <strong>1306</strong> tests (full suite).</p>
+<h2>Close-out</h2>
+<p>Wave 6 made Friday *read* the editor; Wave 21 makes Friday *drive* it —</p>
+<p>&quot;open main.py in the editor&quot;, &quot;jump to line 42 of cli_talk.py&quot; —</p>
+<p>adapted to whichever IDE is actually there, on every surface, with</p>
+<p>repair-work handed to the Claude Code arms instead of being dropped.</p>
+<p>ROADMAP / MASTER_PLAN updated; docs site rebuilt.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

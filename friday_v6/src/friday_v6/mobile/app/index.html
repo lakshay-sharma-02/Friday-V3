@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e17">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Friday">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<title>FRIDAY V6 — Companion</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header id="top">
+  <div class="logo">◆ FRIDAY <small>COMPANION</small></div>
+  <span class="pill" id="connPill"><span class="dot"></span>connecting…</span>
+</header>
+
+<main>
+  <!-- ── Chat ─────────────────────────────────────────────────── -->
+  <section class="screen" id="scr-chat">
+    <ul class="chatlog" id="chatlog"></ul>
+    <div class="chatbar">
+      <input id="chatInput" placeholder="Say it like a person… · CLAUDE: to hand it to Claude Code" autocomplete="off" enterkeyhint="send">
+      <button id="chatBtn" aria-label="Send">➤</button>
+    </div>
+  </section>
+
+  <!-- ── Live feed ────────────────────────────────────────────── -->
+  <section class="screen hidden" id="scr-feed">
+    <h2>LIVE <span class="dim" id="feedState">…</span></h2>
+    <ul class="feed" id="feed"></ul>
+  </section>
+
+  <!-- ── Status ───────────────────────────────────────────────── -->
+  <section class="screen hidden" id="scr-status">
+    <div class="card" id="statusCard">
+      <h2>TRANSPORT</h2>
+      <div class="rows" id="statusRows"></div>
+    </div>
+    <div class="card">
+      <h2>ONE PRESENCE</h2>
+      <p class="dim" id="presenceNote">—</p>
+    </div>
+    <div class="card">
+      <h2>TOKEN</h2>
+      <input id="tokenInput" placeholder="companion token (optional — needed when exposed beyond LAN)" autocomplete="off" autocapitalize="off">
+      <button id="tokenBtn">Save token</button>
+    </div>
+  </section>
+
+  <!-- ── Device / pairing ─────────────────────────────────────── -->
+  <section class="screen hidden" id="scr-device">
+    <div class="card">
+      <h2>THIS PHONE</h2>
+      <div id="deviceBody"></div>
+    </div>
+  </section>
+</main>
+
+<nav id="tabs">
+  <button class="tab active" data-screen="chat" id="tab-chat">Chat</button>
+  <button class="tab" data-screen="feed" id="tab-feed">Live<span class="badge hidden" id="feedBadge">0</span></button>
+  <button class="tab" data-screen="status">Status</button>
+  <button class="tab" data-screen="device">Device</button>
+</nav>
+
+<script src="/app.js"></script>
+</body>
+</html>

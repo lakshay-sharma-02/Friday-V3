@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 22 Agent Bridge — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 22 Agent Bridge</h1>
+<h1>Wave 22 — Agent Bridge &amp; Anywhere Access ✅ SHIPPED (2026-08)</h1>
+<blockquote><strong>The directive:</strong> *type <code>CLAUDE:</code> in the phone/PWA chat and have it</blockquote>
+<blockquote>handed to one persistent Claude Code session — context accumulating</blockquote>
+<blockquote>until <code>CLAUDE END</code> — with Claude&#x27;s tool-permission asks surfacing in</blockquote>
+<blockquote>the PWA for approval. And: use Friday from your phone from anywhere</blockquote>
+<blockquote>in the world, free.*</blockquote>
+<blockquote></blockquote>
+<blockquote>Governance: <a href="MCU_FRIDAY_STANDARD.md">THE MCU FRIDAY STANDARD</a> — the</blockquote>
+<blockquote>wiring law (one session, every surface), the never-crash law (no SDK</blockquote>
+<blockquote>→ neutral message, never a raise), Law 1 (NL path in the same change).</blockquote>
+<hr>
+<h2>Why this wave</h2>
+<p>Two gaps, one wave.</p>
+<p><strong>1. The one-shot handoff wasn&#x27;t a session.</strong> Wave 18/20 route</p>
+<p>agentic work through <code>claude -p</code> — a one-shot subprocess with no memory</p>
+<p>and no permission routing. The operator&#x27;s other assistant (Claude</p>
+<p>Code) is a *working session*: it keeps context, asks before dangerous</p>
+<p>tools, and does real work across many turns. The phone/PWA chat had no</p>
+<p>way to hold that session — <code>CLAUDE:</code> was the obvious bridge surface.</p>
+<p><strong>2. &quot;Use Friday from my phone&quot; stopped at the LAN.</strong> The companion</p>
+<p>server always runs on the PC (that&#x27;s where the power lives — desktop</p>
+<p>control, executors, the bridge). The phone had to be on the same</p>
+<p>Wi-Fi. From anywhere in the world, there was no path — and no way to</p>
+<p>expose one *safely* even if there was (the mobile API had zero auth).</p>
+<p>This wave delivers both: a persistent bridged Claude session behind the</p>
+<p>chat, and a free, *safe* remote-access story (Tailscale / Cloudflare</p>
+<p>tunnel + an optional bearer token gating the API).</p>
+<hr>
+<h2>What shipped</h2>
+<h3>1. The CLAUDE: bridge (<code>agent/</code>)</h3>
+<ul><li><strong><code>agent/bridge.py</code> — <code>ClaudeBridge</code>:</strong> ONE long-lived Claude Code</li></ul>
+<p>session (the Agent SDK spawns the same <code>claude</code> CLI, same 9router</p>
+<p>settings, same <code>~/.claude/settings.json</code>). <code>CLAUDE: &lt;text&gt;</code> in the</p>
+<p>companion chat forwards to that session (constant <code>session_id</code>, so</p>
+<p>context accumulates); <code>CLAUDE END</code> closes it; the next <code>CLAUDE:</code></p>
+<p>starts fresh. A daemon thread runs the SDK&#x27;s event loop; HTTP</p>
+<p>handler threads enqueue prompts thread-safe.</p>
+<ul><li><strong><code>agent/permissions.py</code> — the permission weave:</strong> the SDK&#x27;s</li></ul>
+<p><code>can_use_tool</code> callback records a durable <code>permission_requests</code> row</p>
+<p>(source=<code>bridge</code>), publishes an IMPORTANT ambient event (the PWA&#x27;s</p>
+<p>Live feed shows &quot;Claude Code wants to Bash: …&quot;), and blocks the tool</p>
+<p>call on an asyncio future. &quot;yes, run it&quot; / &quot;no&quot; from <strong>any</strong> surface</p>
+<p>resolves it through the normal <code>AutonomyAgent.accept/deny</code> path —</p>
+<p>which special-cases <code>source==&quot;bridge&quot;</code> to resolve the SDK future</p>
+<p>instead of executing a shell command.</p>
+<ul><li><strong>Routing:</strong> <code>POST /api/talk</code> — text starting <code>CLAUDE:</code> (or exactly</li></ul>
+<p><code>CLAUDE END</code>) routes to the bridge; everything else is untouched</p>
+<p>(the one NLU point). <code>GET /api/agent/status</code> reports</p>
+<p>available/active/busy for the PWA badge.</p>
+<ul><li><strong>Never-crash:</strong> <code>claude_agent_sdk</code> is a lazy import. Not installed →</li></ul>
+<p><code>available()</code> is False, <code>send()</code> returns a neutral message, the PWA</p>
+<p>shows the fallback. The bridge is hermetic-tested against a fake SDK.</p>
+<h3>2. Anywhere access (free) — <code>friday4 mobile remote</code> + token auth</h3>
+<ul><li><strong><code>friday4 mobile remote</code></strong> prints every way to reach Friday from</li></ul>
+<p>the phone: the PC&#x27;s LAN IPs (auto-detected), the Tailscale 100.x URL</p>
+<p>(auto-detected when <code>tailscale</code> is installed), and the free</p>
+<p>Cloudflare quick-tunnel one-liner (`cloudflared tunnel --url</p>
+<p>http://127.0.0.1:8900`) — plus token guidance. That&#x27;s the answer to</p>
+<p>&quot;anywhere in the world, free&quot;: Tailscale (encrypted, no</p>
+<p>port-forwarding) or a public tunnel.</p>
+<ul><li><strong>Optional bearer token</strong> (<code>friday4 mobile serve --token &lt;secret&gt;</code></li></ul>
+<p>or <code>FRIDAY_V4_MOBILE_TOKEN</code>): when set, every <code>/api/*</code> route</p>
+<p>requires <code>Authorization: Bearer &lt;token&gt;</code> (or <code>?token=</code> — the SSE</p>
+<p>stream can&#x27;t set headers via EventSource). The PWA shell stays</p>
+<p>public (it must load for the operator to enter the token); the API</p>
+<p>— *the power* — is gated. This is what makes a public tunnel safe.</p>
+<ul><li><strong>Client support:</strong> the PWA gets a TOKEN card on the Status tab</li></ul>
+<p>(stored locally, sent as Bearer on every call); the native Expo app</p>
+<p>gets a token field on StatusScreen (persisted in AsyncStorage, sent</p>
+<p>by <code>ApiClient</code> and <code>useEvents</code>).</p>
+<h3>3. Always-on + always-reachable: tray, autostart, one-command expose</h3>
+<ul><li><strong><code>friday4 mobile serve --tray</code></strong> — a system tray icon (like 9router):</li></ul>
+<p>menu = Open dashboard / Show remote URLs / Pair a device / Status /</p>
+<p>Quit(stop server). Reuses the Wave-2 <code>SystemTray</code> (pystray), which got</p>
+<p>a <strong>real bug fixed</strong>: pystray&#x27;s X11 backend encodes the tooltip as</p>
+<p>latin-1, so the em-dash in &quot;Friday — running&quot; crashed icon build with</p>
+<p><code>UnicodeEncodeError</code>; a <code>_ascii()</code> sanitizer now maps non-ASCII to</p>
+<p>safe chars, and pystray&#x27;s own noisy &quot;Failed to dock&quot; logger is</p>
+<p>silenced so a tray-less session degrades silently (server keeps</p>
+<p>serving — verified live).</p>
+<ul><li><strong><code>friday4 mobile autostart</code></strong> — writes `~/.config/autostart/</li></ul>
+<p>friday4-mobile.desktop<code> (XDG-aware, </code>chmod 700` because the Exec line</p>
+<p>can carry <code>--token</code>), mirroring 9router&#x27;s autostart pattern: on every</p>
+<p>login, <code>friday4 mobile serve --host 0.0.0.0 --tray</code> starts — Friday is</p>
+<p>always up and always in the tray. <code>friday4 mobile no-autostart</code></p>
+<p>removes it idempotently. <code>--token</code>/<code>--tunnel</code> bake into the entry.</p>
+<p>The Exec is quoted so space-containing paths (`~/Projects/Friday</p>
+<p>V3/…`) don&#x27;t split the command.</p>
+<ul><li><strong><code>friday4 mobile serve --tunnel cloudflare</code></strong> — spawns</li></ul>
+<p><code>cloudflared tunnel --url http://127.0.0.1:&lt;port&gt;</code>, parses the</p>
+<p><code>https://….trycloudflare.com</code> URL from its output and prints it (the</p>
+<p>free no-account public URL), terminates the child on shutdown, and</p>
+<p>keeps draining its output so a full pipe never blocks it. Missing</p>
+<p><code>cloudflared</code> → a hint, never a crash.</p>
+<ul><li><strong><code>--host</code> accepts what <code>remote</code> prints</strong> — the operator pasted</li></ul>
+<p><code>--host 100.74.85.17:8900/</code> (the URL <code>remote</code> prints) and got</p>
+<p><code>Name or service not known</code>. <code>_normalize_bind()</code> now accepts a bare</p>
+<p>address, <code>host:port</code>, a full <code>http(s)://host:port/path</code> URL, trailing</p>
+<p>slashes, and bracketed IPv6. Regression-tested.</p>
+<h3>4. The wiring law, honored</h3>
+<ul><li><strong>Every surface:</strong> <code>CLAUDE:</code> works from the PWA and the native app</li></ul>
+<p>(both post to <code>/api/talk</code>); bridge asks resolve from voice/CLI/web</p>
+<p>too (&quot;yes, run it&quot; is surface-independent).</p>
+<ul><li><strong>Daemon:</strong> nothing new to schedule — the bridge runs inside the</li></ul>
+<p>mobile serve process; the push daemon already drains ambient events</p>
+<p>(including bridge progress) to the phone.</p>
+<ul><li><strong>CLI surface:</strong> <code>friday4 mobile remote</code> + <code>--token</code> on <code>serve</code>.</li><li><strong>Hermetic tests:</strong> <code>tests/test_agent_bridge.py</code> (22 tests — session</li></ul>
+<p>lifecycle, prefix parsing, permission weave, autonomy hook, PWA</p>
+<p>round-trip, degraded no-SDK path) and <code>tests/test_wave7_mobile.py</code></p>
+<p>(token gate: 401 without/wrong token, 200 with Bearer or <code>?token=</code>,</p>
+<p>PWA shell public, open-by-default on LAN, <code>remote</code> LAN/Tailscale/</p>
+<p>degrade/token-aware).</p>
+<hr>
+<h2>MCU acceptance</h2>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>e</th><th>s</th><th>t</th><th></th><th>|</th><th></th><th>R</th><th>e</th><th>s</th><th>u</th><th>l</th><th>t</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>CLAUDE: list files in cwd</code> → one persistent session streams to the Live feed</td><td>✅ (SDK verified live in the workspace: model fable → oc/deepseek-v4-flash-free via 9router, PONG returned)</td><td></td></tr><tr><td></td><td><code>CLAUDE: &lt;more&gt;</code> → same context, second prompt</td><td>✅ (constant <code>session_id</code>)</td><td></td></tr><tr><td></td><td>Tool ask → PWA &quot;May I Bash: …?&quot; → &quot;yes, run it&quot; → tool runs inside the session</td><td>✅ (durable ask + future resolution)</td><td></td></tr><tr><td></td><td><code>CLAUDE END</code> → session closes, next <code>CLAUDE:</code> is fresh</td><td>✅</td><td></td></tr><tr><td></td><td>No SDK installed → &quot;install claude-agent-sdk&quot; neutral message, no crash</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 mobile remote</code> from anywhere in the world story</td><td>✅ (LAN IP detected live; Tailscale + tunnel guidance)</td><td></td></tr><tr><td></td><td>Token-gated API over a public tunnel</td><td>✅ (401 without, streams with)</td><td></td></tr></tbody></table>
+<hr>
+<h2>How to use it</h2>
+<pre><code class="language-bash"># Bridge — the PWA/phone chat:
+#   CLAUDE: refactor the auth module
+#   (Claude works; watch the Live feed; approve tool asks inline)
+#   CLAUDE END
+
+# Anywhere access:
+friday4 mobile serve --host 0.0.0.0 --token &quot;$(openssl rand -hex 16)&quot;
+friday4 mobile remote          # prints LAN / Tailscale / tunnel URLs
+
+# Free anywhere path (no port-forwarding): install Tailscale on the PC
+# and the phone, then enter http://&lt;100.x.y.z&gt;:8900 in the app&#x27;s
+# Status tab. Or, no account: run `cloudflared tunnel --url
+# http://127.0.0.1:8900` beside the server and enter the https://…
+# trycloudflare.com URL. Both free; the token keeps the power gated.</code></pre>
+<p>The bridge needs <code>claude-agent-sdk</code> (optional extra: `pip install</p>
+<p>-e &#x27;.[agent]&#x27;`).</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

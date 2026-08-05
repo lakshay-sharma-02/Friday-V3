@@ -23,6 +23,12 @@ from friday_v4 import db
 from friday_v4.nl_router import TextCommandHandler, voice_confirm
 
 
+def _real_find_tool(name):
+    """The real tool finder (saved so tests can patch just 'claude')."""
+    from friday_v4.security.tooling import find_tool
+    return find_tool(name)
+
+
 def _handler(tmp_path, **kw):
     # cwd is pinned to tmp_path so a 'testing' step runs pytest on a
     # controlled directory (fast) instead of the whole repo (minutes).
@@ -72,10 +78,33 @@ class TestExecute:
     def test_denied_action_says_no(self, tmp_path):
         _seed_repo(tmp_path)
         handler = _handler(tmp_path)
-        # CONFIRM level + no force + no confirm_fn → fails closed.
+        # CLI contract (no durable_ask): CONFIRM + no force + no
+        # confirm_fn → fails closed with a plain denial.
         result = handler.handle("run the tests")
         assert result.action == "denied"
         assert "won't do that" in result.response
+
+    def test_non_interactive_confirm_becomes_durable_ask(self, tmp_path):
+        """Phone/web/daemon path (durable_ask=True): a CONFIRM action
+        that can't prompt interactively becomes a DURABLE permission
+        ask the operator answers from any surface ("yes, run it"),
+        never a dead-end denial."""
+        _seed_repo(tmp_path)
+        handler = _handler(tmp_path)
+        result = handler.handle("run the tests", durable_ask=True)
+        assert result.action == "asked"
+        assert "yes, run it" in result.response
+        assert result.request_id
+        assert result.status == "asked"
+        # The ask is durable + pending in the DB.
+        from friday_v4 import db
+        conn = db.connect(tmp_path / "v4.db")
+        try:
+            pending = db.pending_permission_requests(conn, limit=10)
+            assert any(p["id"] == result.request_id
+                       for p in pending)
+        finally:
+            conn.close()
 
     def test_failed_execution_surfaces_why(self, tmp_path):
         """Wave 19 slice 2: a real command failure says *why* (the
@@ -94,7 +123,48 @@ class TestExecute:
         yes = handler.handle("run the tests", confirm_fn=lambda _d: True)
         assert yes.action == "executed"
         no = handler.handle("run the tests", confirm_fn=lambda _d: False)
-        assert no.action == "denied"
+        assert no.action == "denied"  # interactive deny stays denied
+
+    def test_clone_url_routes_to_claude(self, tmp_path, monkeypatch):
+        """'clone it <url>' → claude executor, never a dead 'git' guess.
+
+        The URL IS the concrete command (Wave 20): the claude executor
+        handles clone/setup. The task stays a confirmable ask without a
+        confirm_fn; with one, the executor is claude. The claude CLI is
+        patched away so the test never clones a real repo (hermetic).
+        """
+        import friday_v4.execution.executors as ex
+        monkeypatch.setattr(ex, "find_tool",
+                            lambda name: None if name == "claude"
+                            else _real_find_tool(name))
+        url = "https://github.com/example/awesome-repo.git"
+        handler = _handler(tmp_path)
+        # CLI path (no durable_ask): CONFIRM + no confirm_fn → denied,
+        # but still correctly routed to the claude executor.
+        result = handler.handle(f"clone it {url}")
+        assert result.action == "denied"
+        assert result.action_type == "claude"
+        assert result.command == f"clone it {url}"
+        # Phone path: same utterance becomes a durable ask.
+        asked = handler.handle(f"clone it {url}", durable_ask=True)
+        assert asked.action == "asked"
+        assert asked.action_type == "claude"
+        assert asked.request_id
+        # With confirmation → claude task runs (claude CLI absent →
+        # 'failed' with an honest reason, never a misroute).
+        yes = handler.handle(f"clone it {url}",
+                             confirm_fn=lambda _d: True)
+        assert yes.action_type == "claude"
+        assert yes.action == "failed"
+        assert "claude" in yes.response.lower()
+
+    def test_plain_url_routes_to_claude(self, tmp_path):
+        """A bare URL (no verb) is still a claude task, not a guess."""
+        url = "git@github.com:acme/widget.git"
+        handler = _handler(tmp_path)
+        result = handler.handle(url)
+        assert result.action_type == "claude"
+        assert result.command == url
 
     def test_execute_without_action_type_clarifies(self, tmp_path):
         handler = _handler(tmp_path)

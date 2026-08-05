@@ -9,6 +9,7 @@ src/friday_v4/cli_daemon.py
 src/friday_v4/cli_desktop.py
 src/friday_v4/cli_doctor.py
 src/friday_v4/cli_execute.py
+src/friday_v4/cli_ide.py
 src/friday_v4/cli_intelligence.py
 src/friday_v4/cli_memory.py
 src/friday_v4/cli_missions.py
@@ -33,6 +34,9 @@ src/friday_v4.egg-info/dependency_links.txt
 src/friday_v4.egg-info/entry_points.txt
 src/friday_v4.egg-info/requires.txt
 src/friday_v4.egg-info/top_level.txt
+src/friday_v4/agent/__init__.py
+src/friday_v4/agent/bridge.py
+src/friday_v4/agent/permissions.py
 src/friday_v4/ambient/__init__.py
 src/friday_v4/ambient/bus.py
 src/friday_v4/ambient/channels.py
@@ -51,6 +55,7 @@ src/friday_v4/collab/peer.py
 src/friday_v4/collab/permissions.py
 src/friday_v4/collab/sync.py
 src/friday_v4/desktop/__init__.py
+src/friday_v4/desktop/app_aliases.py
 src/friday_v4/desktop/gnome_adapter.py
 src/friday_v4/desktop/hotkeys.py
 src/friday_v4/desktop/hyprland_adapter.py
@@ -62,6 +67,10 @@ src/friday_v4/desktop/watcher.py
 src/friday_v4/desktop/windows_adapter.py
 src/friday_v4/desktop/wm_abstraction.py
 src/friday_v4/desktop/ide/__init__.py
+src/friday_v4/desktop/ide/ast_analyzer.py
+src/friday_v4/desktop/ide/controller.py
+src/friday_v4/desktop/ide/detection.py
+src/friday_v4/desktop/ide/lsp_client.py
 src/friday_v4/execution/__init__.py
 src/friday_v4/execution/audit.py
 src/friday_v4/execution/executors.py
@@ -87,7 +96,9 @@ src/friday_v4/missions/progress.py
 src/friday_v4/missions/scheduler.py
 src/friday_v4/mobile/__init__.py
 src/friday_v4/mobile/api.py
+src/friday_v4/mobile/pairing.py
 src/friday_v4/mobile/push.py
+src/friday_v4/mobile/tray.py
 src/friday_v4/network/__init__.py
 src/friday_v4/nlu/__init__.py
 src/friday_v4/nlu/confidence.py
@@ -153,8 +164,10 @@ src/friday_v4/voice/vad.py
 src/friday_v4/web/__init__.py
 src/friday_v4/web/dashboard.py
 src/friday_v4/web/server.py
+tests/test_agent_bridge.py
 tests/test_ambient.py
 tests/test_anticipation_v3.py
+tests/test_app_learning.py
 tests/test_autonomy_loop.py
 tests/test_claude_executor.py
 tests/test_claude_planner.py
@@ -178,6 +191,8 @@ tests/test_db.py
 tests/test_desktop_abstraction.py
 tests/test_execution.py
 tests/test_hardening_nl.py
+tests/test_ide_control.py
+tests/test_ide_wave6.py
 tests/test_intelligence.py
 tests/test_mcu_acceptance.py
 tests/test_memory.py
@@ -206,4 +221,6 @@ tests/test_wave15_one_presence.py
 tests/test_wave15_transport.py
 tests/test_wave16_capability.py
 tests/test_wave17_tone_direction.py
+tests/test_wave7_app.py
+tests/test_wave7_mobile.py
 tests/test_web.py

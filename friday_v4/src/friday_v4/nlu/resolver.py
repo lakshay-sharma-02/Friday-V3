@@ -14,6 +14,7 @@ Never raises — unknown input comes back with
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -21,6 +22,14 @@ from .confidence import Assessment, assess
 from .entities import Entity, EntityType, extract, find_type
 from .intent import Intent, IntentResult, classify, is_agentic_goal, _ide_target
 from .llm import LLMClient
+
+#: A git clone URL (https/git@ssh), matched case-insensitively. The
+#: URL IS the concrete command — "clone it <url>" / "clone <url>" must
+#: route to the claude executor (it clones + sets up), never a dead
+#: "git" guess with an empty command.
+_URL_RE = re.compile(
+    r"^(?:https?://|git@|ssh://|git://)[^\s]+",
+    re.IGNORECASE)
 
 logger = logging.getLogger("friday_v4.nlu.resolver")
 
@@ -121,6 +130,15 @@ def resolve(text: str, llm: Optional[LLMClient] = None) -> ResolvedAction:
             command = raw
         elif (not command and not result.needs_clarification
                 and is_agentic_goal(raw)):
+            action_type = "claude"
+            command = raw
+        # A URL in the utterance IS the command: "clone it <url>" /
+        # "clone <url>" / "pull <url>" must route to the claude
+        # executor as an explicit task ("clone <url> into a sensible
+        # project dir"), never a dead "git" guess with an empty
+        # command that fails at the gate or asks "what would you like
+        # me to run?".
+        if (action_type != "claude" and _URL_RE.search(raw)):
             action_type = "claude"
             command = raw
         if action_type == "claude" and not llm_clarification:

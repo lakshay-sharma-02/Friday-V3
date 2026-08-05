@@ -586,12 +586,18 @@ class MobilePushWorker:
         """One drain pass; returns events delivered (0 on none/failure)."""
         try:
             from .mobile import (PushNotificationService, command_transporter,
-                                 file_transporter)
+                                 file_transporter, fanout_transporter)
             transporter = self._transporter
             if transporter is None and self._hook:
                 transporter = command_transporter(self._hook)
             if transporter is None and self._file_path:
                 transporter = file_transporter(Path(self._file_path))
+            # Wave 7: once the operator has paired a phone, the default
+            # destination IS that phone — every ambient event is pushed
+            # to each registered Expo token (no manual `friday4 mobile
+            # push`). Unpaired → the service's default log transporter.
+            if transporter is None and self._paired_devices():
+                transporter = fanout_transporter(db_path=self._db_path)
             service = PushNotificationService(
                 db_path=self._db_path,
                 transporter=transporter,
@@ -611,6 +617,18 @@ class MobilePushWorker:
             logger.debug(f"Mobile push failed: {exc}")
             self.last_error = str(exc)
             return 0
+
+    def _paired_devices(self) -> bool:
+        """Whether any phone is paired (guarded — never raises)."""
+        try:
+            from . import db
+            conn = db.connect(path=self._db_path)
+            try:
+                return bool(db.list_devices(conn))
+            finally:
+                conn.close()
+        except Exception:
+            return False
 
     def start(self) -> None:
         if self.running:

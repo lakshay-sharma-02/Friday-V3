@@ -40,7 +40,7 @@ strong underneath everything new.
 | 4 | Proactive intelligence | ✅ SHIPPED |
 | 5 | Collaboration | ✅ SHIPPED |
 | 6 | IDE Integration — adaptive editor detection (VS Code / JetBrains / Neovim / Sublime / Emacs), pure-stdlib LSP client, always-on AST analyzer, editor control (open/reveal/run), NL path ("what's wrong with X"), CODE reasoning provider, claude preflight composition | ✅ SHIPPED |
-| 7 | Web dashboard | ✅ SHIPPED (slice) |
+| 7 | Mobile Companion — the phone surface itself: installable PWA (`mobile/app/`, served by `friday4 mobile serve`) — one-time-code pairing, shared-thread chat, live SSE push feed with durable replay, status; native Expo app (`mobile/app/` — TypeScript, typechecked) as the documented background-push path with build + account steps in its README; `mobile serve` prints the app URL | ✅ SHIPPED |
 | 9 | Agency Core — the brain (DB, NLU, reasoning, missions, execution, NL router) | ✅ SHIPPED |
 | 10 | Memory & identity (memory, persona, relationship, skills scaffold) | ✅ SHIPPED |
 | 11 | Research & reflection (research, synthesis, briefing, ambient push) | ✅ SHIPPED |
@@ -341,9 +341,16 @@ pre-existing `test_db` ×3 failures are gone. 33 hermetic tests in
   ntfy.sh) or `--mobile-push-file <path>` (JSONL outbox) — or the
   `mobile_push` section of `~/.friday/v4_config.json` (fields
   `hook` / `file_path` / `interval` / `priority` / `enabled`;
-  `FRIDAY_V4_MOBILE_PUSH_*` env). The React Native app plugs in via
-  the local HTTP API — the phone is another surface of the same
-  Friday, not a separate product.
+  `FRIDAY_V4_MOBILE_PUSH_*` env). Wave 7 ships the phone surface
+  itself: `friday4 mobile serve` now serves the **installable PWA** at
+  `/` (pair with a one-time code, chat through the same brain, resume
+  the shared thread, live SSE feed with a durable replay cursor) plus
+  the companion API — the phone is another surface of the same
+  Friday, not a separate product. A React Native / Expo scaffold
+  (`mobile/app/` — TypeScript Expo app, typechecked, pinned deps) is
+  the documented native path for true background push (needs Node to
+  build and a dev build + physical device for push; the Python contract
+  is validated hermetically in `tests/test_wave7_mobile.py`).
 - ✅ Ambient surface channels: wildcard subscribe (`bus.subscribe("*")`),
   `speak_channel` (voice, CRITICAL) + `desktop_channel` (banner,
   IMPORTANT+) wired by `AmbientWorker.wire_channels` in the daemon.
@@ -539,6 +546,108 @@ the floor (benchmarks / docs site / installer / migration guide / 1085
 tests) is verified. Everything after this is refinement, not building.
 See `WAVE_19_POLISH_DOGFOOD.md`.
 
+### Wave 21 — IDE Control ✅ SHIPPED (2026-08)
+
+**Why it serves the sentence:** *any task* includes the editor. Wave 6
+made Friday *read* it; Wave 21 makes Friday *drive* it.
+
+- **✅ NL editor control:** "open src/main.py in the editor" opens,
+  "jump to line 42 of cli_talk.py" / "reveal auth.py:7" reveal — all
+  through the ONE NLU point, adapted to the detected IDE (VS Code /
+  JetBrains / Neovim / Sublime / Emacs, OS opener fallback).
+- **✅ Source-file tie-break:** a leading open/show/go + a source-file
+  target (whitelisted ext) wins IDE; "open brave"/"open youtube.com"
+  stay desktop; "open the editor" focuses the app.
+- **✅ No dropped work:** "open main.py and fix it" → EXECUTE → the
+  Claude Code gate (fix/debug/repair/rewrite added to the task verbs),
+  so a bare "open" can never swallow a task.
+- **✅ Every surface:** voice/CLI/web/phone route through
+  `TextCommandHandler._ide_response` — zero per-surface wiring.
+
+**Exit condition (met):** verified live on a VS Code machine
+(open + reveal real files); 24 hermetic tests; suite 1306 green. See
+`WAVE_21_IDE_CONTROL.md`.
+
+### Wave 22 — Agent Bridge & Anywhere Access ✅ SHIPPED (2026-08)
+
+**Why it serves the sentence:** *one presence* means the same Friday
+wherever you are — and a Friday that can hold a *working session* with
+Claude Code, not just fire one-shot commands.
+
+- **✅ `CLAUDE:` bridge** (`agent/`): the companion chat forwards
+  `CLAUDE: <text>` to ONE persistent Claude Code session (Agent SDK
+  spawning the same `claude` CLI, same 9router settings) until
+  `CLAUDE END` — context accumulates like a real working session.
+  Tool-permission asks become durable `permission_requests`
+  (source=`bridge`), surface on the ambient bus (Live feed), and
+  resolve from any surface via "yes, run it"/"no" through
+  `AutonomyAgent.accept/deny`. Lazy SDK import → never-crash without it.
+- **✅ Anywhere access (free):** `friday4 mobile remote` prints the
+  LAN IPs, the Tailscale 100.x URL (auto-detected), and the free
+  Cloudflare quick-tunnel one-liner — the "use Friday from anywhere"
+  answer. An optional bearer token (`serve --token` /
+  `FRIDAY_V4_MOBILE_TOKEN`) gates every `/api/*` route (the PWA shell
+  stays public) so exposing Friday over a tunnel is safe. PWA + native
+  app both carry the token field. `serve --tunnel cloudflare` spawns
+  the tunnel itself and prints the public URL; `--host` accepts the
+  URL `remote` prints (host:port / full URL / trailing slash).
+- **✅ Always on, always in the tray (like 9router):**
+  `friday4 mobile serve --tray` shows a system tray icon (Open
+  dashboard / Show remote URLs / Pair a device / Status / Stop — a
+  latin-1 tooltip bug in the Wave-2 tray that crashed icon build is
+  fixed); `friday4 mobile autostart` writes the 9router-style XDG
+  entry (`~/.config/autostart/friday4-mobile.desktop`, chmod 700,
+  quoted Exec) so the companion + tray start on every login, and
+  `no-autostart` removes it.
+
+**Exit condition (met):** bridge hermetic suite green (22 tests) with
+SDK availability verified live (model fable → oc/deepseek-v4-flash-free
+via 9router, PONG); token gate + `remote` tests green; full suite green.
+See `WAVE_22_AGENT_BRIDGE.md`.
+
+### Wave 20 — Desktop Natural Language ✅ SHIPPED (2026-08)
+
+**Why it serves the sentence:** "any task, no hardcoded workflows" is
+not proven by a bigger phrase catalog — it's proven by a *desktop
+language* that speaks like a person and hands the rest to the arms.
+
+- **✅ The NL desktop interpreter** (`desktop/wm_abstraction.py`):
+  compound commands ("open chrome on workspace 3 and open whatsapp"),
+  workspace qualifiers, browser qualifiers ("in firefox"), "in it"
+  chaining, web destinations ("open whatsapp" → web.whatsapp.com),
+  site search ("open youtube and cristiano ronaldo channel"),
+  explicit search ("search for / look up / google X"), noun-phrase
+  search fallback ("open c++ compiler of programiz"), honest
+  install-gated launches, and explicit URLs. One language across
+  voice, CLI, web, and phone.
+- **✅ Task fall-through — the "everything" contract:** any utterance
+  that reads like *work* ("open a python venv and install requests",
+  "open a fresh project for a discord bot", "clone the repo and open
+  it in my editor") is classified PLAN/EXECUTE by the NLU
+  (task-verb/noun tie-break in `nlu/intent.py`) and falls through the
+  desktop layer to the **Claude Code executor / mission planner** —
+  never web-searched, never a hardcoded workflow.
+- **✅ Voice un-fragmented:** the voice router's legacy desktop parser
+  is gone; it routes through the same shared interpreter, gated on the
+  shared NLU intent ("yes, run it" stays accept).
+- **✅ App-learning loop (follow-up):** "open my todo app" teaches
+  once ("my todo app is obsidian", "use obsidian for my todo app",
+  "open my todo app with obsidian") and resolves forever after,
+  persisted to `~/.friday/v4_desktop_aliases.json`; only resolvable
+  binaries are learned; unknown personal apps get a teaching prompt,
+  never a web search; `friday4 desktop aliases/teach/forget` CLI;
+  LLM-robust via a pre-dispatch hook in the NL router.
+- **✅ Cross-machine continuity (follow-up):** aliases publish as
+  collab observations (`alias:<name>` CRDT keys — last-writer-wins
+  across machines); `friday4 desktop aliases-sync` pushes local,
+  syncs with peers, and merges remote aliases into the store;
+  `_resolve_app` only launches a synced binary that exists *here*
+  (uninstalled synced apps fall through, never dead-launch).
+
+**Exit condition (met):** the five user examples resolve correctly on a
+live desktop; the "handle everything" suite routes tasks to the agentic
+arms; full suite green (1172+). See `WAVE_20_DESKTOP_NL.md`.
+
 ---
 
 ## 4. Wave dependency map
@@ -563,6 +672,10 @@ See `WAVE_19_POLISH_DOGFOOD.md`.
                                                           ▼
                                                    19 Polish & Dogfood
                                                     (= sentence true)
+                                                          │
+                                                          ▼
+                                                   20 Desktop NL
+                                                    (= talk to the PC)
 ```
 
 - **11 → 13:** research feeds the LLM richer evidence; the LLM makes

@@ -54,7 +54,7 @@ class TestWatchesDb:
     def test_schema_v7_includes_watches_desktop_and_autonomy(self, tmp_path):
         conn = _conn(tmp_path)
         try:
-            assert db.schema_version(conn) == 8
+            assert db.schema_version(conn) == 9
             tables = {r["name"] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name NOT LIKE 'sqlite_%'").fetchall()}
@@ -62,6 +62,7 @@ class TestWatchesDb:
             assert "desktop_events" in tables
             assert "permission_requests" in tables
             assert "operator_overrides" in tables
+            assert "mobile_devices" in tables
         finally:
             conn.close()
 

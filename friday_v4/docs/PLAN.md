@@ -260,7 +260,9 @@ friday_v4/
 │   ├── relationship/                  # ✅ — depth/tones (interaction → tone)
 │   ├── skills/                        # ✅ — replay/shadow/registry/dispatch (shadow-first)
 │   │
-│   ├── mobile/ · network/             # ⏳ stubs (future waves / decision)
+│   ├── mobile/                        # ✅ Wave 7 — companion API + pairing + push
+│   │   └── app/                       #    installable PWA (repo: mobile/app/ native Expo app)
+│   ├── network/                       # ⏳ stub (future decision)
 │   │
 │   └── cli_*.py                       # `friday4` subcommands: talk (NL brain),
 │                                      # voice (session lives under `voice talk`),
@@ -361,16 +363,15 @@ friday_v4/
 **Deliverables:**
 - [x] Web dashboard (daemon status + security grade/findings + intelligence + proactive + V3 bridge + voice) — `friday4 web`
 - [x] Scan-path picker on the dashboard (target any project directory)
-- [ ] React Native companion app (future)
-- [ ] Push notification transport (future — real-time push designed in Wave 11's `ambient/`)
+- [x] Companion API + durable-queue push transport (`mobile/api.py`, `mobile/push.py`) — Wave 15
+- [x] Phone pairing — one-time code binds a device (`mobile/pairing.py`) + `friday4 mobile pair|devices|unpair`
+- [x] **Companion PWA — the phone app** (`mobile/app/`, served by `friday4 mobile serve` at `/`): installable, shared-thread chat, live SSE feed, status. Add to Home Screen → an app icon.
+- [x] RN/Expo native app (`mobile/app/`) — typechecked, SDK-54 deps pinned, README with build + Apple/Google/EAS account steps; Python contract (incl. the SSE stream) validated by hermetic tests
 
 **Key Integration Points:**
 - Dashboard reads V4 state files + V3 DB via the read-only bridge
 - "Run security scan" action drives the daemon's own `SecurityScanner`
-
-**Key Integration Points:**
-- Dashboard reads V4 state files + V3 DB via the read-only bridge
-- "Run security scan" action drives the daemon's own `SecurityScanner`
+- The phone PWA talks to the same `nl_router` brain and the same shared session as every other surface (one presence)
 
 ### Phase 6 — Advanced Intelligence ✅ (Wave 4)
 **Goal:** Friday anticipates your needs
@@ -706,8 +707,11 @@ V3 and V4 are separate products that share a data directory:
 | `friday4 relationship status/refresh` | Relationship depth | ✅ (Wave 10) |
 | `friday4 skills list/learn/promote/shadow/status` | Shadow-first skills | ✅ (Wave 10) |
 | `friday4 analyze/correlate/briefing/narrative/report` | Research & Reflection | 🆕 Wave 11 |
-| `friday mobile pair` (future) | Mobile companion | ⏳ Wave 7 |
-| `friday4 ide detect/diagnose/symbols/open/reveal/run` + "what's wrong with X" | IDE Integration (LSP + AST + editor control) | ✅ Wave 6 |
+| `friday4 mobile serve/push/pair/devices/unpair/remote` + phone PWA + native app | Mobile companion — installable app at `/`, shared-thread chat, live push, `CLAUDE:` bridge, anywhere access (`remote` + `--token`) | ✅ (Wave 7/15/22) |
+| `friday4 ide detect/diagnose/symbols/open/reveal/run` + "what's wrong with X" | IDE Integration (LSP + AST + editor control) | ✅ Wave 6/21 |
+| `CLAUDE:` in the phone/PWA chat | One persistent Claude Code session (context until `CLAUDE END`), tool asks resolved from any surface | ✅ Wave 22 |
+| `friday4 mobile remote` / `serve --token --tunnel --tray` | Use Friday from anywhere (free: Tailscale / Cloudflare tunnel), token-gated API, tray icon, one-command expose; `--host` accepts the URL `remote` prints | ✅ Wave 22 |
+| `friday4 mobile autostart` / `no-autostart` | Companion server + tray on every login (9router-style XDG entry) | ✅ Wave 22 |
 
 ---
 

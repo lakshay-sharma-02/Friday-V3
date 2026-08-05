@@ -1,0 +1,147 @@
+# Friday V6 🚀
+
+> **The synthesis.** V3's unbreakable evidence discipline, V4's verified
+> multi-modal product, V5's vault + HUD pragmatism — one Friday.
+> Inspired by Tony Stark's FRIDAY.
+
+## What V6 Is
+
+V6 is **the product**. It was seeded from a full copy of V4 (the frozen
+reference, 1,376 green tests, re-verified in this namespace on
+2026-08-05) so the brain, the surfaces, and the safety pipeline are
+already real. The V5 wins (vault memory, Textual HUD, markdown skills)
+and the V3 discipline (evidence-scoped answers, review-owns-truth, kill
+switch) land on top as additive layers — the green core never gets
+rewritten.
+
+| Inherited from | What | Status here |
+|---|---|---|
+| **V4** (frozen reference) | Brain (`nl_router`, LLM-first NLU + deterministic floor), gate → sandbox → audit execution, missions, skills, collab, security, voice, desktop, IDE control, mobile PWA + SSE, web dashboard, agent bridge (`CLAUDE:`), durable permission asks | ✅ re-verified green (1,376 tests) |
+| **V5** (proven wins) | `vault/` linked-markdown memory, Textual `hud/`, `SKILL.md` skills, proactive notices | ✅ `vault/` W0 · `SKILL.md` skills W2 · `hud/` W3 (permission buttons + notices W4) |
+| **V3** (discipline) | Evidence `sources:` frontmatter, review-owns-truth, `abort` kill switch, FTS-over-vault search | ✅ `sources:` W1 · `abort` kill switch W5 · FTS-in-HUD search W6 |
+
+Explicitly **not** inherited: V5's auto-approve permission mode (V6
+keeps V4's blocking durable-ask gate as the safety floor), V5's no-DB
+purity, V3's monolith rewrite, and any hard new dependencies.
+
+## Quick Start
+
+V6 installs its CLI as **`friday6`** (aliased `friday-v6`) so it doesn't
+clash with V3's `friday` or V4's `friday4` when installed side by side.
+
+```bash
+# Install V6
+pip install -e friday_v6/
+
+# THE ONE COMMAND — say it like a person:
+friday6 "run the tests"
+
+# Interactive NL session (starts the daemon presence when on a TTY)
+friday6
+
+# Voice session (hotword mode, or hold Ctrl+Space with --push-to-talk)
+friday6 voice talk
+
+# Voice diagnostics / setup wizard
+friday6 voice status
+friday6 voice setup
+
+# Desktop awareness & control
+friday6 desktop status
+
+# Mobile companion (installable PWA + API, pairing, push, remote)
+friday6 mobile serve
+
+# See and touch the screen — Friday's eyes and hands
+friday6 "what's on my screen"      # OCR: the text Friday actually sees
+friday6 "click the login button"   # finds it on screen, asks, clicks
+friday6 "type hello"               # types into the focused window
+friday6 "scroll down"              # scrolls the focused window
+friday6 screen status              # which screen tools exist
+
+# Kill switch — stop a runaway agent mid-session
+friday6 abort                     # arm (stops the Claude bridge)
+friday6 abort --status            # check
+friday6 abort --clear             # disarm
+
+# Textual HUD — Friday's face (optional `textual` extra)
+friday6 hud
+```
+
+## ⚠️ Running under ZCode (this machine)
+
+ZCode's AppImage sets `APPIMAGE`/`APPDIR` env vars, which make **every**
+`python` invocation report the AppImage as `sys.executable`. This breaks
+venvs (bin/python symlinks point at the AppImage, site-packages never
+loads, no numpy/voice deps). Always run python through the fixed venv
+with those vars unset:
+
+```bash
+cd friday_v6
+env -u APPIMAGE -u APPDIR .venv312/bin/python -m friday_v6.cli_talk talk
+```
+
+Never create venvs with the AppImage env vars set — they'll be unusable.
+If a venv's `bin/python` is a symlink to `ZCode-*.AppImage`, rebuild it:
+
+```bash
+rm -rf .venv312
+env -u APPIMAGE -u APPDIR /usr/sbin/python3.12 -m venv .venv312
+env -u APPIMAGE -u APPDIR .venv312/bin/pip install -e . -e ../  # reinstall editable pkgs
+```
+
+## MCU Standard
+
+Before any feature merges into V6, ask: **"Would Tony Stark use this by
+speaking, or would he have to read a man page?"**
+
+- If it requires a config file, it fails.
+- If it requires a CLI flag, it fails.
+- If she does something without being able to explain *why* (evidence),
+  it fails.
+- If she crashes because the LLM hallucinates, it fails.
+
+## Roadmap (waves)
+
+| Wave | Builds | Status |
+|---|---|---|
+| W0 | `vault/` port (raw/wiki/outputs/notices) + FTS index + `friday6 vault ls/find/note` + `friday6 index rebuild/status` | ✅ SHIPPED |
+| W1 | `MemoryFact` bridge (vault ⇄ DB) + `sources:` evidence frontmatter + `friday6 fact store/recall/list/forget` | ✅ SHIPPED — fact → wiki note → recall, DB rows intact |
+| W2 | markdown `skills/` + `CLAUDE:` skill routing doc | ✅ SHIPPED — 5 V5 SKILL.md files bundled + operator `~/.friday/v6_skills/` override, pure-stdlib library (frontmatter parse, explicit + description match), NL routing "use the schedule skill …" → Claude bridge when available, deterministic floor otherwise; **skill self-creation** ("create a skill called X that does Y" → SKILL.md in the operator dir, immediately invocable); `friday6 skills md list/show/match` |
+| W2b | **Vault + skills in plain language** (follow-up) | ✅ SHIPPED — "find X in my vault" / "search the vault for X" search (was: web-search/mission misroutes), "list my vault notes", "rebuild the index" — all through the ONE `friday6` entrypoint, pre-dispatch so the resolver's misroutes never win |
+| W2c | **"teach me to do X" — the watch-me loop in language** (follow-up) | ✅ SHIPPED — when Friday doesn't know something, "teach me to do deploy" / "i'll show you how to do X" opens a capture; "that's it" / "done teaching" forms a shadow skill from the operator's demonstrated actions (never executes until verified+promoted). Pre-dispatch (was: PLAN mission / ASK / unknown misroutes); memory-guard keeps "teach me to remember X" MEMORY; generic "that's it" only fires when a capture is open; "I don't know" replies now point at the teach loop |
+| W3 | Textual `hud/` port, wired to the same `TextCommandHandler` | ✅ SHIPPED — one-screen HUD (vitals, live ambient stream, schedule from `vault/wiki/schedule.md`, notices, activity, permissions with allow/deny buttons, and an input box routed through the SAME brain as every surface); pure parser/render/controller layer has zero Textual imports (hermetic); `friday6 hud` degrades to a printed hint without the optional `textual` extra |
+| W4 | HUD permission buttons + notices + proactive | ✅ SHIPPED — pending durable asks render real allow/deny buttons that resolve the SAME ask as phone/web/CLI (`AutonomyAgent.accept/deny`); the Notices panel surfaces vault proactive pings |
+| W5 | `abort` kill switch in the bridge tool hook | ✅ SHIPPED — `friday6 abort` arms a durable flag (`~/.friday/v6_abort.json`); while armed the Claude bridge denies EVERY tool call immediately (no ask recorded) and refuses new `CLAUDE:` prompts; `--clear`/`--status`; KILL_SWITCH ambient events on the Live feed; 18 hermetic tests incl. the mocked mid-session stop |
+| W6 | Polish: FTS in HUD search, schedule panel from vault, full suite green | ✅ SHIPPED — `/find <terms>` in the HUD searches the vault through the SAME index-first/grep-fallback path as `friday6 vault find`; schedule panel reads the vault; full suite green (1,527 passed) |
+| W7 | **Screen — eyes and hands**: `screen/` layer (capture via grim/gnome-screenshot/import, OCR via tesseract TSV with bounding boxes, input via ydotool/wtype/xdotool) + `screen_text_command` NL surface (read/click/type/scroll/keys with a confirm gate for real input) + `friday6 screen` CLI | ✅ SHIPPED — "what's on my screen" reads real OCR; "click the login button" finds it and asks before clicking; conservative parser never hijacks web/desktop phrases ("click on youtube" stays desktop); hermetic (43 tests, fake runners — never a real display); full suite green (1,572 passed) |
+
+Full design: `docs/V6_MCU_STANDARD.md` and
+`../docs/superpowers/specs/2026-08-04-friday-v6-design.md`.
+
+## Project Structure
+
+```
+friday_v6/
+├── docs/           # V6 MCU standard, wave specs
+├── src/friday_v6/  # V6 source (V4 core + new layers)
+│   ├── voice/      # Speech-to-text, text-to-speech, hotword
+│   ├── desktop/    # WM abstraction, IDE integration, tray
+│   ├── mobile/     # Companion PWA + API, pairing, push
+│   ├── collab/     # Multi-instance collaboration
+│   ├── security/   # Vulnerability scanning
+│   ├── intelligence/ # Drift detection, predictions
+│   ├── execution/  # Gate → sandbox → audit (Wave 9 safety core)
+│   ├── missions/   # Mission planner + scheduler
+│   ├── nlu/        # ONE NLU point: LLM-first resolve()
+│   ├── nl_router.py # THE shared handler — every surface
+│   ├── vault/      # W0/W1: linked-markdown memory + FTS index + MemoryFact bridge
+│   ├── skills/markdown_skills/  # W2: bundled V5 SKILL.md files (package data)
+│   ├── agent/      # CLAUDE: persistent Claude Code bridge
+│   └── screen/     # W7: capture + OCR + input (eyes and hands)
+└── tests/          # 1,376 hermetic tests (green) + W0 vault suite
+```
+
+## License
+
+Same as Friday V3.

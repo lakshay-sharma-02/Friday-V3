@@ -455,7 +455,8 @@ class TestRouter:
         assert response is not None
 
     @patch("friday_v4.desktop.wm_abstraction.WindowManager")
-    def test_router_launch_app_command(self, mock_wm_cls):
+    @patch("friday_v4.desktop.wm_abstraction.shutil.which")
+    def test_router_launch_app_command(self, mock_which, mock_wm_cls):
         from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         wm = MagicMock()
@@ -463,6 +464,7 @@ class TestRouter:
         wm.focus_smart.return_value = None
         wm.launch_app.return_value = True
         mock_wm_cls.return_value = wm
+        mock_which.return_value = "/usr/bin/spotify"  # installed
 
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline, enable_proactive=False)
@@ -508,13 +510,15 @@ class TestRouter:
         assert "Friday" in response or "help" in response.lower()
 
     @patch("friday_v4.desktop.wm_abstraction.WindowManager")
-    def test_router_launch_focuses_if_running(self, mock_wm_cls):
+    @patch("friday_v4.desktop.wm_abstraction.shutil.which")
+    def test_router_launch_focuses_if_running(self, mock_which, mock_wm_cls):
         from friday_v4.voice.pipeline import PipelineConfig, VoicePipeline
         from friday_v4.voice.router import VoiceRouter
         wm = MagicMock()
         wm.is_available = True
         wm.focus_smart.return_value = "spotify"
         mock_wm_cls.return_value = wm
+        mock_which.return_value = "/usr/bin/spotify"  # installed
 
         pipeline = VoicePipeline(PipelineConfig())
         router = VoiceRouter(pipeline, enable_proactive=False)

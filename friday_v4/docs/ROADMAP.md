@@ -33,7 +33,7 @@ Wave 3: SECURITY ──> Friday protects your code ─────────> 
 Wave 4: SMART ─────> Friday anticipates your needs ─────> ✅ SHIPPED
 Wave 5: COLLAB ────> Friday works with teams ───────────> ✅ SHIPPED
 Wave 6: IDE ───────> Friday lives in your editor ───────> ✅ SHIPPED (2026-08)
-Wave 7: MOBILE ────> Friday in your pocket ─────────────> 10-12 weeks
+Wave 7: MOBILE ────> Friday in your pocket ─────────────> ✅ SHIPPED (2026-08)
 Wave 9: AGENCY ────> Friday actually does things ───────> ✅ SHIPPED
 Wave 10: IDENTITY ─> Friday knows you ──────────────────> ✅ SHIPPED
 Wave 11: RESEARCH ─> Friday reasons across your world ──> ✅ SHIPPED
@@ -396,37 +396,43 @@ and controls the editor (open / reveal / run). **Design:**
 
 ## Wave 7: Mobile & Web (10-12 weeks)
 
-**Status (web slice):** ✅ Web Dashboard SHIPPED (2026-08). `friday4 web`
-starts a pure-stdlib local dashboard (no FastAPI/flask — consistent with
-V4's "pure-stdlib, always works" philosophy) visualizing daemon status,
-security grade + findings, intelligence drift/anomalies, proactive
-patterns, the read-only V3 bridge, voice config, and the ambient feed,
-with a "run security scan" action. React Native app + push pending.
+**Status:** ✅ **SHIPPED (2026-08).** Web dashboard (Wave 9 area) and the
+phone surface are both real:
+
+- ✅ `friday4 web` — pure-stdlib local dashboard (daemon status, security
+grade + findings, intelligence, proactive, V3 bridge, voice, chat).
+- ✅ **`friday4 mobile serve` now serves the phone app itself** — an
+  installable companion PWA at `/` (`mobile/app/`): one-time-code
+  pairing, chat through the same `nl_router` brain, the shared
+  one-presence thread, a live SSE push feed with a durable replay
+  cursor, and status. Add to Home Screen → an app icon on the phone.
+- ✅ Push transport (Wave 15): `PushNotificationService` + daemon
+  `MobilePushWorker` + `fanout_transporter` (paired Expo tokens) —
+  PWA devices stream over SSE instead of hitting exp.host.
+- ✅ `mobile/app/` — React Native / Expo **native app** (TypeScript,
+  typechecked, SDK-54 pinned deps): Status/Chat/Feed/Devices tabs, typed
+  API client, SSE live feed, push registration; build + account steps in
+  `mobile/app/README.md`. The Python contract is validated hermetically
+  (incl. the SSE stream regression — queued events deliver, empty stays
+  idle, never crashes).
 
 **Goal:** Friday in your pocket. Quick status, voice input, push notifications.
 
 ### What We Build
 
-| Module | Files | Time | Complexity |
-|--------|-------|------|------------|
-| `MobileAPI` (FastAPI server) | `mobile/api.py` | 4 days | Low |
-| Push Notification Service | `mobile/push.py` | 5 days | Medium — APNS + FCM setup |
-| **Web Dashboard** | `mobile/web/` | **3 weeks** | Medium — FastAPI + HTMX or React |
-| **React Native App** | `mobile/app/` | **6-8 weeks** | **HIGH** — first RN app |
+| Module | Files | Status |
+|--------|-------|--------|
+| Companion API + PWA server | `mobile/api.py` | ✅ (pure-stdlib, not FastAPI) |
+| Push Notification Service | `mobile/push.py` | ✅ (Expo + fanout + hook) |
+| Phone pairing (one-time code) | `mobile/pairing.py` | ✅ |
+| **Companion PWA (the phone app)** | `mobile/app/` | ✅ **SHIPPED** — installable, served at `/` |
+| **React Native / Expo app** | `mobile/app/` | ✅ native app — typechecked, README with build + Apple/Google/EAS steps |
 
-**Total: ~48 days → 10-12 weeks**
-
-### Strategy: Web First, Mobile Second
-
-```
-Week 1-3:   Web Dashboard only (valuable alone)
-Week 4-10:  React Native app (if you still want it)
-Week 11-12: Polish + push notifications
-```
-
-The web dashboard is **independently useful** — anyone can open a browser
-to see Friday's status. The mobile app adds push notifications and voice input
-but requires platform-specific development.
+**Shipped instead of FastAPI/React for the UI:** a phone-first PWA —
+consistent with V4's "pure-stdlib, always works" law (the same reason
+`friday4 web` is a stdlib HTML dashboard). The PWA is the tested phone
+surface; the RN scaffold is the checked-in native path for real
+background push via Expo tokens.
 
 ### Prerequisites
 
@@ -625,6 +631,95 @@ context (repo + command), never a literal replay.
 this" → shadow skill formed with repo context; "what did you learn" →
 "I've learned 3 skill(s)…" from the real registry. See
 [`WAVE_14_WATCH_ME.md`](WAVE_14_WATCH_ME.md).
+
+---
+
+## Wave 21: IDE Control ✅ SHIPPED (2026-08)
+
+**Goal:** *Friday drives the editor* — "open main.py in the editor",
+"jump to line 42 of cli_talk.py", "reveal auth.py:7" — adapted to
+whichever IDE is detected, on every surface, with repair-work handed to
+the Claude Code arms.
+
+| Task | Status |
+|------|--------|
+| IDE control keywords + source-file tie-break (whitelisted extensions; no web-TLD hijack) | ✅ |
+| `_ide_target` / `_ide_line` / `_ide_control_verb` extraction ("line 42 of X", "X:42") | ✅ |
+| `_ide_response` dispatches open/reveal via `controller` (VS Code/JetBrains/Neovim/Sublime/Emacs + OS opener) | ✅ |
+| Repair verbs (fix/debug/repair/rewrite) → "open X and fix it" → Claude Code gate, never a silent open | ✅ |
+| Every surface (voice/CLI/web/phone) via `TextCommandHandler` | ✅ |
+| Live-verified on VS Code machine (open + reveal real files) | ✅ |
+| `tests/test_ide_control.py` — 24 hermetic tests | ✅ |
+| `WAVE_21_IDE_CONTROL.md` + MASTER_PLAN updated | ✅ |
+
+**MCU feel:** "Friday, open main.py in the editor" → file opens;
+"jump to line 42 of cli_talk.py" → cursor lands on line 42; "open
+main.py and fix it" → Claude Code does the work. See
+[`WAVE_21_IDE_CONTROL.md`](WAVE_21_IDE_CONTROL.md).
+
+---
+
+## Wave 22: Agent Bridge & Anywhere Access ✅ SHIPPED (2026-08)
+
+**Goal:** *one Friday wherever you are* — `CLAUDE:` in the phone/PWA
+chat hands the message to ONE persistent Claude Code session (context
+until `CLAUDE END`), and the phone can reach Friday from anywhere in
+the world (free: Tailscale / Cloudflare tunnel) with the API safely
+token-gated.
+
+| Task | Status |
+|------|--------|
+| `agent/bridge.py` — one SDK session, constant session_id, thread-safe prompt queue, `CLAUDE END` closes | ✅ |
+| `agent/permissions.py` — `can_use_tool` → durable ask (source=bridge) → ambient event → future | ✅ |
+| `AutonomyAgent.accept/deny` bridge branch (resolves the SDK future, never executes a shell command) | ✅ |
+| `POST /api/talk` CLAUDE: routing + `GET /api/agent/status` | ✅ |
+| PWA agent labels + ask-bubble reuse; native app token field | ✅ |
+| `friday4 mobile remote` — LAN IPs + Tailscale detect + tunnel one-liner + token guidance | ✅ |
+| API bearer token (`serve --token` / env) gating /api/* (PWA shell public); PWA + app send it | ✅ |
+| `serve --tray` — system tray icon (Open dashboard / URLs / Pair / Status / Stop), reuses SystemTray; latin-1 tooltip bug fixed | ✅ |
+| `serve --tunnel cloudflare` — spawns cloudflared, prints the public URL, cleans up on exit; degrades when missing | ✅ |
+| `friday4 mobile autostart` / `no-autostart` — 9router-style XDG entry (`--host 0.0.0.0 --tray`), chmod 700, quoted Exec | ✅ |
+| `--host` accepts bare IP / host:port / full http(s):// URL / trailing slash (operator's pasted URL no longer fails) | ✅ |
+| `tests/test_wave7_mobile.py` — bind normalization regression + autostart + tunnel + tray degrade tests | ✅ |
+| `pyproject.toml` optional `agent` extra (claude-agent-sdk) | ✅ |
+| `tests/test_agent_bridge.py` (22 hermetic) + token/remote tests; suite green | ✅ |
+| `WAVE_22_AGENT_BRIDGE.md` + MASTER_PLAN/ROADMAP updated | ✅ |
+
+**MCU feel:** from anywhere in the world — "CLAUDE: refactor the auth
+module" in the phone app → Claude Code works on the PC, you approve its
+tool asks inline, and the Live feed shows it happening. See
+[`WAVE_22_AGENT_BRIDGE.md`](WAVE_22_AGENT_BRIDGE.md).
+
+---
+
+## Wave 20: Desktop Natural Language ✅ SHIPPED (2026-08)
+
+**Goal:** *talk to the PC like a person* — compound commands, workspace
+and browser qualifiers, web destinations, site search — and hand every
+task the interpreter can't do to the agentic arms (never hardcoded
+workflows, never a web-search of work).
+
+| Task | Status |
+|------|--------|
+| NL interpreter — compound splitting (verb-gated connectors, `and then`/`also` units, task phrases never split) | ✅ |
+| Workspace qualifier ("on workspace 3") + browser qualifier ("in firefox") + "in it" chaining | ✅ |
+| Web destinations (whatsapp/youtube/gmail/…), canonical display names, site-search templates (youtube results, google, github) | ✅ |
+| Explicit search verbs (search/look up/google/find) + noun-phrase web-search fallback | ✅ |
+| Honest install-gated launches (`_resolve_app` → resolvable binary only) | ✅ |
+| `DesktopAbstraction.open_url` + `_open_in_browser` WM-hook-first fallback | ✅ |
+| NLU task tie-break (`nlu/intent.py`) — task verbs/nouns route PLAN/EXECUTE instead of DESKTOP | ✅ |
+| Agentic markers — task phrases resolve `action_type=claude` (Claude Code executor) | ✅ |
+| Voice router delegates to the shared interpreter, NLU-gated ("yes, run it" stays accept) | ✅ |
+| Hermetic tests — 5 user examples + compound + fall-through + launch honesty + accept guard | ✅ |
+| **Follow-up — app-learning loop:** teach once ("my todo app is obsidian" / use / set / with frames), resolve forever; only resolvable binaries learned; unknown personal apps get a teaching prompt (never a web search); `friday4 desktop aliases/teach/forget`; LLM-robust pre-dispatch hook | ✅ |
+| **Follow-up — cross-machine sync:** aliases publish as collab observations (`alias:<name>` LWW keys), `friday4 desktop aliases-sync` pushes/syncs/merges with peers; synced aliases only launch when the binary exists here | ✅ |
+| `WAVE_20_DESKTOP_NL.md` + MASTER_PLAN/ROADMAP updated | ✅ |
+
+**MCU feel:** "open chrome on workspace 3 and open whatsapp" → two
+actions, workspace switched; "open youtube and cristiano ronaldo
+channel in it" → YouTube search opens; "open a python venv and install
+requests" → the brain (Claude Code) takes it. See
+[`WAVE_20_DESKTOP_NL.md`](WAVE_20_DESKTOP_NL.md).
 
 ---
 

@@ -164,6 +164,7 @@ class TalkResult:
     goal: Optional[str] = None
     mission_id: Optional[str] = None
     action_id: Optional[str] = None      # audit trail id
+    request_id: Optional[str] = None     # durable permission ask id
     status: Optional[str] = None         # execution status (succeeded/denied/...)
 
     def to_dict(self) -> dict:
@@ -177,6 +178,7 @@ class TalkResult:
             "goal": self.goal,
             "mission_id": self.mission_id,
             "action_id": self.action_id,
+            "request_id": self.request_id,
             "status": self.status,
         }
 
@@ -200,27 +202,34 @@ class TextCommandHandler:
     def handle(self, text: str, *, confirm_fn: ConfirmFn = None,
                force: bool = False,
                cwd: Optional[str] = None,
-               manual_result: str = "") -> TalkResult:
+               manual_result: str = "",
+               durable_ask: bool = False) -> TalkResult:
         """Interpret ``text`` and act on it (never raises).
 
         Every utterance is recorded verbatim into the conversation log
         (the brain learns from what you actually said — no keywords),
         then routed. ``force``/``confirm_fn`` pass through to the
         execution gate; ``cwd`` pins the working directory;
-        ``manual_result`` honors manual mission steps.
+        ``manual_result`` honors manual mission steps. ``durable_ask``
+        (phone/web/daemon surfaces): a CONFIRM action that can't prompt
+        interactively becomes a DURABLE permission ask the operator can
+        answer from any surface instead of a dead-end denial. CLI
+        passes False (it has a y/N prompt, or fails closed in --json).
         """
         raw = (text or "").strip()
         if not raw:
             return TalkResult(raw, "", "chat", response="I'm listening.")
         result = self._route(raw, confirm_fn=confirm_fn, force=force,
                              cwd=cwd or self.cwd,
-                             manual_result=manual_result)
+                             manual_result=manual_result,
+                             durable_ask=durable_ask)
         self._log_exchange(raw, result)
         return result
 
     def _route(self, raw: str, *, confirm_fn: ConfirmFn, force: bool,
                cwd: Optional[str],
-               manual_result: str = "") -> TalkResult:
+               manual_result: str = "",
+               durable_ask: bool = False) -> TalkResult:
         """The interpretation core of :meth:`handle` (no logging here)."""
         workdir = cwd
         try:
@@ -233,6 +242,34 @@ class TextCommandHandler:
 
         intent = action.intent
         try:
+            # App-learning phrases reach the desktop handler even when
+            # the LLM routes them elsewhere ("my todo app is obsidian"
+            # can read as ASK to a model) — learning is unambiguous and
+            # must work on every surface, LLM or not.
+            if intent != Intent.DESKTOP:
+                try:
+                    from .desktop.app_aliases import is_learning_phrase
+                    if is_learning_phrase(raw) and self.desktop_handler:
+                        return self._desktop(raw)
+                except Exception:
+                    pass
+
+            # IDE-control phrases (Wave 21) reach the editor even when
+            # the LLM misclassifies them ("open main.py in the editor"
+            # can read as DESKTOP to a model that never saw the new
+            # control verbs) — a source-file target + a control verb is
+            # unambiguous: drive the editor, don't web-search the file.
+            if intent != Intent.IDE:
+                try:
+                    from .nlu.intent import _ide_control_verb, _ide_target
+                    target = _ide_target(raw)
+                    if _ide_control_verb(raw) is not None and target:
+                        action.intent = Intent.IDE
+                        action.target = target
+                        intent = Intent.IDE
+                except Exception:
+                    pass
+
             if action.needs_clarification:
                 return TalkResult(
                     raw, intent.value, "clarification",
@@ -244,7 +281,8 @@ class TextCommandHandler:
                     return self._run_execution(raw, action,
                                                confirm_fn=confirm_fn,
                                                force=force,
-                                               cwd=workdir)
+                                               cwd=workdir,
+                                               durable_ask=durable_ask)
                 return TalkResult(
                     raw, intent.value, "clarification",
                     response="What would you like me to run?")
@@ -334,9 +372,59 @@ class TextCommandHandler:
 
     # ── Internals ─────────────────────────────────────────────────────
 
+    def _durable_ask(self, action_type: str, command: str, *,
+                     cwd: Optional[str] = None,
+                     goal: str = "") -> Optional[tuple[str, str]]:
+        """Record a durable permission ask; returns ``(request_id, desc)``.
+
+        The non-interactive confirm path (phone/web/daemon): a CONFIRM
+        action that can't prompt becomes a durable ask in the V4 DB
+        (survives restarts; resolvable by "yes, run it" from any
+        surface) + an IMPORTANT ambient event the phone's SSE feed sees.
+        Returns None on any failure (the caller then replies honestly
+        with a plain denial). Never raises.
+        """
+        try:
+            from . import db
+            from .ambient import AmbientBus, Event, Priority
+        except Exception as exc:
+            logger.debug(f"durable ask unavailable: {exc}")
+            return None
+        try:
+            # A clone ask names the destination so the operator sees
+            # exactly what will happen: "clone <url> into
+            # ~/Projects/<name>".
+            description = f"{action_type}: {command}"
+            try:
+                from .execution.executors import _clone_destination
+                dest = _clone_destination(command)
+                if dest:
+                    description = f"clone {command.split(' ', 1)[-1] if ' ' in command else command} into {dest}"
+            except Exception:
+                pass
+            rid = db.create_permission_request(
+                self.conn, description, action_type, command=command,
+                cwd=str(cwd or ""), goal=goal or description,
+                source="talk")
+            if not rid:
+                return None
+            try:
+                AmbientBus(self.conn).publish(Event(
+                    topic="permission",
+                    payload=f"May I {description}?",
+                    priority=Priority.IMPORTANT,
+                    source="nl.talk"))
+            except Exception as exc:
+                logger.debug(f"durable ask push failed: {exc}")
+            return rid, description
+        except Exception as exc:
+            logger.debug(f"durable ask failed: {exc}")
+            return None
+
     def _run_execution(self, text: str, action,
                        *, confirm_fn: ConfirmFn, force: bool,
-                       cwd: Optional[str] = None) -> TalkResult:
+                       cwd: Optional[str] = None,
+                       durable_ask: bool = False) -> TalkResult:
         kw = action.to_execution() or {}
         action_type = kw.get("action_type")
         command = kw.get("command", "")
@@ -385,6 +473,24 @@ class TextCommandHandler:
                               action_type=action_type, command=command,
                               goal=goal, action_id=aid, status=status)
         if status == "denied":
+            # No interactive confirm (phone/web/daemon) → the action
+            # becomes a DURABLE permission ask the operator can answer
+            # from any surface ("yes, run it" / "no"). Dead-end denials
+            # are gone: an ask is recorded + pushed to the ambient bus
+            # (the phone's SSE feed sees it) and the reply names it.
+            if (durable_ask and confirm_fn is None and not force
+                    and self.conn is not None):
+                ask = self._durable_ask(
+                    action_type, command, cwd=cwd, goal=goal)
+                if ask is not None:
+                    rid, description = ask
+                    return TalkResult(
+                        text, "execute", "asked",
+                        response=(f"May I {description}? Say 'yes, run it' "
+                                  f"to approve or 'no' to decline."),
+                        action_type=action_type, command=command,
+                        goal=goal, action_id=aid, status="asked",
+                        request_id=rid)
             return TalkResult(text, "execute", "denied",
                               response="I won't do that without your "
                                        "confirmation.",
@@ -459,21 +565,30 @@ class TextCommandHandler:
 
     def _ide_response(self, text: str, action,
                       cwd: Optional[str] = None) -> TalkResult:
-        """IDE intents — "what's wrong with src/main.py" → diagnostics.
+        """IDE intents — control the editor or analyze code in it.
 
-        Wave 6: the target file is analyzed through the IDE layer (LSP
-        when a server is available, the built-in AST analyzer always)
-        and the findings are reported with their method. No file → ask;
-        no findings → honest "nothing wrong"; unanalyzable → honest
-        "can't analyze". Never fabricates.
+        Wave 21 control: "open src/main.py in the editor" opens the
+        file, "jump to line 42 of cli_talk.py" reveals the line — both
+        adapted to whichever editor Friday detects (VS Code / JetBrains
+        / Neovim / Sublime / Emacs), with the OS opener as fallback.
+        Wave 6 diagnostics: "what's wrong with src/main.py" analyzes
+        through the IDE layer (LSP when available, AST always). No
+        file → ask; unanalyzable → honest; never fabricates.
         """
+        from .nlu.intent import _ide_control_verb, _ide_line
         target = getattr(action, "target", None) or ""
         if not target:
             return TalkResult(
                 text, "ide", "clarification",
-                response="Which file should I look at? Try 'what's wrong "
-                         "with src/main.py' or 'diagnose auth.py'.")
+                response="Which file should I look at? Try 'open src/main.py"
+                         " in the editor', 'jump to line 42 of auth.py', or"
+                         " 'what's wrong with main.py'.")
         path = self._resolve_ide_path(target, cwd)
+
+        verb = _ide_control_verb(text)
+        if verb in ("open", "reveal"):
+            return self._ide_control(text, target, path, verb)
+
         try:
             from .desktop.ide import analyze_file
             res = analyze_file(path, cwd=cwd)
@@ -506,6 +621,38 @@ class TextCommandHandler:
                     f"{res.display_path} (via {res.method}): {issues}.")
         return TalkResult(text, "ide", "ide", response=response,
                           status="succeeded", goal=target)
+
+    def _ide_control(self, text: str, target: str, path,
+                     verb: str) -> TalkResult:
+        """Editor control — open a file or reveal a line (Wave 21).
+
+        Adapts to the detected editor; never raises (the controller is
+        never-crash; a missing file or editor degrades to an honest
+        reply). Reveal-without-line falls back to opening the file.
+        """
+        from .nlu.intent import _ide_line
+        try:
+            from .desktop.ide.controller import open_file, reveal
+            from .desktop.ide.detection import detect
+        except Exception as exc:
+            logger.warning(f"ide control unavailable: {exc}")
+            return TalkResult(text, "ide", "failed",
+                              response=f"Editor control isn't wired here: {exc}")
+        try:
+            ide = detect()
+            line = _ide_line(text)
+            if verb == "reveal" and line is not None:
+                ok, detail = reveal(ide, path, line)
+            else:
+                ok, detail = open_file(ide, path)
+        except Exception as exc:
+            logger.warning(f"ide control failed: {exc}")
+            return TalkResult(text, "ide", "failed",
+                              response=f"I couldn't {verb} {target}: {exc}.")
+        status = "succeeded" if ok else "failed"
+        response = detail or (f"{verb.capitalize()}d {target}.")
+        return TalkResult(text, "ide", "ide", response=response,
+                          status=status, goal=target)
 
     def _create_mission(self, text: str, action,
                         cwd: Optional[str] = None) -> TalkResult:

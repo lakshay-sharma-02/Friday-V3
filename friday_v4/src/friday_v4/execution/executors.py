@@ -482,6 +482,125 @@ class SSHExecutor(BaseExecutor):
 
 # ── Claude Code hands (Wave 18) ─────────────────────────────────────
 
+#: Workspaces a claude task may act in when the caller passes no
+#: ``cwd`` (or a non-project cwd): the operator's project dirs + the
+#: home dir. Resolved deterministically (see ``_claude_workspace``).
+_PROJECT_CANDIDATE_DIRS: tuple[str, ...] = (
+    "Projects", "projects", "project", "dev", "code", "repos", "git",
+    "src", "workspace", "work", "Desktop", "Documents",
+)
+
+
+def _claude_workspace(cwd: Optional[str | Path],
+                      command: str = "") -> Optional[str]:
+    """A real workspace for a claude task, or None (ask the operator).
+
+    Delegated Claude Code tasks act on *a project*. When the caller
+    passes a ``cwd`` that IS a project (a git repo, has source files,
+    has a package manifest) it is used as-is. Otherwise the first
+    deterministic project dir (``~/Projects/*``, ``~/Desktop/*``, …) is
+    chosen. Ambiguous (no clear project) → None so the caller asks the
+    operator where to work instead of guessing.
+
+    A clone task ("clone <url>") is special: git clones into the
+    current directory, so the workspace is the *projects parent*
+    (``~/Projects``, created if missing) — the clone lands at
+    ``~/Projects/<repo-name>``, inside the sandbox root. Never raises.
+    """
+    try:
+        home = Path.home()
+    except Exception:
+        return None
+    if _extract_url(command):
+        # A clone task — work in the projects parent so the clone lands
+        # under it (inside the sandbox root).
+        try:
+            base = home / "Projects"
+            base.mkdir(parents=True, exist_ok=True)
+            return str(base)
+        except OSError:
+            return str(home)
+    # Explicit cwd that is a real project → use it.
+    if cwd:
+        try:
+            p = Path(cwd).expanduser().resolve()
+            if _looks_like_project(p):
+                return str(p)
+        except Exception:
+            pass
+    # Deterministic scan: first project under ~/Projects, ~/Desktop, …
+    for name in _PROJECT_CANDIDATE_DIRS:
+        base = home / name
+        try:
+            if not base.is_dir():
+                continue
+            for child in sorted(base.iterdir()):
+                if child.is_dir() and _looks_like_project(child):
+                    return str(child)
+        except OSError:
+            continue
+    return None
+
+
+def _clone_destination(command: str) -> Optional[str]:
+    """A target dir for a clone task: ``~/Projects/<repo-name>``.
+
+    ``command`` reads like a clone ("clone <url>", "<url>") → derive the
+    repo name from the URL and return the deterministic destination
+    under ``~/Projects``. Returns None when the command isn't a clone or
+    the repo name can't be derived. Never raises.
+    """
+    url = _extract_url(command or "")
+    if not url:
+        return None
+    # Strip a trailing "/" and a ".git" SUFFIX (never rstrip — that
+    # strips a character set and mangles "widget.git" → "widge").
+    clean = url.rstrip("/")
+    clean = re.sub(r"\.git$", "", clean)
+    name = clean.rsplit("/", 1)[-1]
+    name = re.sub(r"[^\w.-]+", "-", name or "").strip("-.")
+    if not name:
+        return None
+    try:
+        return str(Path.home() / "Projects" / name)
+    except Exception:
+        return None
+
+
+#: Matches a git clone URL (https / git@ssh / ssh:// / git://).
+_URL_RE = re.compile(
+    r"(?:https?://|git@|ssh://|git://)[^\s\"']+", re.IGNORECASE)
+
+
+def _extract_url(command: str) -> Optional[str]:
+    """The git URL in ``command``, or None."""
+    m = _URL_RE.search(command or "")
+    return m.group(0).rstrip(".,;)") if m else None
+
+
+def _looks_like_project(path: Path) -> bool:
+    """Whether ``path`` looks like a working project (never raises).
+
+    A git repo, a directory with source files, or a directory with a
+    package manifest (``package.json``/``pyproject.toml``/``Cargo.toml``).
+    """
+    try:
+        if (path / ".git").exists():
+            return True
+        for name in (".git", "package.json", "pyproject.toml", "Cargo.toml",
+                     "go.mod", "setup.py", "Makefile", "CMakeLists.txt",
+                     "README.md"):
+            if (path / name).exists():
+                return True
+        # Source files at the top level.
+        for f in path.iterdir():
+            if f.is_file() and f.suffix in (".py", ".ts", ".js", ".rs",
+                                            ".go", ".java", ".cpp", ".rb"):
+                return True
+    except OSError:
+        return False
+    return False
+
 #: Destructive *task phrases* the gate sniffs in a delegated task's
 #: natural-language text. Bare-word patterns like "push"/"deploy" would
 #: false-positive on diagnostic requests ("figure out why the push
@@ -745,8 +864,20 @@ def execute(action_type: str, command: str, *,
             action_type, status="failed",
             output=f"unknown action type: {action_type!r} "
                    f"(known: {sorted(_EXECUTORS)})")
+    # Claude Code tasks act on a project: resolve a real workspace
+    # when the caller passed none (or a non-project cwd) so delegated
+    # work ("clone this repo", "set up a project") lands somewhere
+    # sensible instead of the daemon/serve process's cwd. Other
+    # executors keep the caller's cwd untouched. A clone task's
+    # destination rides into the goal so the sandbox roots it there.
+    run_cwd = cwd
+    if action_type == "claude":
+        try:
+            run_cwd = _claude_workspace(cwd, command) or cwd
+        except Exception:
+            run_cwd = cwd
     executor = executor_cls(sandbox=sandbox, gate=gate)
-    return executor.execute(command, cwd=cwd, conn=conn,
+    return executor.execute(command, cwd=run_cwd, conn=conn,
                             confirm_fn=confirm_fn, force=force,
                             goal=goal, audit=audit)
 

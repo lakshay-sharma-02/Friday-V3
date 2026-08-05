@@ -835,6 +835,14 @@ class AutonomyAgent:
                     else "denied")
                 out["request_id"] = request_id
                 return out
+            # Wave 22 — CLAUDE: bridge asks are permission for a Claude
+            # Code tool call, not a shell command: the "yes" resolves
+            # the SDK's pending can_use_tool future (the bridge's event
+            # loop) instead of running execute. The operator's words
+            # still decide; the tool then runs inside the bridged
+            # session where the model sees its own result.
+            if req.get("source") == "bridge":
+                return self._accept_bridge(conn, req, request_id, force)
             try:
                 from ..execution import execute
                 result = execute(
@@ -868,6 +876,36 @@ class AutonomyAgent:
         finally:
             self._close_conn(conn)
 
+    def _accept_bridge(self, conn, req: dict, request_id: str,
+                       force: bool) -> dict:
+        """Approve a Claude Code tool ask (resolves the SDK future).
+
+        The bridge's ``can_use_tool`` callback is blocked on an
+        asyncio future; resolving it lets the tool call proceed inside
+        the bridged session. Never raises — an unresolvable ask is
+        reported honestly without executing anything.
+        """
+        from .. import db as _db
+        try:
+            from ..agent.permissions import registry
+            resolved = registry.resolve(request_id, True)
+        except Exception as exc:
+            logger.warning(f"bridge accept resolve failed: {exc}")
+            _db.resolve_permission_request(conn, request_id, "denied")
+            return {"status": "failed", "error": str(exc),
+                    "request_id": request_id}
+        if not resolved:
+            # The ask row still exists but the SDK future is gone (e.g.
+            # the session ended) — resolve the row so it stops pending.
+            _db.resolve_permission_request(conn, request_id, "denied")
+            return {"status": "failed",
+                    "error": "that Claude tool ask is no longer waiting",
+                    "request_id": request_id}
+        _db.resolve_permission_request(conn, request_id, "approved")
+        return {"status": "succeeded", "request_id": request_id,
+                "output": "Claude Code tool call approved — it is "
+                           "running in the bridge session."}
+
     def deny(self, request_id: str, reason: str = "operator declined") -> bool:
         """The operator declined — resolve the ask and record an override.
 
@@ -883,6 +921,16 @@ class AutonomyAgent:
             req = db.get_permission_request(conn, request_id)
             if not req or req.get("status") != "pending":
                 return False
+            # Wave 22 — a bridge ask's "no" resolves the SDK's pending
+            # can_use_tool future with deny (fail-closed) instead of
+            # recording a shell override. The model learns the operator
+            # declined; the tool call does not run.
+            if req.get("source") == "bridge":
+                try:
+                    from ..agent.permissions import registry
+                    registry.resolve(request_id, False, reason=reason)
+                except Exception as exc:
+                    logger.warning(f"bridge deny resolve failed: {exc}")
             db.resolve_permission_request(conn, request_id, "denied")
             db.record_override(conn, req.get("action_type") or "",
                                req.get("command") or "",

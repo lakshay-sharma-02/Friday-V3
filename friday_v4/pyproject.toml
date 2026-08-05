@@ -76,6 +76,13 @@ security = [
     "ruff>=0.4",
     "truffleHog>=3.0",
 ]
+agent = [
+    # The CLAUDE: bridge — drives the same `claude` CLI via the Agent
+    # SDK (persistent session + per-tool permission events). Optional:
+    # without it the bridge reports unavailable and chat falls back to
+    # the NL router (never-crash law).
+    "claude-agent-sdk>=0.2.0",
+]
 
 [project.scripts]
 friday4 = "friday_v4.cli_talk:main"

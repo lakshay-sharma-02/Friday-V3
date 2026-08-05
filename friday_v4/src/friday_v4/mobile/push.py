@@ -83,6 +83,103 @@ def file_transporter(outbox: Path) -> Transporter:
     return _transporter
 
 
+# ── Expo push (Wave 7) — the real phone destination ──────────────────
+
+#: The Expo push service endpoint (https://docs.expo.dev/push-notifications).
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+
+def _post(url: str, payload: dict, timeout_seconds: float = 15.0) -> Optional[str]:
+    """POST JSON to ``url``; returns the response text or None (never raises)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    body = _json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        logger.debug(f"expo push failed: {exc}")
+        return None
+
+
+def expo_transporter(token: str, timeout_seconds: float = 15.0,
+                     post: Optional[callable] = None) -> Transporter:
+    """Transporter that delivers notifications to one Expo push token.
+
+    The real phone destination (Wave 7): a paired device's Expo push
+    token receives the ambient event as a system notification. Pure
+    stdlib (``urllib``), bounded timeout, and never raises — a failed
+    send logs and the poll continues (the daemon law).
+    """
+    token = (token or "").strip()
+    if not token:
+        return lambda notification: None
+    sender = post or _post
+
+    def _transporter(notification: Notification) -> None:
+        payload = {
+            "to": token,
+            "title": f"Friday · {notification.topic}",
+            "body": (notification.payload or "")[:200],
+            "sound": "default",
+            "data": notification.to_dict(),
+        }
+        sender(EXPO_PUSH_URL, payload, timeout_seconds)
+
+    return _transporter
+
+
+def fanout_transporter(db_path=None, *, timeout_seconds: float = 15.0,
+                       post: Optional[callable] = None) -> Transporter:
+    """Transporter that pushes to every paired device (Wave 7).
+
+    The daemon's default mobile destination once the operator has
+    paired a phone: each poll reads the device registry fresh (a newly
+    paired phone starts receiving immediately; an unpairing stops
+    delivery on the next pass). Never raises — a bad token fails one
+    device, never the queue.
+    """
+    sender = post or _post
+
+    def _transporter(notification: Notification) -> None:
+        try:
+            from .. import db
+            conn = db.connect(path=db_path)
+            try:
+                devices = db.list_devices(conn)
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.debug(f"fanout device lookup failed: {exc}")
+            return
+        for device in devices:
+            token = (device.get("token") or "").strip()
+            if not token:
+                continue
+            if not token.startswith("ExponentPushToken["):
+                # A PWA/other client — it receives events over its SSE
+                # stream, not Expo push. Skip so we never POST a bogus
+                # token to exp.host (Wave 7: the PWA pairs for identity,
+                # the native app pairs an Expo token for background push).
+                logger.debug(
+                    f"fanout skip {device.get('id')}: non-Expo token "
+                    f"({device.get('platform') or 'unknown'})")
+                continue
+            try:
+                expo_transporter(token, timeout_seconds=timeout_seconds,
+                                 post=sender)(notification)
+            except Exception as exc:
+                logger.debug(f"fanout device {device.get('id')} failed: {exc}")
+
+    return _transporter
+
+
 def command_transporter(command: str, timeout_seconds: float = 20.0) -> Transporter:
     """Transporter that pipes each notification's JSON to a shell command.
 
@@ -219,4 +316,5 @@ class PushNotificationService:
 
 
 __all__ = ["Notification", "PushNotificationService", "Transporter",
-           "log_transporter", "file_transporter", "command_transporter"]
+           "log_transporter", "file_transporter", "command_transporter",
+           "expo_transporter", "fanout_transporter", "EXPO_PUSH_URL"]

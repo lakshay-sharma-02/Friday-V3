@@ -1,0 +1,142 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "friday-v6"
+version = "0.1.0.dev0"
+description = "Friday V6 — Ambient, proactive, multi-modal AI operating partner"
+authors = [
+    { name = "Friday Team", email = "friday@example.com" },
+]
+readme = "README.md"
+requires-python = ">=3.12"
+keywords = ["ai", "assistant", "developer-tools", "productivity"]
+
+dependencies = [
+    "edge-tts>=7.0",
+    "pyttsx3>=2.90",
+]
+
+[project.optional-dependencies]
+# All optional deps carry >= minimums (tested versions) so the security
+# scanner's unpinned-dependency check has nothing to flag.
+full = [
+    "kokoro-onnx>=0.5.0",
+    "faster-whisper>=1.2.1",
+    "openwakeword>=0.4.0",
+    "onnxruntime>=1.28.0",
+    "sounddevice>=0.5.5",
+    "webrtcvad>=2.0.10",
+    "edge-tts>=7.0",
+    "pyttsx3>=2.99",
+    "piper-tts>=1.6.0",
+    "espeakng_loader>=0.2.4",
+    # sounddevice 0.5.x mutates `data.shape = -1, channels` in its callback
+    # wrapper, which NumPy >= 2.5 turns into a hard assertion (core dump).
+    # Pin below 2.5 to keep the shape-set a deprecation warning.
+    "numpy>=1.26,<2.5",
+]
+voice = [
+    "kokoro-onnx>=0.5.0",
+    "sounddevice>=0.5.5",
+    "webrtcvad>=2.0.10",
+    "onnxruntime>=1.28.0",
+    "edge-tts>=7.0",
+    "pyttsx3>=2.99",
+    "piper-tts>=1.6.0",
+    "espeakng_loader>=0.2.4",
+    # See note in `full` — sounddevice + NumPy 2.5 crash.
+    "numpy>=1.26,<2.5",
+]
+stt = ["faster-whisper>=1.2.1"]
+hotword = ["openwakeword>=0.4.0", "onnxruntime>=1.28.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "pytest-mock>=3.12",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+desktop = [
+    "pystray>=0.19.5",
+    "Pillow>=10.0",
+    "keyboard>=0.13.5",
+    "pydbus>=0.6.0",
+    "pyobjc>=10.0; platform_system == 'Darwin'",
+    "pypiwin32>=223; platform_system == 'Windows'",
+]
+collab = [
+    "websockets>=12.0",
+    "zeroconf>=0.131",
+]
+security = [
+    "pip-audit>=2.7",
+    "ruff>=0.4",
+    "truffleHog>=3.0",
+]
+agent = [
+    # The CLAUDE: bridge — drives the same `claude` CLI via the Agent
+    # SDK (persistent session + per-tool permission events). Optional:
+    # without it the bridge reports unavailable and chat falls back to
+    # the NL router (never-crash law).
+    "claude-agent-sdk>=0.2.0",
+]
+hud = [
+    # Wave 3 — the Textual HUD (Friday's face): vitals, live ambient
+    # stream, schedule, notices, permission buttons. Optional: without
+    # it `friday6 hud` degrades to a printed hint (never-crash law);
+    # the pure HUD layer + controller are importable with zero extras.
+    #
+    # Tested range: 0.80 (API floor the HUD was written against)
+    # through 8.x (verified 8.2.8 — see the V5 W6 wiring plan; the
+    # headless pilot tests pass on 8.2.8). Ceiling <9 guards against
+    # the next major Textual break (mount semantics changed in 8.x).
+    "textual>=0.80,<9",
+    "psutil>=5.9",
+]
+
+[project.scripts]
+friday6 = "friday_v6.cli_talk:main"
+friday-v6 = "friday_v6.cli_talk:main"
+# Note: `friday` script is defined by V3 (pyproject.toml in project root).
+# V6 uses `friday6` to avoid CLI entry-point conflicts when V3 is installed
+# side-by-side. Run V6 voice with:  friday6 talk --tts-provider edge
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["friday_v6*"]
+
+[tool.setuptools.package-data]
+friday_v6 = [
+    # Wave 2 — the bundled V5 markdown skills ship as package data so
+    # pip-installed Friday still discovers them (never-crash law).
+    "skills/markdown_skills/*/SKILL.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+markers = [
+    "voice: voice pipeline tests",
+    "desktop: desktop abstraction tests",
+    "collab: collaboration tests",
+    "security: security scanning tests",
+    "intelligence: intelligence layer tests",
+    "network: network tests",
+    "proactive: proactive intelligence tests",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# Archived code is not part of the active product — excluded from linting
+# and from the `friday6 security scan` quality gate's ruff pass.
+exclude = ["archive"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true

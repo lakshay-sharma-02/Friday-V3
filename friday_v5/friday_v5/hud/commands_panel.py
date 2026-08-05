@@ -5,7 +5,7 @@ from textual.widgets import Static
 
 
 def render_commands() -> str:
-    return "[ask] type below   [perm] allow/deny   [end] session   [quit] q"
+    return "[ask] type below   [end] session   [quit] q"
 
 
 class CommandsPanel(Static):

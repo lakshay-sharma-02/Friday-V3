@@ -70,7 +70,7 @@ Wave 3: SECURITY ──&gt; Friday protects your code ────────�
 Wave 4: SMART ─────&gt; Friday anticipates your needs ─────&gt; ✅ SHIPPED
 Wave 5: COLLAB ────&gt; Friday works with teams ───────────&gt; ✅ SHIPPED
 Wave 6: IDE ───────&gt; Friday lives in your editor ───────&gt; ✅ SHIPPED (2026-08)
-Wave 7: MOBILE ────&gt; Friday in your pocket ─────────────&gt; 10-12 weeks
+Wave 7: MOBILE ────&gt; Friday in your pocket ─────────────&gt; ✅ SHIPPED (2026-08)
 Wave 9: AGENCY ────&gt; Friday actually does things ───────&gt; ✅ SHIPPED
 Wave 10: IDENTITY ─&gt; Friday knows you ──────────────────&gt; ✅ SHIPPED
 Wave 11: RESEARCH ─&gt; Friday reasons across your world ──&gt; ✅ SHIPPED
@@ -270,23 +270,32 @@ Wave 14: WATCH ME ──────&gt; demonstration capture ─────�
 🧑 &quot;diagnose src/main.py&quot; → Friday opens the real diagnostics from the LSP</code></pre>
 <hr>
 <h2>Wave 7: Mobile &amp; Web (10-12 weeks)</h2>
-<p><strong>Status (web slice):</strong> ✅ Web Dashboard SHIPPED (2026-08). <code>friday4 web</code></p>
-<p>starts a pure-stdlib local dashboard (no FastAPI/flask — consistent with</p>
-<p>V4&#x27;s &quot;pure-stdlib, always works&quot; philosophy) visualizing daemon status,</p>
-<p>security grade + findings, intelligence drift/anomalies, proactive</p>
-<p>patterns, the read-only V3 bridge, voice config, and the ambient feed,</p>
-<p>with a &quot;run security scan&quot; action. React Native app + push pending.</p>
+<p><strong>Status:</strong> ✅ <strong>SHIPPED (2026-08).</strong> Web dashboard (Wave 9 area) and the</p>
+<p>phone surface are both real:</p>
+<ul><li>✅ <code>friday4 web</code> — pure-stdlib local dashboard (daemon status, security</li></ul>
+<p>grade + findings, intelligence, proactive, V3 bridge, voice, chat).</p>
+<ul><li>✅ <strong><code>friday4 mobile serve</code> now serves the phone app itself</strong> — an</li></ul>
+<p>installable companion PWA at <code>/</code> (<code>mobile/app/</code>): one-time-code</p>
+<p>pairing, chat through the same <code>nl_router</code> brain, the shared</p>
+<p>one-presence thread, a live SSE push feed with a durable replay</p>
+<p>cursor, and status. Add to Home Screen → an app icon on the phone.</p>
+<ul><li>✅ Push transport (Wave 15): <code>PushNotificationService</code> + daemon</li></ul>
+<p><code>MobilePushWorker</code> + <code>fanout_transporter</code> (paired Expo tokens) —</p>
+<p>PWA devices stream over SSE instead of hitting exp.host.</p>
+<ul><li>✅ <code>mobile/app/</code> — React Native / Expo <strong>native app</strong> (TypeScript,</li></ul>
+<p>typechecked, SDK-54 pinned deps): Status/Chat/Feed/Devices tabs, typed</p>
+<p>API client, SSE live feed, push registration; build + account steps in</p>
+<p><code>mobile/app/README.md</code>. The Python contract is validated hermetically</p>
+<p>(incl. the SSE stream regression — queued events deliver, empty stays</p>
+<p>idle, never crashes).</p>
 <p><strong>Goal:</strong> Friday in your pocket. Quick status, voice input, push notifications.</p>
 <h3>What We Build</h3>
-<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>T</th><th>i</th><th>m</th><th>e</th><th></th><th>|</th><th></th><th>C</th><th>o</th><th>m</th><th>p</th><th>l</th><th>e</th><th>x</th><th>i</th><th>t</th><th>y</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>MobileAPI</code> (FastAPI server)</td><td><code>mobile/api.py</code></td><td>4 days</td><td>Low</td><td></td></tr><tr><td></td><td>Push Notification Service</td><td><code>mobile/push.py</code></td><td>5 days</td><td>Medium — APNS + FCM setup</td><td></td></tr><tr><td></td><td><strong>Web Dashboard</strong></td><td><code>mobile/web/</code></td><td><strong>3 weeks</strong></td><td>Medium — FastAPI + HTMX or React</td><td></td></tr><tr><td></td><td><strong>React Native App</strong></td><td><code>mobile/app/</code></td><td><strong>6-8 weeks</strong></td><td><strong>HIGH</strong> — first RN app</td><td></td></tr></tbody></table>
-<p><strong>Total: ~48 days → 10-12 weeks</strong></p>
-<h3>Strategy: Web First, Mobile Second</h3>
-<pre><code class="language-">Week 1-3:   Web Dashboard only (valuable alone)
-Week 4-10:  React Native app (if you still want it)
-Week 11-12: Polish + push notifications</code></pre>
-<p>The web dashboard is <strong>independently useful</strong> — anyone can open a browser</p>
-<p>to see Friday&#x27;s status. The mobile app adds push notifications and voice input</p>
-<p>but requires platform-specific development.</p>
+<table><thead><tr><th>|</th><th></th><th>M</th><th>o</th><th>d</th><th>u</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>F</th><th>i</th><th>l</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Companion API + PWA server</td><td><code>mobile/api.py</code></td><td>✅ (pure-stdlib, not FastAPI)</td><td></td></tr><tr><td></td><td>Push Notification Service</td><td><code>mobile/push.py</code></td><td>✅ (Expo + fanout + hook)</td><td></td></tr><tr><td></td><td>Phone pairing (one-time code)</td><td><code>mobile/pairing.py</code></td><td>✅</td><td></td></tr><tr><td></td><td><strong>Companion PWA (the phone app)</strong></td><td><code>mobile/app/</code></td><td>✅ <strong>SHIPPED</strong> — installable, served at <code>/</code></td><td></td></tr><tr><td></td><td><strong>React Native / Expo app</strong></td><td><code>mobile/app/</code></td><td>✅ native app — typechecked, README with build + Apple/Google/EAS steps</td><td></td></tr></tbody></table>
+<p><strong>Shipped instead of FastAPI/React for the UI:</strong> a phone-first PWA —</p>
+<p>consistent with V4&#x27;s &quot;pure-stdlib, always works&quot; law (the same reason</p>
+<p><code>friday4 web</code> is a stdlib HTML dashboard). The PWA is the tested phone</p>
+<p>surface; the RN scaffold is the checked-in native path for real</p>
+<p>background push via Expo tokens.</p>
 <h3>Prerequisites</h3>
 <table><thead><tr><th>|</th><th></th><th>R</th><th>e</th><th>q</th><th>u</th><th>i</th><th>r</th><th>e</th><th>m</th><th>e</th><th>n</th><th>t</th><th></th><th>|</th><th></th><th>C</th><th>o</th><th>s</th><th>t</th><th></th><th>|</th><th></th><th>D</th><th>e</th><th>t</th><th>a</th><th>i</th><th>l</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Apple Developer Account</strong></td><td><strong>$99/year</strong></td><td>Required for iOS push notifications (APNS) and app distribution</td><td></td></tr><tr><td></td><td><strong>Google Firebase Project</strong></td><td>Free</td><td>Required for Android push notifications (FCM)</td><td></td></tr><tr><td></td><td><strong>React Native learning</strong></td><td>Time</td><td>First RN app has a 1-2 week learning curve minimum</td><td></td></tr></tbody></table>
 <h3>Hidden Complexity</h3>
@@ -374,6 +383,41 @@ Polish     ~1 mo     +1 mo         📦 &quot;Production-ready V4&quot;    Mediu
 <p>this&quot; → shadow skill formed with repo context; &quot;what did you learn&quot; →</p>
 <p>&quot;I&#x27;ve learned 3 skill(s)…&quot; from the real registry. See</p>
 <p><a href="WAVE_14_WATCH_ME.md"><code>WAVE_14_WATCH_ME.md</code></a>.</p>
+<hr>
+<h2>Wave 21: IDE Control ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> *Friday drives the editor* — &quot;open main.py in the editor&quot;,</p>
+<p>&quot;jump to line 42 of cli_talk.py&quot;, &quot;reveal auth.py:7&quot; — adapted to</p>
+<p>whichever IDE is detected, on every surface, with repair-work handed to</p>
+<p>the Claude Code arms.</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>IDE control keywords + source-file tie-break (whitelisted extensions; no web-TLD hijack)</td><td>✅</td><td></td></tr><tr><td></td><td><code>_ide_target</code> / <code>_ide_line</code> / <code>_ide_control_verb</code> extraction (&quot;line 42 of X&quot;, &quot;X:42&quot;)</td><td>✅</td><td></td></tr><tr><td></td><td><code>_ide_response</code> dispatches open/reveal via <code>controller</code> (VS Code/JetBrains/Neovim/Sublime/Emacs + OS opener)</td><td>✅</td><td></td></tr><tr><td></td><td>Repair verbs (fix/debug/repair/rewrite) → &quot;open X and fix it&quot; → Claude Code gate, never a silent open</td><td>✅</td><td></td></tr><tr><td></td><td>Every surface (voice/CLI/web/phone) via <code>TextCommandHandler</code></td><td>✅</td><td></td></tr><tr><td></td><td>Live-verified on VS Code machine (open + reveal real files)</td><td>✅</td><td></td></tr><tr><td></td><td><code>tests/test_ide_control.py</code> — 24 hermetic tests</td><td>✅</td><td></td></tr><tr><td></td><td><code>WAVE_21_IDE_CONTROL.md</code> + MASTER_PLAN updated</td><td>✅</td><td></td></tr></tbody></table>
+<p><strong>MCU feel:</strong> &quot;Friday, open main.py in the editor&quot; → file opens;</p>
+<p>&quot;jump to line 42 of cli_talk.py&quot; → cursor lands on line 42; &quot;open</p>
+<p>main.py and fix it&quot; → Claude Code does the work. See</p>
+<p><a href="WAVE_21_IDE_CONTROL.md"><code>WAVE_21_IDE_CONTROL.md</code></a>.</p>
+<hr>
+<h2>Wave 22: Agent Bridge &amp; Anywhere Access ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> *one Friday wherever you are* — <code>CLAUDE:</code> in the phone/PWA</p>
+<p>chat hands the message to ONE persistent Claude Code session (context</p>
+<p>until <code>CLAUDE END</code>), and the phone can reach Friday from anywhere in</p>
+<p>the world (free: Tailscale / Cloudflare tunnel) with the API safely</p>
+<p>token-gated.</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><code>agent/bridge.py</code> — one SDK session, constant session_id, thread-safe prompt queue, <code>CLAUDE END</code> closes</td><td>✅</td><td></td></tr><tr><td></td><td><code>agent/permissions.py</code> — <code>can_use_tool</code> → durable ask (source=bridge) → ambient event → future</td><td>✅</td><td></td></tr><tr><td></td><td><code>AutonomyAgent.accept/deny</code> bridge branch (resolves the SDK future, never executes a shell command)</td><td>✅</td><td></td></tr><tr><td></td><td><code>POST /api/talk</code> CLAUDE: routing + <code>GET /api/agent/status</code></td><td>✅</td><td></td></tr><tr><td></td><td>PWA agent labels + ask-bubble reuse; native app token field</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 mobile remote</code> — LAN IPs + Tailscale detect + tunnel one-liner + token guidance</td><td>✅</td><td></td></tr><tr><td></td><td>API bearer token (<code>serve --token</code> / env) gating /api/* (PWA shell public); PWA + app send it</td><td>✅</td><td></td></tr><tr><td></td><td><code>serve --tray</code> — system tray icon (Open dashboard / URLs / Pair / Status / Stop), reuses SystemTray; latin-1 tooltip bug fixed</td><td>✅</td><td></td></tr><tr><td></td><td><code>serve --tunnel cloudflare</code> — spawns cloudflared, prints the public URL, cleans up on exit; degrades when missing</td><td>✅</td><td></td></tr><tr><td></td><td><code>friday4 mobile autostart</code> / <code>no-autostart</code> — 9router-style XDG entry (<code>--host 0.0.0.0 --tray</code>), chmod 700, quoted Exec</td><td>✅</td><td></td></tr><tr><td></td><td><code>--host</code> accepts bare IP / host:port / full http(s):// URL / trailing slash (operator&#x27;s pasted URL no longer fails)</td><td>✅</td><td></td></tr><tr><td></td><td><code>tests/test_wave7_mobile.py</code> — bind normalization regression + autostart + tunnel + tray degrade tests</td><td>✅</td><td></td></tr><tr><td></td><td><code>pyproject.toml</code> optional <code>agent</code> extra (claude-agent-sdk)</td><td>✅</td><td></td></tr><tr><td></td><td><code>tests/test_agent_bridge.py</code> (22 hermetic) + token/remote tests; suite green</td><td>✅</td><td></td></tr><tr><td></td><td><code>WAVE_22_AGENT_BRIDGE.md</code> + MASTER_PLAN/ROADMAP updated</td><td>✅</td><td></td></tr></tbody></table>
+<p><strong>MCU feel:</strong> from anywhere in the world — &quot;CLAUDE: refactor the auth</p>
+<p>module&quot; in the phone app → Claude Code works on the PC, you approve its</p>
+<p>tool asks inline, and the Live feed shows it happening. See</p>
+<p><a href="WAVE_22_AGENT_BRIDGE.md"><code>WAVE_22_AGENT_BRIDGE.md</code></a>.</p>
+<hr>
+<h2>Wave 20: Desktop Natural Language ✅ SHIPPED (2026-08)</h2>
+<p><strong>Goal:</strong> *talk to the PC like a person* — compound commands, workspace</p>
+<p>and browser qualifiers, web destinations, site search — and hand every</p>
+<p>task the interpreter can&#x27;t do to the agentic arms (never hardcoded</p>
+<p>workflows, never a web-search of work).</p>
+<table><thead><tr><th>|</th><th></th><th>T</th><th>a</th><th>s</th><th>k</th><th></th><th>|</th><th></th><th>S</th><th>t</th><th>a</th><th>t</th><th>u</th><th>s</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>NL interpreter — compound splitting (verb-gated connectors, <code>and then</code>/<code>also</code> units, task phrases never split)</td><td>✅</td><td></td></tr><tr><td></td><td>Workspace qualifier (&quot;on workspace 3&quot;) + browser qualifier (&quot;in firefox&quot;) + &quot;in it&quot; chaining</td><td>✅</td><td></td></tr><tr><td></td><td>Web destinations (whatsapp/youtube/gmail/…), canonical display names, site-search templates (youtube results, google, github)</td><td>✅</td><td></td></tr><tr><td></td><td>Explicit search verbs (search/look up/google/find) + noun-phrase web-search fallback</td><td>✅</td><td></td></tr><tr><td></td><td>Honest install-gated launches (<code>_resolve_app</code> → resolvable binary only)</td><td>✅</td><td></td></tr><tr><td></td><td><code>DesktopAbstraction.open_url</code> + <code>_open_in_browser</code> WM-hook-first fallback</td><td>✅</td><td></td></tr><tr><td></td><td>NLU task tie-break (<code>nlu/intent.py</code>) — task verbs/nouns route PLAN/EXECUTE instead of DESKTOP</td><td>✅</td><td></td></tr><tr><td></td><td>Agentic markers — task phrases resolve <code>action_type=claude</code> (Claude Code executor)</td><td>✅</td><td></td></tr><tr><td></td><td>Voice router delegates to the shared interpreter, NLU-gated (&quot;yes, run it&quot; stays accept)</td><td>✅</td><td></td></tr><tr><td></td><td>Hermetic tests — 5 user examples + compound + fall-through + launch honesty + accept guard</td><td>✅</td><td></td></tr><tr><td></td><td><strong>Follow-up — app-learning loop:</strong> teach once (&quot;my todo app is obsidian&quot; / use / set / with frames), resolve forever; only resolvable binaries learned; unknown personal apps get a teaching prompt (never a web search); <code>friday4 desktop aliases/teach/forget</code>; LLM-robust pre-dispatch hook</td><td>✅</td><td></td></tr><tr><td></td><td><strong>Follow-up — cross-machine sync:</strong> aliases publish as collab observations (<code>alias:&lt;name&gt;</code> LWW keys), <code>friday4 desktop aliases-sync</code> pushes/syncs/merges with peers; synced aliases only launch when the binary exists here</td><td>✅</td><td></td></tr><tr><td></td><td><code>WAVE_20_DESKTOP_NL.md</code> + MASTER_PLAN/ROADMAP updated</td><td>✅</td><td></td></tr></tbody></table>
+<p><strong>MCU feel:</strong> &quot;open chrome on workspace 3 and open whatsapp&quot; → two</p>
+<p>actions, workspace switched; &quot;open youtube and cristiano ronaldo</p>
+<p>channel in it&quot; → YouTube search opens; &quot;open a python venv and install</p>
+<p>requests&quot; → the brain (Claude Code) takes it. See</p>
+<p><a href="WAVE_20_DESKTOP_NL.md"><code>WAVE_20_DESKTOP_NL.md</code></a>.</p>
 <hr>
 <h2>What If You Skip a Wave?</h2>
 <table><thead><tr><th>|</th><th></th><th>S</th><th>k</th><th>i</th><th>p</th><th></th><th>|</th><th></th><th>I</th><th>m</th><th>p</th><th>a</th><th>c</th><th>t</th><th></th><th>|</th><th></th><th>M</th><th>i</th><th>t</th><th>i</th><th>g</th><th>a</th><th>t</th><th>i</th><th>o</th><th>n</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td>Desktop</td><td>Voice still works. No desktop control.</td><td>Fine for CLI-centric users.</td><td></td></tr><tr><td></td><td>Security</td><td>Voice + Desktop still work. Manual scanning.</td><td>You can still run pip-audit yourself.</td><td></td></tr><tr><td></td><td>Smart</td><td>No predictions/anticipation. Core features work.</td><td>Friday stops being proactive, stays reactive.</td><td></td></tr><tr><td></td><td>Collab</td><td>Single-instance only. Same as V3.</td><td>Doesn&#x27;t affect any other feature.</td><td></td></tr><tr><td></td><td>IDE</td><td>No editor integration. CLI still works.</td><td>Voice commands can replace some IDE actions.</td><td></td></tr><tr><td></td><td>Mobile</td><td>Desktop-only. Same as V3.</td><td>Web dashboard is the alternative.</td><td></td></tr><tr><td></td><td>Agency (9)</td><td>Friday suggests but never does.</td><td>Voice + desktop still work; no execution.</td><td></td></tr><tr><td></td><td>Identity (10)</td><td>Friday has no memory of you.</td><td>Patterns still learned, but per-session only.</td><td></td></tr><tr><td></td><td>Research (11)</td><td>Friday answers only what you ask.</td><td>Briefings/reports degrade to manual summaries.</td><td></td></tr></tbody></table>

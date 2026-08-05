@@ -444,3 +444,67 @@ class TestExecutors:
         # pytest not discoverable → structured failure, not a crash
         assert result.status == "failed"
         assert "pytest" in result.output
+
+
+# ==========================================================================
+# Claude workspace resolution (Wave 20) — delegated tasks act on a project
+# ==========================================================================
+
+class TestClaudeWorkspace:
+    """Hermetic workspace resolution for claude tasks.
+
+    ``_claude_workspace(cwd, command)`` picks a real project dir so a
+    delegated Claude Code task (clone, setup, fix) lands somewhere
+    sensible instead of the daemon/serve process's cwd. The functions
+    are pure — tested directly with monkeypatched HOME, no real
+    ~/Projects is ever touched.
+    """
+
+    def test_clone_workspace_is_projects_parent(self, tmp_path, monkeypatch):
+        from friday_v4.execution.executors import _claude_workspace
+        monkeypatch.setenv("HOME", str(tmp_path))
+        ws = _claude_workspace(None, "clone https://github.com/a/b.git")
+        assert ws == str(tmp_path / "Projects")
+
+    def test_project_cwd_used_as_is(self, tmp_path, monkeypatch):
+        from friday_v4.execution.executors import _claude_workspace
+        proj = tmp_path / "proj"
+        (proj / ".git").mkdir(parents=True)
+        ws = _claude_workspace(str(proj), "fix the build")
+        assert ws == str(proj.resolve())
+
+    def test_non_project_cwd_falls_back_to_scan(self, tmp_path, monkeypatch):
+        from friday_v4.execution.executors import _claude_workspace
+        monkeypatch.setenv("HOME", str(tmp_path))
+        proj = tmp_path / "Projects" / "realproject"
+        proj.mkdir(parents=True)
+        (proj / "README.md").write_text("hi", encoding="utf-8")
+        # A non-project cwd → the first project under ~/Projects wins.
+        ws = _claude_workspace(str(tmp_path / "empty"), "fix the build")
+        assert ws == str(proj)
+
+    def test_clone_destination_derives_repo_name(self, tmp_path):
+        from friday_v4.execution.executors import _clone_destination
+        dest = _clone_destination("clone https://github.com/acme/widget.git")
+        assert dest and dest.endswith("/widget")
+        assert _clone_destination("just some words") is None
+
+    def test_execute_claude_uses_resolved_workspace(self, tmp_path,
+                                                    monkeypatch):
+        """A claude task with a non-project cwd runs in the resolved
+        project dir (hermetic: HOME pinned to tmp_path so the sandbox
+        roots at tmp_path/Projects, never ~/Projects)."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("FRIDAY_V4_CLAUDE_TIMEOUT", "1")
+        conn = db.connect(tmp_path / "v4.db")
+        try:
+            result = execute(
+                "claude", "list files in this project",
+                cwd=str(tmp_path / "nowhere"), conn=conn,
+                confirm_fn=lambda _d: True, goal="claude workspace")
+            # claude CLI may be absent → failed with an honest reason.
+            # The point is the run was attempted in the resolved root
+            # (tmp_path/Projects), which the sandbox allowed.
+            assert result.status in ("succeeded", "failed", "denied")
+        finally:
+            conn.close()

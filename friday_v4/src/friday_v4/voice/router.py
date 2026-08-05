@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, ClassVar, Optional
+from typing import Any, Optional
 
 from .chimes import play_chime
 from .pipeline import PipelineState, VoicePipeline
@@ -216,9 +216,6 @@ class VoiceRouter:
 
     def _fallback_route(self, text: str) -> str:
         lower = text.lower().strip()
-        desktop_response = self._try_desktop_command(lower, text)
-        if desktop_response:
-            return desktop_response
 
         if _has_any_word(lower, ["hello", "hi", "hey"]) or \
            _has_phrase(lower, "good morning") or _has_phrase(lower, "good evening"):
@@ -254,112 +251,34 @@ class VoiceRouter:
                 f"about your projects or saying 'what's new'.")
 
     # ── Desktop commands ───────────────────────────────────────────────
-
-    _DESKTOP_ACTIONS: ClassVar[dict[str, str]] = {
-        "focus": "focus", "switch": "workspace", "go to": "workspace",
-        "open": "open", "show": "focus", "launch": "launch",
-        "take": "screenshot", "capture": "screenshot", "screenshot": "screenshot",
-        "snapshot": "screenshot",
-    }
-
-    def _get_wm(self):
-        """Lazily construct and cache the WindowManager facade."""
-        if self._wm is None:
-            try:
-                from ..desktop.wm_abstraction import WindowManager
-                self._wm = WindowManager()
-            except ImportError:
-                self._wm = None
-        return self._wm
+    #
+    # ONE desktop NL language everywhere. Voice delegates to the same
+    # ``desktop_text_command`` interpreter the CLI, web dashboard, and
+    # phone companion use — compound commands ("open chrome on workspace
+    # 3 and open whatsapp"), workspace targeting, browser choice ("in
+    # firefox"), web destinations ("open whatsapp" → web.whatsapp.com),
+    # site search ("open youtube and cristiano ronaldo channel"), and
+    # web-search fallback ("open c++ compiler of programiz") all work
+    # spoken too. Returns None when nothing matched so callers fall
+    # through to the next route.
 
     def _try_desktop_command(self, lower: str, original: str) -> Optional[str]:
-        wm = self._get_wm()
-        if not wm or not wm.is_available:
+        # Gate on the deterministic rules classifier (NOT the LLM-first
+        # resolve() — the real-time voice path must stay instant): only a
+        # genuine desktop intent reaches the desktop interpreter. "yes,
+        # run it" is accept, not desktop.
+        try:
+            from ..nlu.intent import _fallback_classify
+            if _fallback_classify(original).intent.value != "desktop":
+                return None
+        except Exception:
             return None
-
-        # Read-queries take precedence over action words
-        if ("what am i working on" in lower or "what's on my screen" in lower
-                or "what is open" in lower or "what's open" in lower
-                or "what windows" in lower or "whats open" in lower
-                or "show desktop" in lower):
-            return self._get_desktop_status(wm)
-
-        for action, cmd_type in self._DESKTOP_ACTIONS.items():
-            if _has_word(lower, action):
-                idx = lower.index(action) + len(action)
-                target = original[idx:].strip()
-                for prefix in ("to", "the", "me"):
-                    target = target.removeprefix(prefix).strip()
-                if cmd_type == "focus":
-                    return self._handle_focus(wm, target)
-                if cmd_type == "open":
-                    return self._handle_open(wm, target)
-                if cmd_type == "workspace":
-                    return self._handle_workspace(wm, target)
-                if cmd_type == "screenshot":
-                    return self._handle_screenshot(wm)
-                if cmd_type == "launch":
-                    return self._handle_launch(wm, target)
-        return None
-
-    def _handle_focus(self, wm, target: str) -> str:
-        if not target:
-            return "What would you like me to focus?"
-        resolved = wm.focus_smart(target)
-        if resolved:
-            return f"Focused {resolved}."
-        return (f"I couldn't find '{target}'. Try 'Friday, show windows' "
-                f"to see what's open.")
-
-    def _handle_open(self, wm, target: str) -> str:
-        return self._focus_or_launch(wm, target, "open")
-
-    def _handle_launch(self, wm, target: str) -> str:
-        return self._focus_or_launch(wm, target, "launch")
-
-    def _focus_or_launch(self, wm, target: str, verb: str) -> str:
-        if not target:
-            return f"What would you like me to {verb}?"
-        resolved = wm.focus_smart(target)
-        if resolved:
-            return f"Focused {resolved}."
-        if wm.launch_app(target):
-            return f"Launching {target}."
-        return f"I couldn't {verb} '{target}'."
-
-    def _handle_workspace(self, wm, target: str) -> str:
-        target = target.strip()
-        for prefix in ("workspace", "to workspace", "desktop", "to desktop"):
-            if target.lower().startswith(prefix):
-                target = target[len(prefix):].strip()
-        nums = re.findall(r'\d+', target)
-        if nums:
-            ws_id = int(nums[0])
-            if wm.switch_workspace(ws_id):
-                return f"Switched to workspace {ws_id}."
-        if target:
-            try:
-                for ws in wm.list_workspaces():
-                    if target.lower() in ws.name.lower():
-                        if wm.switch_workspace(ws.id):
-                            return f"Switching to workspace {ws.id}."
-            except Exception:
-                pass
-            windows = wm.list_windows()
-            from ..desktop.wm_abstraction import SmartWindowResolver
-            resolved = SmartWindowResolver.resolve(target, windows)
-            if resolved:
-                for w in windows:
-                    if w.app_class.lower() == resolved.lower():
-                        if wm.switch_workspace(w.workspace_id):
-                            return (f"Switching to workspace {w.workspace_id} "
-                                    f"where {resolved} is open.")
-        return f"I couldn't find workspace '{target}'."
-
-    def _handle_screenshot(self, wm) -> str:
-        if wm.take_screenshot():
-            return "Screenshot saved."
-        return "Sorry, I couldn't take a screenshot."
+        try:
+            from ..desktop.wm_abstraction import desktop_text_command
+        except ImportError:
+            return None
+        response = desktop_text_command(original)
+        return response or None
 
     def _get_desktop_status(self, wm=None) -> str:
         try:

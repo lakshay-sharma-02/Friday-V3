@@ -374,13 +374,55 @@ class TestHardeningDesktop:
         assert "Focused Code" in result.response
         assert wm.focused == ["code editor"]
 
-    def test_launch_command_routes(self, tmp_path):
+    def test_launch_command_routes(self, tmp_path, monkeypatch):
         wm = _FakeWM()
         handler = self._handler(tmp_path, wm)
+        # Hermetic: pretend firefox is installed regardless of the
+        # machine — the NL layer gates "Launching X" on a resolvable
+        # binary.
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        monkeypatch.setattr(wm_mod.shutil, "which",
+                            lambda name: "/usr/bin/" + name)
         result = handler.handle("launch firefox")
         assert result.action == "desktop"
         assert "Launching firefox" in result.response
         assert "firefox" in wm.launched
+
+    def test_open_uninstalled_app_falls_through_to_web(self, tmp_path,
+                                                       monkeypatch):
+        """"open whatsapp" with no local binary must open the web
+        destination (web.whatsapp.com), never claim "Launching"."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        wm = _FakeWM()
+        monkeypatch.setattr(wm_mod, "WindowManager",
+                            lambda *a, **k: wm)
+        monkeypatch.setattr(wm_mod.shutil, "which", lambda name: None)
+        monkeypatch.setattr(wm_mod, "_open_in_browser",
+                            lambda wm_, url, browser=None, label=None:
+                            f"Opened {label} in Brave.")
+        result = wm_mod.desktop_text_command("open whatsapp")
+        assert "Opened" in result and "WhatsApp" in result
+        assert "web.whatsapp.com" in wm_mod._WEB_DESTINATIONS["whatsapp"]
+        assert wm.launched == []  # never pretended to launch
+
+    def test_open_unresolvable_target_web_searches(self, tmp_path,
+                                                   monkeypatch):
+        """No installed app + no known destination → honest web search."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        wm = _FakeWM()
+        monkeypatch.setattr(wm_mod, "WindowManager",
+                            lambda *a, **k: wm)
+        monkeypatch.setattr(wm_mod.shutil, "which", lambda name: None)
+        captured = {}
+        monkeypatch.setattr(
+            wm_mod, "_open_in_browser",
+            lambda wm_, url, browser=None, label=None:
+            captured.setdefault("url", url) or "Opened it in Brave.")
+        result = wm_mod.desktop_text_command(
+            "open c++ compiler of programiz")
+        assert "search" in captured["url"].lower()
+        assert "c%2B%2B" in captured["url"] or "c%2b%2b" in captured["url"]
+        assert wm.launched == []
 
     def test_workspace_command_routes(self, tmp_path):
         wm = _FakeWM()
@@ -415,6 +457,103 @@ class TestHardeningDesktop:
     def test_desktop_text_command_empty_on_no_match(self):
         from friday_v4.desktop.wm_abstraction import desktop_text_command
         assert desktop_text_command("hello there") == ""
+
+    # ── open-ended "do everything" contract (no hardcoded workflows) ──
+
+    def _interpreter(self, monkeypatch, wm):
+        """A hermetic interpreter: fake WM + controlled binaries/browser."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        monkeypatch.setattr(wm_mod, "WindowManager",
+                            lambda *a, **k: wm)
+        monkeypatch.setattr(wm_mod.shutil, "which", lambda name: None)
+        return wm_mod
+
+    def test_task_phrase_falls_through_to_brain(self, monkeypatch):
+        """"open a python venv and install requests" is NOT a desktop
+        command — the interpreter returns "" so the brain's EXECUTE /
+        Claude Code arms take it. No web-search of a task."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        wm = _FakeWM()
+        self._interpreter(monkeypatch, wm)
+        for t in ("open a python venv and install requests",
+                  "clone the repo and open it in my editor",
+                  "open a fresh project for a discord bot"):
+            assert wm_mod.desktop_text_command(t) == "", t
+        assert wm.launched == []
+        assert wm.focused == []
+
+    def test_explicit_search_web_searches(self, monkeypatch):
+        """"search for X" / "look up X" / "google X" → real web search."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        wm = _FakeWM()
+        self._interpreter(monkeypatch, wm)
+        captured = []
+        monkeypatch.setattr(
+            wm_mod, "_open_in_browser",
+            lambda wm_, url, browser=None, label=None:
+            captured.append(url) or "Opened it.")
+        for t, expect in (("search for the best rust web framework",
+                           "the+best+rust+web+framework"),
+                          ("look up fastapi docs", "fastapi+docs"),
+                          ("google hyprland docs", "hyprland+docs")):
+            captured.clear()
+            result = wm_mod.desktop_text_command(t)
+            assert result != "", t
+            assert captured and expect in captured[0], (t, captured)
+
+    def test_compound_workspace_and_browser_qualifiers(self, monkeypatch):
+        """One utterance, many commands: "open chrome on workspace 3 and
+        open whatsapp" → workspace switch + chrome search + WhatsApp."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        wm = _FakeWM()
+        self._interpreter(monkeypatch, wm)
+        urls = []
+        monkeypatch.setattr(
+            wm_mod, "_open_in_browser",
+            lambda wm_, url, browser=None, label=None:
+            urls.append(url) or f"Opened {label} in Brave.")
+        result = wm_mod.desktop_text_command(
+            "open chrome on workspace 3 and open whatsapp")
+        assert "WhatsApp" in result
+        assert wm.switched == [3]          # workspace qualifier honored
+        assert urls and urls[-1] == wm_mod._WEB_DESTINATIONS["whatsapp"]
+
+    def test_compound_split_includes_search_verbs(self, monkeypatch):
+        """"open brave and search for rust" splits on the search verb too
+        (the splitter's lookahead derives from _DESKTOP_VERBS, so verb
+        extraction and splitting can never drift apart)."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        wm = _FakeWM()
+        self._interpreter(monkeypatch, wm)
+        urls = []
+        monkeypatch.setattr(
+            wm_mod, "_open_in_browser",
+            lambda wm_, url, browser=None, label=None:
+            urls.append(url) or f"Opened {label} in Brave.")
+        result = wm_mod.desktop_text_command(
+            "open brave and search for rust web framework")
+        assert urls, "the search part must produce a browser URL"
+        assert "rust+web+framework" in urls[-1]
+
+    def test_site_search_in_browser(self, monkeypatch):
+        """"open youtube and cristiano ronaldo channel in it" searches
+        YouTube, not a desktop app, and resolves in the default browser."""
+        import friday_v4.desktop.wm_abstraction as wm_mod
+        wm = _FakeWM()
+        self._interpreter(monkeypatch, wm)
+        captured = {}
+
+        def fake_open(wm_, url, browser=None, label=None):
+            captured["url"] = url
+            return f"Opened {label}."
+
+        monkeypatch.setattr(wm_mod, "_open_in_browser", fake_open)
+        result = wm_mod.desktop_text_command(
+            "open youtube and cristiano ronaldo channel in it")
+        assert "youtube.com/results" in captured["url"]
+        assert "cristiano+ronaldo" in captured["url"]
+        assert "searching" in result
+        assert "cristiano ronaldo channel" in result
 
 
 class _UnavailableWM:

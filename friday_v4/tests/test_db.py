@@ -68,14 +68,15 @@ class TestConnectAndMigrations:
         conn = connect(path)
         try:
             assert path.exists()
-            assert schema_version(conn) == 8
+            assert schema_version(conn) == 9
             tables = {r["name"] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name NOT LIKE 'sqlite_%'").fetchall()}
             assert {"missions", "mission_steps", "actions", "memories",
                     "relationships", "skills", "sessions", "exchanges",
                     "working_memory", "watches", "desktop_events",
-                    "permission_requests", "operator_overrides"} <= tables
+                    "permission_requests", "operator_overrides",
+                    "mobile_devices"} <= tables
         finally:
             conn.close()
 
@@ -84,7 +85,7 @@ class TestConnectAndMigrations:
         try:
             migrate(conn)
             migrate(conn)
-            assert schema_version(conn) == 8
+            assert schema_version(conn) == 9
         finally:
             conn.close()
 
@@ -452,7 +453,7 @@ class TestDbStatus:
 
         info = db_status(path)
         assert info["exists"] is True
-        assert info["schema_version"] == 8
+        assert info["schema_version"] == 9
         assert info["tables"]["missions"] == 1
         assert info["tables"]["actions"] == 1
         assert info["tables"]["memories"] == 1
@@ -460,6 +461,7 @@ class TestDbStatus:
         assert info["tables"]["desktop_events"] == 0
         assert info["tables"]["permission_requests"] == 0
         assert info["tables"]["operator_overrides"] == 0
+        assert info["tables"]["mobile_devices"] == 0
         assert info["total_rows"] >= 3
 
     def test_db_status_corrupt_file(self, tmp_path):

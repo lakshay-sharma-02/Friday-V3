@@ -292,6 +292,105 @@ def cmd_desktop_launch(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_desktop_aliases(args: argparse.Namespace) -> int:
+    """List the app aliases Friday has learned.
+
+    ``--json`` prints ``{"todo app": "/usr/bin/obsidian", …}`` — the
+    machine-readable contract the VS Code extension's sidebar parses
+    (the human table is ANSI-colored, which is hostile to parsers).
+    """
+    import json as _json
+    from .desktop.app_aliases import learned_aliases
+    aliases = learned_aliases(args.store)
+    if getattr(args, "json", False):
+        print(_json.dumps(aliases, indent=2, sort_keys=True))
+        return 0
+    if not aliases:
+        print(f"  {_DIM}No learned apps yet — say 'my <name> is <command>'"
+              f" or run: friday4 desktop teach <name> <command>{_RESET}")
+        return 0
+    print(f"  {_GREEN}Learned apps{_RESET}")
+    for name in sorted(aliases):
+        print(f"  {_CYAN}  {name}{_RESET}  →  {aliases[name]}")
+    return 0
+
+
+def cmd_desktop_teach(args: argparse.Namespace) -> int:
+    """Teach Friday a natural name for an app binary."""
+    from .desktop.app_aliases import learn_alias
+    name = " ".join(args.name)
+    resolved = learn_alias(name, args.binary, args.store)
+    if resolved:
+        print(f"  {_GREEN}✅ Learned: '{name}' → {resolved}{_RESET}")
+        return 0
+    print(f"  {_RED}✗ Couldn't find '{args.binary}' on this machine —"
+          f" nothing saved{_RESET}")
+    return 1
+
+
+def cmd_desktop_aliases_sync(args: argparse.Namespace) -> int:
+    """Sync learned app aliases across Friday instances (collab bus).
+
+    Pushes this machine's aliases as collab observations (keyed
+    ``alias:<name>`` so CRDT last-writer-wins reconciles concurrent
+    teaching), syncs with peers, then merges remote aliases into the
+    local store — "my todo app" taught on the laptop works on the
+    desktop. Never raises: collab absent/offline degrades to a message.
+    """
+    from .desktop.app_aliases import (
+        aliases_as_observations, apply_collab_observations,
+    )
+    try:
+        from .collab import Coordinator
+    except Exception as exc:
+        print(f"  {_RED}✗ Collab unavailable: {exc}{_RESET}")
+        return 1
+
+    coordinator = None
+    try:
+        coordinator = Coordinator()
+        if not coordinator.start():
+            print(f"  {_YELLOW}! Collab couldn't start — sync skipped{_RESET}")
+            return 1
+        pushed = 0
+        for obs in aliases_as_observations(args.store):
+            name = obs["subject"]
+            if coordinator.add_observation(
+                    obs, obs_id=f"alias:{name}"):
+                pushed += 1
+        stats = coordinator.sync_once()
+        coordinator.stop()
+        remote = coordinator.observations()
+        coordinator = None
+        applied = apply_collab_observations(remote, args.store)
+        print(f"  {_GREEN}✅ Alias sync done{_RESET}")
+        print(f"  {_DIM}  pushed {pushed} · synced with {stats.get('peers', 0)}"
+              f" peer(s) · merged {stats.get('applied', 0)} · applied"
+              f" {applied} remote alias(es){_RESET}")
+        return 0
+    except Exception as exc:
+        logger.warning(f"alias sync failed: {exc}")
+        print(f"  {_RED}✗ Alias sync failed: {exc}{_RESET}")
+        return 1
+    finally:
+        if coordinator is not None:
+            try:
+                coordinator.stop()
+            except Exception:
+                pass
+
+
+def cmd_desktop_forget(args: argparse.Namespace) -> int:
+    """Forget a learned app alias."""
+    from .desktop.app_aliases import forget_alias
+    name = " ".join(args.name)
+    if forget_alias(name, args.store):
+        print(f"  {_GREEN}✅ Forgotten '{name}'{_RESET}")
+        return 0
+    print(f"  {_RED}✗ I didn't know '{name}' — nothing to forget{_RESET}")
+    return 1
+
+
 def cmd_desktop_screenshot(args: argparse.Namespace) -> int:
     """Take a screenshot."""
     wm = _get_wm()
@@ -634,6 +733,42 @@ def _build_desktop_subcommands(desktop_sub) -> None:
     p.add_argument("--path", type=str, default=None,
                    help="Optional working directory / project to open")
     p.set_defaults(func=cmd_desktop_launch)
+
+    # friday4 desktop aliases
+    p = desktop_sub.add_parser(
+        "aliases", help="List learned app aliases")
+    p.add_argument("--store", type=str, default=None,
+                   help="Alias store path (default ~/.friday/v4_desktop_aliases.json)")
+    p.add_argument("--json", action="store_true",
+                   help="Machine-readable output ({name: binary})")
+    p.set_defaults(func=cmd_desktop_aliases)
+
+    # friday4 desktop aliases sync
+    p = desktop_sub.add_parser(
+        "aliases-sync", help="Sync learned apps across Friday instances")
+    p.add_argument("--store", type=str, default=None,
+                   help="Alias store path (default ~/.friday/v4_desktop_aliases.json)")
+    p.set_defaults(func=cmd_desktop_aliases_sync)
+
+    # friday4 desktop teach <name> <binary>
+    p = desktop_sub.add_parser(
+        "teach", help="Teach Friday a natural name for an app")
+    p.add_argument("name", nargs="+",
+                   help="Natural name, e.g. 'todo app'")
+    p.add_argument("binary", type=str,
+                   help="Command or path, e.g. 'obsidian' or '/usr/bin/obsidian'")
+    p.add_argument("--store", type=str, default=None,
+                   help="Alias store path (default ~/.friday/v4_desktop_aliases.json)")
+    p.set_defaults(func=cmd_desktop_teach)
+
+    # friday4 desktop forget <name>
+    p = desktop_sub.add_parser(
+        "forget", help="Forget a learned app alias")
+    p.add_argument("name", nargs="+",
+                   help="Natural name to forget, e.g. 'todo app'")
+    p.add_argument("--store", type=str, default=None,
+                   help="Alias store path (default ~/.friday/v4_desktop_aliases.json)")
+    p.set_defaults(func=cmd_desktop_forget)
 
     # friday4 desktop screenshot
     p = desktop_sub.add_parser("screenshot", help="Take a screenshot")

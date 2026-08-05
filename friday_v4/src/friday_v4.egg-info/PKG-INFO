@@ -56,6 +56,8 @@ Provides-Extra: security
 Requires-Dist: pip-audit>=2.7; extra == "security"
 Requires-Dist: ruff>=0.4; extra == "security"
 Requires-Dist: truffleHog>=3.0; extra == "security"
+Provides-Extra: agent
+Requires-Dist: claude-agent-sdk>=0.2.0; extra == "agent"
 
 # Friday V4 🚀
 

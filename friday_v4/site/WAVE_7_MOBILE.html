@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 7 Mobile — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 7 Mobile</h1>
+<h1>WAVE 7 — Mobile: Friday in Your Pocket</h1>
+<p><strong>Status:</strong> ✅ <strong>SHIPPED (2026-08)</strong></p>
+<p><strong>Promise:</strong> the phone is another surface of the *same* Friday — same</p>
+<p>brain, same memory, same live events — not a separate product.</p>
+<p><strong>Predecessor truth:</strong> Wave 15 closed the *transport* stub (durable-queue</p>
+<p>push, pairing registry, companion API). What was still missing — and what</p>
+<p>this wave ships — is the <strong>phone client itself</strong>: the app that lives on</p>
+<p>the operator&#x27;s phone.</p>
+<hr>
+<h2>What shipped</h2>
+<h3>1. The companion PWA — the real phone app (<code>mobile/app/</code>)</h3>
+<p><code>friday4 mobile serve</code> now serves the app at <strong><code>/</code></strong> (not just the API):</p>
+<p>an installable, phone-first web app with four surfaces:</p>
+<table><thead><tr><th>|</th><th></th><th>S</th><th>c</th><th>r</th><th>e</th><th>e</th><th>n</th><th></th><th>|</th><th></th><th>W</th><th>h</th><th>a</th><th>t</th><th></th><th>i</th><th>t</th><th></th><th>d</th><th>o</th><th>e</th><th>s</th><th></th><th>|</th><th></th><th>A</th><th>P</th><th>I</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Chat</strong></td><td>The shared one-presence thread — a conversation started in the terminal continues here (&quot;what did we talk about this morning?&quot; works from the phone). Send through the same <code>nl_router</code> brain as talk/voice/web. <strong>Desktop control included</strong>: &quot;open brave&quot; from the phone focuses/launches Brave on your PC (the companion server runs on it), via the same <code>desktop_text_command</code> the CLI and web chat use.</td><td><code>GET /api/conversation</code> · <code>POST /api/talk</code></td><td></td></tr><tr><td></td><td><strong>Live</strong></td><td>The durable-queue push feed over SSE — security findings, suggestions, briefing land in real time with priority badges and an unread count. The cursor (<code>?since=</code>) is persisted, so a phone that was closed <strong>replays what it missed</strong> on reconnect.</td><td><code>GET /api/events</code></td><td></td></tr><tr><td></td><td><strong>Status</strong></td><td>Transport health, shared-session summary, exchanges today, pairing state.</td><td><code>GET /api/status</code></td><td></td></tr><tr><td></td><td><strong>Device</strong></td><td>Consent-first pairing: the operator types the 6-character code from <code>friday4 mobile pair</code>; the app registers itself with a locally-generated <code>pwa-</code> token. Unpair in-app. Install prompt (Add to Home Screen).</td><td><code>POST /api/devices/register</code> · <code>touch</code> · <code>DELETE</code></td><td></td></tr></tbody></table>
+<p>Installability is real, not decorative: <code>manifest.json</code> (standalone,</p>
+<p>dark, 192/512 + maskable icons), a <strong>service worker</strong> that caches only</p>
+<p>the shell (every <code>/api/*</code> request passes straight to the network — live</p>
+<p>state is never served stale from cache), and <strong>generated PNG icons</strong></p>
+<p>written by a pure-stdlib generator (<code>tools/gen_mobile_icons.py</code> — the</p>
+<p>FRIDAY diamond rendered with <code>zlib</code>/<code>struct</code>, no Pillow).</p>
+<p>Honest platform note: browsers only register a service worker over</p>
+<p><strong>HTTPS or localhost</strong>. Reached over a plain <code>http://&lt;lan-ip&gt;:8900</code> the</p>
+<p>app still fully works — install simply degrades to the browser&#x27;s</p>
+<p><strong>&quot;Add to Home Screen&quot;</strong> (a shortcut to the same PWA), which is exactly</p>
+<p>what the in-app install button tells you.</p>
+<h3>2. Server-side wiring (<code>mobile/api.py</code>, <code>cli_mobile.py</code>)</h3>
+<ul><li>Static app files are served from a <strong>fixed allowlist</strong> (no path</li></ul>
+<p>traversal possible); a missing <code>app/</code> dir degrades to an **API-only</p>
+<p>server**, never a crash (the never-crash law).</p>
+<ul><li><code>POST /api/devices/touch</code> — the app&#x27;s liveness ping updates</li></ul>
+<p><code>last_seen</code> (honest: reports whether the device actually exists).</p>
+<ul><li><strong>Phone → PC control (Wave 19 wiring):</strong> <code>/api/talk</code> now threads the</li></ul>
+<p>same <code>desktop_handler</code> as <code>friday4 talk</code> and the web chat, so</p>
+<p>&quot;focus code editor&quot;, &quot;open brave&quot;, &quot;switch to workspace 2&quot;, and</p>
+<p>&quot;what&#x27;s on my screen&quot; from the phone&#x27;s Chat tab act on the PC the</p>
+<p>companion server runs on. Hermetic tests (<code>TestPhoneDesktopControl</code>)</p>
+<p>pin the exact POST → desktop-handler routing, and a missing/unavailable</p>
+<p>desktop degrades to an honest reply, never a crash.</p>
+<ul><li><code>friday4 mobile serve</code> prints the app URL (with <code>flush=True</code> — visible</li></ul>
+<p>even when piped) and, on localhost, tells you to restart with</p>
+<p><code>--host 0.0.0.0</code> + your machine&#x27;s LAN IP to reach it from a phone.</p>
+<h3>3. Push honesty (<code>mobile/push.py</code>)</h3>
+<p><code>fanout_transporter</code> now <strong>skips non-Expo tokens</strong>: a PWA device streams</p>
+<p>events over its SSE connection, so the daemon never POSTs a bogus token</p>
+<p>to exp.host. Real background push stays exactly where it belongs — a</p>
+<p>paired <strong>Expo token</strong> from the native app.</p>
+<h3>4. The RN/Expo scaffold (<code>mobile/app-rn/</code>)</h3>
+<p>The literal ROADMAP promise, checked in as the <strong>documented native path</strong></p>
+<p>for *true background push*: <code>package.json</code> / <code>app.json</code> (Expo ~52, dark,</p>
+<p>portrait, notifications), <code>App.js</code> (Chat · Live · Device tabs),</p>
+<p><code>src/api.js</code> (the exact server contract, plus a <strong>fetch-based SSE reader</strong></p>
+<p>— RN has no <code>EventSource</code>), and screens mirroring the PWA. The README is</p>
+<p>explicit: it needs Node/Expo to build and **is not validated by this</p>
+<p>repo&#x27;s Python test suite** — the server contract it speaks is (hermetic</p>
+<p>tests), the app itself is not.</p>
+<hr>
+<h2>How to use it (the five-minute dogfood)</h2>
+<pre><code class="language-bash">friday4 mobile serve --host 0.0.0.0        # on your machine (LAN)
+# → open http://&lt;lan-ip&gt;:8900/ on your phone (or Add to Home Screen)
+friday4 mobile pair                        # prints a 6-char code
+# → Device tab in the app → type the code → paired
+friday4 mobile devices                     # shows &quot;Android Pixel · web-pwa&quot;</code></pre>
+<p>The daemon keeps pushing important/critical events to paired <strong>Expo</strong></p>
+<p>tokens on its own schedule (<code>MobilePushWorker</code>); the PWA sees everything</p>
+<p>live over SSE while it&#x27;s open.</p>
+<h2>The honest not-built list</h2>
+<ul><li><strong>The RN app is a scaffold, not a shipped binary</strong> — building it needs</li></ul>
+<p>Node/Expo/a device, none of which are part of this repo (same treatment</p>
+<p>as the Wave 6 VS Code extension). Its server contract is real and</p>
+<p>tested; the app itself is the next step for whoever runs <code>npm install</code>.</p>
+<ul><li><strong>Voice input on the phone</strong> — the PWA sends text through the same NLU</li></ul>
+<p>brain; on-device speech-to-text is a future refinement (the voice</p>
+<p>pipeline already exists on the desktop side).</p>
+<ul><li><strong>True background push to the PWA</strong> — Web Push (Push API) or a</li></ul>
+<p>notification-permission flow is future work; today the PWA&#x27;s live</p>
+<p>channel is SSE while open, and background push is the native app&#x27;s job.</p>
+<h2>Tests</h2>
+<p><code>tests/test_wave7_app.py</code> (15 hermetic tests) + the existing</p>
+<p><code>test_wave7_mobile.py</code> (tokens updated to real Expo format):</p>
+<ul><li>PWA serving: root shell, asset content types, real-PNG icons (signature</li></ul>
+<p>+ IHDR dims), favicon, 404s, **API-only degrade when the app dir is</p>
+<p>missing**.</p>
+<ul><li>Installability: manifest contract (standalone, maskable icons),</li></ul>
+<p>service worker&#x27;s <code>/api/</code> passthrough guard, every manifest asset</p>
+<p>servable, allowlist completeness, and the SSE feed&#x27;s **reconnect</p>
+<p>contract** (the cursor is mutable + re-read at connect time, so a</p>
+<p>dropped stream reconnects with the latest <code>since</code> — never the</p>
+<p>boot-time one, never duplicate feed items).</p>
+<ul><li>App-shape pairing: the PWA&#x27;s exact register POST → device listed</li></ul>
+<p><strong>without token leak</strong>; touch (exists/doesn&#x27;t) honesty; in-app unpair.</p>
+<ul><li>Fanout guard: a paired PWA device is skipped; only the Expo token</li></ul>
+<p>receives the push.</p>
+<p><strong>Count:</strong> 15 new → the full suite moves 1127 → <strong>1142</strong>.</p>
+<h2>Close-out</h2>
+<p>Wave 7&#x27;s promise — *Friday in your pocket* — is true in daily use: the</p>
+<p>phone opens the same Friday as the terminal, dashboard, and voice; the</p>
+<p>one presence follows you; live events reach the phone. MASTER_PLAN /</p>
+<p>ROADMAP / PLAN updated to ✅ SHIPPED; docs site rebuilt.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>

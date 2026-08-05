@@ -337,6 +337,22 @@ _MIGRATIONS: list[tuple[int, object]] = [
         """,
     ),
     (8, _migrate_v8_add_permission_mission_columns),
+    # Wave 7 — mobile companion device registry (paired phones that
+    # receive push notifications). A device is bound by a one-time
+    # pairing code and stores the platform's push token (Expo).
+    (
+        9,
+        """
+        CREATE TABLE IF NOT EXISTS mobile_devices (
+            id          TEXT PRIMARY KEY,
+            token       TEXT NOT NULL,
+            platform    TEXT NOT NULL DEFAULT 'unknown',
+            name        TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL,
+            last_seen   TEXT NOT NULL
+        );
+        """,
+    ),
 ]
 
 
@@ -409,7 +425,7 @@ def connect(path: Optional[Path] = None,
         ``sqlite3.Error`` only if the DB cannot be opened at all
         (e.g. missing file in read-only mode); callers degrade.
     """
-    db_path = path or default_db_path()
+    db_path = Path(path or default_db_path())
     if read_only:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
@@ -1526,6 +1542,65 @@ def list_sessions(conn: sqlite3.Connection, limit: int = 1000) -> list[dict]:
     """All sessions, newest first (bounded)."""
     return _fetchall(conn, "SELECT * FROM sessions "
                            "ORDER BY started_at DESC LIMIT ?", (limit,))
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Mobile device registry (Wave 7) — paired phones that get push
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def add_device(conn: sqlite3.Connection, token: str, *,
+               platform: str = "unknown", name: str = "") -> str:
+    """Register a paired phone's push token; returns the device id.
+
+    Idempotent per token — re-pairing the same Expo token updates the
+    existing row instead of duplicating (a reinstall keeps one device).
+    Writes commit immediately (the caller may close right away).
+    """
+    now = now_iso()
+    rows = _fetchall(conn, "SELECT id FROM mobile_devices WHERE token = ?",
+                     (token,))
+    if rows:
+        did = rows[0]["id"]
+        _execute(conn,
+                 "UPDATE mobile_devices SET platform = ?, name = ?, "
+                 "last_seen = ? WHERE id = ?",
+                 (platform, name, now, did))
+        return did
+    did = _new_id()
+    _execute(
+        conn,
+        "INSERT INTO mobile_devices (id, token, platform, name, "
+        "created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+        (did, token, platform, name, now, now))
+    return did
+
+
+def list_devices(conn: sqlite3.Connection) -> list[dict]:
+    """Every paired phone, newest first (token included — the daemon
+    needs it to push; the API omits it from its own JSON responses)."""
+    return _fetchall(conn, "SELECT * FROM mobile_devices "
+                           "ORDER BY created_at DESC")
+
+
+def get_device(conn: sqlite3.Connection, device_id: str) -> Optional[dict]:
+    """One paired device by id, or None."""
+    rows = _fetchall(conn, "SELECT * FROM mobile_devices WHERE id = ?",
+                     (device_id,))
+    return rows[0] if rows else None
+
+
+def remove_device(conn: sqlite3.Connection, device_id: str) -> bool:
+    """Remove a paired device; returns whether a row was removed."""
+    removed = _execute(conn, "DELETE FROM mobile_devices WHERE id = ?",
+                       (device_id,)) or 0
+    return removed > 0
+
+
+def touch_device(conn: sqlite3.Connection, device_id: str) -> None:
+    """Mark a device seen (last_seen refresh) — best-effort."""
+    _execute(conn, "UPDATE mobile_devices SET last_seen = ? WHERE id = ?",
+             (now_iso(), device_id))
 
 
 # ──────────────────────────────────────────────────────────────────────────

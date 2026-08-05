@@ -91,6 +91,16 @@ _AGENTIC_MARKERS: tuple[str, ...] = (
     "make it work", "get it working", "get the tests", "get the build",
     "repair", "sort out", "look into", "trace the", "resolve the",
     "why is the build", "why does the build", "why won't the build",
+    # Wave 20 open-ended tasks: goal-shaped work with no single concrete
+    # command ("create a python venv and install requests") delegates
+    # to the Claude Code CLI instead of clarifying "what would you like
+    # me to run?". "set up a venv"-style phrasing already scores PLAN
+    # (mission); these catch the EXECUTE-classified cousins.
+    "create", "set up", "set-up", "clone", "install", "organize",
+    "build a", "build the", "write a", "write the", "download",
+    "configure", "initialize", "scaffold", "deploy", "migrate",
+    "refactor", "implement", "automate", "rename", "move the",
+    "delete the", "fetch", "pull the", "push the", "commit the",
 )
 
 #: Words that score EXECUTE in the fallback for goal-shaped requests
@@ -98,6 +108,32 @@ _AGENTIC_MARKERS: tuple[str, ...] = (
 #: classify as EXECUTE so the agentic check can route it to claude).
 _AGENTIC_SCORE_WORDS: tuple[str, ...] = (
     "debug", "investigate", "troubleshoot", "diagnose", "repair",
+    "install", "create", "clone", "organize", "configure",
+)
+
+#: Task verbs that turn a *desktop*-looking phrase into an open-ended
+#: task ("open a python venv and install requests"). When one follows
+#: a desktop verb the fallback reclassifies the utterance to the brain
+#: (PLAN mission / EXECUTE via Claude Code) instead of the desktop
+#: handler — never hardcoded workflows, never a web-search of a task.
+_TASK_VERBS: tuple[str, ...] = (
+    "create", "set up", "clone", "install", "organize", "build",
+    "write", "download", "configure", "initialize", "scaffold",
+    "deploy", "migrate", "refactor", "implement", "automate",
+    "rename", "fetch", "pull", "push", "commit",
+    # Repair verbs — "open main.py and fix it" is WORK for the Claude
+    # arms, never a silent "open" that drops the task.
+    "fix", "debug", "repair", "rewrite", "optimize", "tune",
+)
+
+#: Task nouns — "open a fresh project for a discord bot" is scaffolding
+#: work, not a desktop command, even though no *verb* follows "open".
+#: Kept to unambiguous build artifacts: "server"/"app" stay desktop
+#: (open an installed app), "project"/"repo"/"venv" go to the brain.
+_TASK_NOUNS: tuple[str, ...] = (
+    "project", "venv", "virtualenv", "repo", "repository", "module",
+    "package", "workflow", "pipeline", "bot", "extension", "plugin",
+    "template", "website", "api", "database", "migration",
 )
 
 
@@ -167,7 +203,8 @@ _SCORE: dict[Intent, tuple[str, ...]] = {
                   "start"),
     Intent.DESKTOP: ("focus", "switch", "workspace", "open", "launch",
                      "screenshot", "capture", "close", "minimize",
-                     "maximize", "go to", "show windows", "windows"),
+                     "maximize", "go to", "show windows", "windows",
+                     "search", "look up", "google", "find"),
     Intent.RESEARCH: ("analyze", "correlate", "integration cost",
                       "what's the deal", "what is the deal", "compare",
                       "briefing", "brief me", "narrative", "report",
@@ -189,10 +226,11 @@ _SCORE: dict[Intent, tuple[str, ...]] = {
                    "speak to me like", "be yourself", "back to normal",
                    "reset your tone", "reset your personality",
                    "casual", "formal"),
-    # IDE (Wave 6) — diagnosing/analyzing code in the editor. Ordered
-    # LAST so bare-word ties ('lint', 'analyze', 'check', 'diagnose')
-    # resolve to the pre-existing intents (EXECUTE/RESEARCH/SECURITY);
-    # the file-target tie-break below promotes the real IDE asks.
+    # IDE (Wave 6/21) — diagnosing/analyzing code AND controlling the
+    # editor (open/reveal). Ordered LAST so bare-word ties ('lint',
+    # 'analyze', 'check', 'diagnose') resolve to the pre-existing
+    # intents (EXECUTE/RESEARCH/SECURITY); the file-target tie-break
+    # below promotes the real IDE asks.
     Intent.IDE: ("what's wrong with", "what is wrong with",
                  "why won't this compile", "why won't it compile",
                  "why is this file", "why does this file",
@@ -205,7 +243,14 @@ _SCORE: dict[Intent, tuple[str, ...]] = {
                  "error in", "issues in", "problems in",
                  "is my code clean", "is this code clean", "check my code",
                  "code review", "review this file",
-                 "what are the errors", "what is the error"),
+                 "what are the errors", "what is the error",
+                 # Wave 21 — editor control verbs (file-token tie-break
+                 # below does the heavy lifting; these seed the score).
+                 "jump to line", "go to line", "take me to line",
+                 "reveal", "in the editor", "in the ide", "in vscode",
+                 "in code", "in sublime", "in neovim", "in nvim",
+                 "in pycharm", "in intellij", "open file", "show file",
+                 "open the file"),
 }
 
 _ACTION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -229,6 +274,19 @@ def _fallback_classify(text: str) -> IntentResult:
     for intent, words in _EXCLUSIVE.items():
         if _count(lower, words):
             return IntentResult(intent=intent, text=raw, confidence=1.0)
+
+    # App-learning phrases ("my todo app is obsidian", "use obsidian for
+    # my todo app") are DESKTOP: the desktop interpreter teaches the
+    # mapping and opens the app. Without this the "is" frame would land
+    # on ASK and the app would never be learned (offline / voice path).
+    try:
+        from ..desktop.app_aliases import is_learning_phrase
+        if is_learning_phrase(raw):
+            return IntentResult(intent=Intent.DESKTOP, text=raw,
+                                confidence=1.0)
+    except Exception:
+        pass  # desktop layer unavailable → normal scoring below
+
     scores = {i: _count(lower, w) for i, w in _SCORE.items()}
 
     # ── §2 hardening targeted tie-breaks (fallback only; the LLM decides
@@ -251,6 +309,38 @@ def _fallback_classify(text: str) -> IntentResult:
                   "close", "capture", "go", "show", "take")
             and scores[Intent.DESKTOP] > 0):
         scores[Intent.DESKTOP] += 1
+
+    # ── Open-ended-task override (fallback only). A *desktop* verb
+    # with a *task* verb/noun after it is not a desktop command — "open
+    # a python venv and install requests", "open a fresh project for a
+    # discord bot", "clone the repo and open it in my editor". The
+    # brain must win outright (PLAN mission for scaffolding nouns /
+    # EXECUTE via Claude Code for task verbs) so the desktop handler
+    # never web-searches work the arms could do. Pure desktop opens
+    # ("open whatsapp", "open chrome on workspace 3", "open the
+    # server") contain no task verb/noun and keep the DESKTOP boost.
+    task_verb_hit = _count(lower, _TASK_VERBS) > 0
+    task_noun_hit = _count(lower, _TASK_NOUNS) > 0
+    if first in ("open", "launch", "start", "run", "go", "create"):
+        if task_noun_hit:
+            scores[Intent.PLAN] += 2      # "open a fresh project" → scaffold
+        elif task_verb_hit:
+            scores[Intent.EXECUTE] += 2   # "open … and install requests" → do it
+
+    # ── IDE control tie-break (fallback only, Wave 21). "open
+    # src/main.py in the editor", "jump to line 42 of cli_talk.py",
+    # "reveal auth.py" are EDITOR control, not desktop launches: a
+    # leading open/show verb + a source-file target (whitelisted
+    # extension) wins IDE — unless the utterance also reads like WORK
+    # (task verb/noun), in which case the task override above already
+    # routed it to the brain ("open main.py and fix it" → Claude).
+    # Web destinations stay DESKTOP ("open youtube.com" — .com is not
+    # a source extension). "jump/go/reveal" phrases score IDE via the
+    # keyword table; this tie-break only needs the open/show case.
+    if (first in ("open", "show", "go", "jump", "take", "bring")
+            and not task_verb_hit and not task_noun_hit
+            and re.search(_IDE_FILE_RE, lower)):
+        scores[Intent.IDE] += 3
 
     # ── Autonomy denial tie-breaks (fallback only). The operator's
     # veto must win the offline path too: "do it a different way"
@@ -415,26 +505,99 @@ def _style_trigger(text: str) -> Optional[str]:
     return None
 
 
+#: Source-file extensions that make a token an *editor target* — the
+#: IDE-control tie-break's whitelist, so "open youtube.com" stays a web
+#: destination while "open main.py" opens the editor.
+_IDE_FILE_EXTENSIONS = frozenset({
+    "py", "pyw", "pyi", "js", "jsx", "mjs", "cjs", "ts", "tsx",
+    "rs", "go", "java", "kt", "kts", "c", "h", "cpp", "hpp", "cc",
+    "cxx", "cs", "rb", "php", "swift", "scala", "hs", "ex", "exs",
+    "erl", "clj", "lua", "r", "pl", "pm", "sh", "bash", "zsh",
+    "css", "scss", "less", "html", "htm", "xml", "json", "yaml",
+    "yml", "toml", "ini", "cfg", "conf", "md", "rst", "txt",
+    "lock", "sql", "proto", "graphql", "gql", "vue", "svelte",
+    "astro", "ipynb", "tf", "dockerfile", "cmake", "mk",
+})
+
+#: Matches a source-file token (whitelisted extension) in an utterance —
+#: built from the whitelist so "open youtube.com" (.com not whitelisted)
+#: stays a web destination while "open main.py" is an editor target.
+_IDE_FILE_RE = re.compile(
+    r"\b[\w./\\-]+\.(?:" + "|".join(sorted(_IDE_FILE_EXTENSIONS))
+    + r")\b", re.IGNORECASE)
+
+
+def _is_ide_file(token: str) -> bool:
+    """Whether a token names a source file (whitelisted extension)."""
+    m = re.search(r"\.([A-Za-z0-9]+)$", token.strip())
+    return bool(m and m.group(1).lower() in _IDE_FILE_EXTENSIONS)
+
+
+def _ide_line(text: str) -> Optional[int]:
+    """The line number an IDE reveal targets, or None.
+
+    "jump to line 42 of main.py" → 42; "reveal main.py:42" → 42.
+    """
+    m = re.search(r"\bline\s+(\d+)\b", text or "", re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"[\w./\\-]+\.\w+:(\d+)\b", text or "")
+    return int(m.group(1)) if m else None
+
+
+def _ide_control_verb(text: str) -> Optional[str]:
+    """The editor-control action in an IDE utterance, or None.
+
+    "jump to line 42 of main.py" / "reveal auth.py" → "reveal";
+    "open main.py in the editor" → "open"; diagnostic phrases
+    ("what's wrong with main.py", "show me the errors in main.py")
+    → None (analysis, not control).
+    """
+    low = (text or "").strip().lower()
+    if (re.search(r"\b(?:jump|go|take me|bring me)\s+to\s+line\b", low)
+            or re.search(r"\breveal\b", low)):
+        return "reveal"
+    if (re.match(r"(?:please\s+)?(?:open|show)\b", low)
+            and not re.search(r"\b(errors?|issues?|problems?|diagnos|"
+                              r"analy|analyse|lint|review|what's|what is|why|"
+                              r"syntax|compile|clean|warn)\b", low)):
+        return "open"
+    return None
+
+
 def _ide_target(text: str) -> Optional[str]:
     """The file path an IDE ask targets, or None.
 
     "what's wrong with src/main.py" → src/main.py; "diagnose auth.py"
-    → auth.py. Falls back to any file-like token (``name.ext``) so
-    "why won't this compile" without a named file stays target-less
-    (the caller asks which file).
+    → auth.py; "open src/main.py in the editor" → src/main.py; "jump
+    to line 42 of cli_talk.py" → cli_talk.py. Falls back to any
+    file-like token (``name.ext``) so "why won't this compile" without
+    a named file stays target-less (the caller asks which file).
     """
+    # Line-phrases first: "jump to line 42 of cli_talk.py" → the FILE
+    # after "of/in", never the number.
+    m = re.search(
+        r"\b(?:jump|go|take me|bring me)\s+to\s+line\s+\d+\s+"
+        r"(?:of|in)\s+([\w./\\-]+(?:\.\w+)?)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip().rstrip(".!?") or None
     triggers = ("what's wrong with", "what is wrong with", "diagnose",
                 "check", "lint", "analyze", "analyse", "review",
                 "error in", "errors in", "issues in", "problems in",
-                "syntax error in", "compile error in")
+                "syntax error in", "compile error in", "reveal")
     pattern = (r"\b(?:" + "|".join(re.escape(t) for t in triggers)
                + r")\s+([\w./\\-]+(?:\.\w+)?)")
     m = re.search(pattern, text, re.IGNORECASE)
     if m:
         target = m.group(1).strip().rstrip(".!?")
         return target or None
+    # Fallback: any source-file token (extension whitelist) — "open
+    # src/main.py in the editor" → src/main.py. Web TLDs ("youtube.com")
+    # are not whitelisted, so they stay desktop destinations.
     m = re.search(r"\b([\w./\\-]+\.\w{1,10})\b", text)
-    return m.group(1) if m else None
+    if m and _is_ide_file(m.group(1)):
+        return m.group(1)
+    return None
 
 
 def _skill_trigger(text: str) -> Optional[str]:

@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave 20 Desktop Nl — Friday V4 Docs</title>
+<style>
+  :root { --bg:#0a0e17; --panel:#111a2c; --line:#1e2b44; --text:#dfe6f3;
+           --dim:#7c8aa5; --cyan:#38d4f5; --green:#3ddc97; --code:#0d1524; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); margin:0;
+         font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 24px 80px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:14px;
+           margin-bottom:26px; display:flex; align-items:baseline; gap:16px;
+           flex-wrap:wrap; }
+  .logo { color:var(--cyan); font-weight:700; letter-spacing:2px;
+          font-size:20px; text-decoration:none; }
+  nav a { color:var(--dim); font-size:13px; margin-right:12px;
+          text-decoration:none; }
+  nav a:hover { color:var(--cyan); }
+  h1 { font-size:28px; } h2 { font-size:20px; margin-top:34px;
+       color:var(--cyan); } h3 { font-size:16px; margin-top:24px; }
+  code { background:var(--code); border:1px solid var(--line);
+         padding:2px 6px; border-radius:6px; font-size:.9em; }
+  pre { background:var(--code); border:1px solid var(--line);
+        padding:14px; border-radius:10px; overflow-x:auto; }
+  pre code { border:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left;
+          font-size:14px; }
+  th { background:var(--panel); color:var(--cyan); }
+  a { color:var(--green); }
+  blockquote { border-left:3px solid var(--cyan); margin:14px 0;
+               padding:6px 14px; background:var(--panel);
+               border-radius:0 8px 8px 0; color:var(--dim); }
+  hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+  footer { margin-top:48px; color:var(--dim); font-size:12px;
+           text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="logo" href="index.html">◆ FRIDAY V4</a>
+  <nav><a href="index.html">Docs</a></nav>
+</header>
+<h1>Wave 20 Desktop Nl</h1>
+<h1>Wave 20 — Desktop Natural Language ✅ SHIPPED (2026-08)</h1>
+<blockquote><strong>The directive:</strong> the desktop is a surface, not a script. Friday</blockquote>
+<blockquote>should understand *&quot;open chrome on workspace 3 and open whatsapp&quot;*,</blockquote>
+<blockquote>*&quot;open youtube and cristiano ronaldo channel in it&quot;*, *&quot;open c++</blockquote>
+<blockquote>compiler of programiz on it&quot;* — compound, qualified, natural — and</blockquote>
+<blockquote>hand everything it can&#x27;t do to the agentic arms instead of pretending</blockquote>
+<blockquote>with a hardcoded workflow.</blockquote>
+<blockquote></blockquote>
+<blockquote>Governance: <a href="MCU_FRIDAY_STANDARD.md">THE MCU FRIDAY STANDARD</a> — the</blockquote>
+<blockquote>ten laws, the five acceptance tests.</blockquote>
+<hr>
+<h2>Why this wave</h2>
+<p>Waves 1–19 built the surfaces (voice, desktop, mobile, web), the safe</p>
+<p>core, and the brain. But desktop control was <strong>fragmented and shallow</strong>:</p>
+<ul><li><code>desktop_text_command</code> — the shared handler behind <code>friday4 talk</code>,</li></ul>
+<p>the web dashboard, and (Wave 19) the phone Chat tab — spoke only</p>
+<p>*single, simple* commands: one verb + one target.</p>
+<ul><li>The voice router ran its <strong>own, separate legacy parser</strong> (<code>_DESKTOP_ACTIONS</code>,</li></ul>
+<p><code>_handle_open</code>…) — so voice couldn&#x27;t do the compound things text could,</p>
+<p>and the two parsers drifted.</p>
+<ul><li>Anything the desktop layer didn&#x27;t recognize got <strong>web-searched</strong>, even</li></ul>
+<p>when it was clearly *work*: &quot;open a python venv and install requests&quot;</p>
+<p>searched Google instead of executing.</p>
+<p>The user&#x27;s test suite for &quot;handle everything&quot;:</p>
+<blockquote>&quot;if i say open chrome on workspace 3 it should be able to do that</blockquote>
+<blockquote>right? if i say open whatsapp it should be able to open brave and open</blockquote>
+<blockquote>web.whatsapp.com in it right? if i say open youtube and cristiano</blockquote>
+<blockquote>ronaldo channel in it it should be able to do it right? if i say open</blockquote>
+<blockquote>c++ compiler of programiz on it it should be able to do it right?&quot;</blockquote>
+<p>And the follow-up that defines the ceiling:</p>
+<blockquote>&quot;bro not just my examples it should be able to handle everything like</blockquote>
+<blockquote>these like legit everything like Tony Stark&#x27;s Friday we don&#x27;t need</blockquote>
+<blockquote>hardcoded workflows&quot;</blockquote>
+<p><strong>The answer is not a bigger catalog.</strong> The answer is a fast</p>
+<p>deterministic interpreter for the *natural* cases, and a clean</p>
+<p><strong>fall-through to the agentic brain</strong> (mission planner / Claude Code</p>
+<p>executor) for everything else.</p>
+<hr>
+<h2>What shipped</h2>
+<h3>1. A real NL desktop interpreter (<code>desktop/wm_abstraction.py</code>)</h3>
+<p><code>desktop_text_command</code> is now a compound, qualified NL interpreter —</p>
+<p>one desktop language for every surface:</p>
+<table><thead><tr><th>|</th><th></th><th>C</th><th>a</th><th>p</th><th>a</th><th>b</th><th>i</th><th>l</th><th>i</th><th>t</th><th>y</th><th></th><th>|</th><th></th><th>E</th><th>x</th><th>a</th><th>m</th><th>p</th><th>l</th><th>e</th><th></th><th>|</th><th></th><th>B</th><th>e</th><th>h</th><th>a</th><th>v</th><th>i</th><th>o</th><th>r</th><th></th><th>|</th></tr></thead><tbody><tr><td></td><td><strong>Compound commands</strong></td><td><code>open chrome on workspace 3 and open whatsapp</code></td><td>split into two commands, executed in order, replies joined</td><td></td></tr><tr><td></td><td><strong>Workspace targeting</strong></td><td><code>open chrome on workspace 3</code></td><td><code>switch_workspace(3)</code> before opening</td><td></td></tr><tr><td></td><td><strong>Browser qualifier</strong></td><td><code>open youtube in firefox</code></td><td>opens the URL in Firefox</td><td></td></tr><tr><td></td><td><strong>&quot;in it&quot; chaining</strong></td><td><code>open youtube and cristiano ronaldo channel in it</code></td><td>the previous command&#x27;s browser is remembered in command context</td><td></td></tr><tr><td></td><td><strong>Web destinations</strong></td><td><code>open whatsapp</code> → <code>web.whatsapp.com</code></td><td>known-site map with canonical display names (&quot;WhatsApp&quot;, &quot;YouTube&quot;)</td><td></td></tr><tr><td></td><td><strong>Site search</strong></td><td><code>open youtube and cristiano ronaldo channel</code></td><td><code>youtube.com/results?search_query=…</code></td><td></td></tr><tr><td></td><td><strong>Explicit web search</strong></td><td><code>search for X</code> / <code>look up X</code> / <code>google X</code> / <code>find X</code></td><td>real web search, always</td><td></td></tr><tr><td></td><td><strong>Noun-phrase search</strong></td><td><code>open c++ compiler of programiz on it</code></td><td>web search fallback for a query, not an app</td><td></td></tr><tr><td></td><td><strong>Honest app launch</strong></td><td><code>open brave</code> / <code>launch spotify</code></td><td>launch is <strong>gated on a resolvable binary</strong> — never claims &quot;Launching X&quot; when X isn&#x27;t installed (adapters&#x27; <code>sh -c</code> can&#x27;t tell)</td><td></td></tr><tr><td></td><td><strong>Task fall-through</strong></td><td><code>open a python venv and install requests</code></td><td>returns <code>&quot;&quot;</code> → the utterance <strong>falls through to the brain</strong> (EXECUTE via Claude Code / PLAN mission)</td><td></td></tr><tr><td></td><td><strong>Explicit URL</strong></td><td><code>open https://…</code></td><td>opens the URL</td><td></td></tr><tr><td></td><td><strong>Read queries</strong></td><td><code>what&#x27;s on my screen</code></td><td>desktop status text</td><td></td></tr></tbody></table>
+<p>Splitting rules matter: <code>_split_desktop_commands</code> only splits on</p>
+<p>connectors when the *next token is a desktop verb*, so</p>
+<p>&quot;open youtube and cristiano ronaldo channel&quot; stays ONE command (the</p>
+<p>&quot;and&quot; joins the search phrase) while &quot;open chrome and open whatsapp&quot;</p>
+<p>splits. Multi-word connectors (<code>and then</code>, <code>and also</code>) are treated as</p>
+<p>units. Task phrases (&quot;clone the repo and open it in my editor&quot;) are</p>
+<p>never split — they fall through whole.</p>
+<p><code>DesktopAbstraction.open_url(url, browser=)</code> was added to the base</p>
+<p>interface (adapters may override, e.g. macOS <code>open -a</code>); <code>_open_in_browser</code></p>
+<p>prefers the WM hook and falls back to launching a browser binary.</p>
+<h3>2. The classifier routes work to the brain (<code>nlu/intent.py</code>)</h3>
+<p>Two surgical changes stop the desktop layer from swallowing *tasks*:</p>
+<ul><li><strong>Task-verb / task-noun tie-break in <code>_fallback_classify</code>:</strong> when the</li></ul>
+<p>leading verb is a desktop verb (<code>open</code>/<code>launch</code>/<code>start</code>/<code>run</code>/<code>go</code>/</p>
+<p><code>create</code>) and the utterance contains a task verb (&quot;install&quot;, &quot;clone&quot;,</p>
+<p>&quot;set up&quot;…) or task noun (&quot;project&quot;, &quot;venv&quot;, &quot;repo&quot;, &quot;bot&quot;…) the intent</p>
+<p>flips from DESKTOP to <strong>PLAN/EXECUTE</strong> — a decisive +2 (not a tie),</p>
+<p>so &quot;open a fresh project for a discord bot&quot; becomes a mission.</p>
+<ul><li><strong>Agentic markers in the resolver:</strong> task phrases resolve to</li></ul>
+<p><code>action_type=&quot;claude&quot;</code> — an empty-command EXECUTE delegates to the</p>
+<p><strong>Claude Code executor</strong> (the open-ended arm, Wave 18), not &quot;what</p>
+<p>would you like me to run?&quot;.</p>
+<p>Resulting routing for the &quot;handle everything&quot; suite:</p>
+<pre><code class="language-">&#x27;open whatsapp&#x27;                                    -&gt; desktop
+&#x27;open chrome on workspace 3&#x27;                       -&gt; desktop
+&#x27;open youtube and cristiano ronaldo channel in it&#x27; -&gt; desktop
+&#x27;open c++ compiler of programiz on it&#x27;             -&gt; desktop
+&#x27;search for the best rust web framework&#x27;           -&gt; desktop (search)
+&#x27;open a python venv and install requests&#x27;          -&gt; execute (claude)
+&#x27;open a fresh project for a discord bot&#x27;           -&gt; plan (mission)
+&#x27;clone the repo and open it in my editor&#x27;          -&gt; execute (claude)
+&#x27;set up a fresh project for a discord bot&#x27;         -&gt; plan (mission)
+&#x27;organize my downloads folder by file type&#x27;        -&gt; execute (claude)</code></pre>
+<h3>3. Voice routes through the SAME interpreter (<code>voice/router.py</code>)</h3>
+<p>The voice router&#x27;s legacy desktop parser was deleted; <code>_try_desktop_command</code></p>
+<p>now delegates to the shared <code>desktop_text_command</code> — but **gated on the</p>
+<p>shared NLU**: only a genuine <code>desktop</code> intent reaches the interpreter</p>
+<p>(&quot;yes, run it&quot; is <code>accept</code>, never &quot;Opened a web search for &#x27;it&#x27;&quot;).</p>
+<p>One desktop language across voice, CLI, web, and phone.</p>
+<hr>
+<h3>4. The app-learning loop — &quot;open my todo app&quot; (<code>desktop/app_aliases.py</code>)</h3>
+<p>Wave 20 follow-up (user directive: *&quot;teach it once, then always&quot;*).</p>
+<p>Friday remembers personal apps, persisted to</p>
+<p><code>~/.friday/v4_desktop_aliases.json</code> (pure stdlib, atomic writes):</p>
+<ul><li><strong>Teaching frames</strong> (parsed by <code>parse_learning_phrase</code>):</li><li><code>my todo app is obsidian</code> / <code>todo app is obsidian</code> (app-like names</li></ul>
+<p>only — &quot;my code is broken&quot; never trips this frame)</p>
+<ul><li><code>use obsidian for my todo app</code></li><li><code>set my todo app to obsidian</code></li><li><code>open my todo app with obsidian</code> — teaches AND opens in one breath</li><li><strong>Honesty law:</strong> only *resolvable* binaries are learned</li></ul>
+<p>(<code>shutil.which</code> / existing absolute path); an unresolvable command</p>
+<p>gets &quot;I couldn&#x27;t find &#x27;X&#x27; on this machine&quot; and nothing is saved.</p>
+<ul><li><strong>Resolution order</strong> in <code>_resolve_app</code>: learned aliases → builtin</li></ul>
+<p>aliases → PATH → app-suffix stripping (&quot;spotify app&quot; → &quot;spotify&quot;).</p>
+<ul><li><strong>Unknown personal apps are taught, not web-searched:</strong> &quot;open my</li></ul>
+<p>todo app&quot; the first time answers &quot;I don&#x27;t know what &#x27;todo app&#x27; is</p>
+<p>yet. Teach me once — say &#x27;my todo app is &lt;command&gt;&#x27;…&quot; instead of a</p>
+<p>useless web search of the operator&#x27;s own app. &quot;open c++ compiler of</p>
+<p>programiz&quot; still web-searches (not personal).</p>
+<ul><li><strong>Every surface:</strong> the deterministic classifier routes learning</li></ul>
+<p>phrases to DESKTOP (voice/offline), and the NL router pre-dispatch</p>
+<p>hook routes them to the desktop handler even when an LLM would call</p>
+<p>them ASK (CLI/web/phone).</p>
+<ul><li><strong>CLI:</strong> <code>friday4 desktop aliases</code> / <code>teach &lt;name&gt; &lt;command&gt;</code> /</li></ul>
+<p><code>forget &lt;name&gt;</code>.</p>
+<ul><li><strong>Forgetting:</strong> &quot;forget&quot; is one command away (<code>forget_alias</code>).</li></ul>
+<h3>5. Cross-machine continuity — aliases ride the collab bus</h3>
+<p>Follow-up (user directive: *&quot;cross-machine continuity — sync learned</p>
+<p>app aliases via the collab layer&quot;*). An alias taught on the laptop</p>
+<p>works on the desktop:</p>
+<ul><li><strong>Publish:</strong> <code>aliases_as_observations</code> turns every alias into a</li></ul>
+<p>collab observation keyed <code>alias:&lt;name&gt;</code> (source</p>
+<p><code>v4.app_aliases</code>), so the CRDT&#x27;s per-source:subject:aspect LWW</p>
+<p>reconciles concurrent teaching — whoever taught last wins.</p>
+<ul><li><strong>Merge:</strong> <code>apply_collab_observations</code> merges peer aliases into the</li></ul>
+<p>local store (never crashes on foreign sources / malformed entries).</p>
+<ul><li><strong>Safety:</strong> <code>_resolve_app</code> only launches a learned/synced binary</li></ul>
+<p>that resolves *on this machine* — a synced alias for an app that</p>
+<p>isn&#x27;t installed here falls through gracefully instead of firing a</p>
+<p>dead launch.</p>
+<ul><li><strong>CLI:</strong> <code>friday4 desktop aliases-sync</code> — push local aliases, sync</li></ul>
+<p>with peers, merge remote aliases; collab absent/offline degrades to</p>
+<p>a message, never a crash.</p>
+<h2>The &quot;everything&quot; contract (no hardcoded workflows)</h2>
+<p>The desktop layer is explicitly <strong>not</strong> a closed catalog:</p>
+<p>1. Fast deterministic cases (open/focus/switch/workspace/browser/known</p>
+<p>sites/site-search/explicit search) are handled inline — these are</p>
+<p>instant and offline.</p>
+<p>2. Explicit searches and noun-phrase queries web-search.</p>
+<p>3. <strong>Everything that reads like work falls through</strong> — <code>desktop_text_command</code></p>
+<p>returns <code>&quot;&quot;</code>, the intent is PLAN/EXECUTE, and the mission planner</p>
+<p>(ClaudePlanner, Wave 18) or the Claude Code executor picks it up</p>
+<p>through the same permission gate. No new hardcoded workflow; the</p>
+<p>ceiling is whatever the agentic arms can do, which grows independently.</p>
+<hr>
+<h2>Tests</h2>
+<p><code>tests/test_hardening_nl.py</code> (TestHardeningDesktop, hermetic — WM and</p>
+<p><code>shutil.which</code> patched):</p>
+<ul><li>All five user examples resolve correctly (workspace + compound +</li></ul>
+<p>whatsapp-destination + youtube site-search + programiz web-search).</p>
+<ul><li>Compound splitting: <code>and then</code> / <code>also</code> connectors; no split when the</li></ul>
+<p>connector joins a search phrase; <strong>task phrases never split</strong>.</p>
+<ul><li>Task fall-through: &quot;open a python venv and install requests&quot;, &quot;open a</li></ul>
+<p>fresh project for a discord bot&quot;, &quot;clone the repo and open it in my</p>
+<p>editor&quot; all return <code>&quot;&quot;</code> from the interpreter (the brain&#x27;s job).</p>
+<ul><li>Explicit search → real search URL; site search → youtube results URL</li></ul>
+<p>with the exact query.</p>
+<ul><li>Launch honesty: an unresolvable binary never claims &quot;Launching X&quot;;</li></ul>
+<p>a resolvable one (patched <code>shutil.which</code>) does.</p>
+<ul><li>Install-gated regression + the existing accept-vs-desktop guard</li></ul>
+<p>(&quot;yes, run it&quot; with nothing pending speaks the honest answer).</p>
+<p><code>tests/test_nlu.py</code> / <code>tests/test_nl_router.py</code> / <code>tests/test_voice.py</code></p>
+<p>cover the classifier tie-break and the voice router&#x27;s NLU-gated</p>
+<p>delegation.</p>
+<p><strong>Count:</strong> 1172 → full suite green (incl. 71 voice tests) with the new</p>
+<p>classifier + interpreter + regression tests.</p>
+<h2>Close-out</h2>
+<p>Desktop control is now *natural language*, not a phrase list: compound</p>
+<p>commands, workspace and browser qualifiers, web destinations, site</p>
+<p>search, honest install-gated launches, explicit searches — and an</p>
+<p><strong>open-ended fall-through to the agentic brain</strong> so Friday never</p>
+<p>web-searches work the arms could do. Voice, CLI, web, and phone all</p>
+<p>speak the same desktop language. ROADMAP / MASTER_PLAN / PLAN updated to</p>
+<p>✅ SHIPPED; docs site rebuilt.</p>
+<footer>Friday V4 — local-first documentation site (generated by tools/build_docs_site.py)</footer>
+</div>
+</body>
+</html>
